@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:demo": "playwright test tests/example.spec.ts --project=chromium"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
