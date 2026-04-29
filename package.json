@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "test:e2e": "playwright test",
-    "test:e2e:demo": "playwright test tests/example.spec.ts --project=chromium"
+    "test:e2e:demo": "playwright test tests/example.spec.ts --project=chromium",
+    "test:experiments:debug": "playwright test --config=playwright.experiments.config.ts e2e/example.spec.ts --project=chromium --debug",
+    "test:experiments:api": "playwright test --config=playwright.experiments.config.ts e2e/api-example.spec.ts --project=chromium"
   },
   "keywords": [],
   "author": "",
