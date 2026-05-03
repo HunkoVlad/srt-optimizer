@@ -1,0 +1,8 @@
+# Single-listing PriceLabs V1 transform template.
+# Copy this file to a local-only config path before use.
+# Do not add additional listings to this file.
+
+listing_id = "REPLACE_WITH_LISTING_ID"
+input_path = "data/incoming/pricelabs_export.csv"
+output_path = "standardized/future_daily_pricing_<run_date>.csv"
+

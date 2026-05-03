@@ -29,6 +29,9 @@ srt-optimizer/
 |   `-- pricelabs-weekly-csv-v1.md   # Canonical V1 contract location
 |-- docs/
 |   |-- pricelabs-pipeline.md        # Pipeline architecture and operating notes
+|   |-- standardized-output-contract-v1.md
+|   |-- pricelabs-v1-source-to-target-mapping.md
+|   |-- validation-checklist-v1.md
 |   `-- runbook-weekly-pricelabs.md  # Weekly runbook scaffold
 |-- src/
 |   `-- pricelabs/
@@ -38,7 +41,8 @@ srt-optimizer/
 |       |-- export/                  # Future CSV writer placeholder
 |       `-- pipeline/                # Future orchestration placeholder
 |-- config/
-|   `-- pricelabs.example.env        # Documented environment template only
+|   |-- pricelabs.example.env        # Documented environment template only
+|   `-- pricelabs.single-listing.example.toml
 |-- standardized/
 |   `-- .gitkeep                     # Future standardized CSV output directory
 |-- data/
@@ -77,6 +81,12 @@ Initial state: not implemented. The `standardized/` directory is reserved for th
 ## Contract Handling
 
 The V1 contract is the source of truth. Pipeline code should keep field names, business rules, and delivery conventions traceable to `contracts/pricelabs-weekly-csv-v1.md`.
+
+Supporting documentation:
+
+- `docs/standardized-output-contract-v1.md` defines the V1 output artifact and required columns.
+- `docs/pricelabs-v1-source-to-target-mapping.md` defines the current PriceLabs source-to-target mapping.
+- `docs/validation-checklist-v1.md` defines the non-executable validation checklist.
 
 V1 defines one standardized dataset with required fields:
 
@@ -131,6 +141,7 @@ Not allowed:
 ## Implementation Guardrails
 
 - Do not commit secrets, downloaded PriceLabs data, generated CSV files, or logs.
+- V1 configuration is for one listing only: one `listing_id`, one `input_path`, and one `output_path`.
 - Keep extraction separate from transformation and validation.
 - Prefer deterministic fixtures for tests once the contract is known.
 - Make every generated CSV reproducible from recorded input plus configuration.

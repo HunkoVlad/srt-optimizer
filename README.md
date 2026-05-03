@@ -23,6 +23,8 @@ Start with:
 
 - `docs/pricelabs-pipeline.md` for architecture and boundaries.
 - `docs/runbook-weekly-pricelabs.md` for the weekly operating scaffold.
+- `docs/pricelabs-v1-source-to-target-mapping.md` for the current PriceLabs export mapping.
+- `docs/standardized-output-contract-v1.md` and `docs/validation-checklist-v1.md` for output and validation documentation.
 - `src/pricelabs/README.md` for source module ownership boundaries.
 
 V1 separates two analytical views:
@@ -133,13 +135,19 @@ The focused demo command currently targets Chromium for quick iteration.
 srt-optimizer/
 |-- contracts/
 |   `-- pricelabs-weekly-csv-v1.md   # Canonical V1 contract location
+|-- config/
+|   `-- pricelabs.single-listing.example.toml
 |-- docs/
 |   |-- pricelabs-pipeline.md        # Pipeline architecture and operating notes
+|   |-- pricelabs-v1-source-to-target-mapping.md
+|   |-- standardized-output-contract-v1.md
+|   |-- validation-checklist-v1.md
 |   `-- runbook-weekly-pricelabs.md  # Weekly runbook scaffold
 |-- e2e/
 |   |-- example.spec.ts              # Starter Playwright sample
 |-- src/
 |   `-- pricelabs/                   # Future PriceLabs pipeline package
+|       `-- transform/               # Python transformation scaffold only
 |-- standardized/
 |   `-- .gitkeep                     # Future standardized CSV output directory
 |-- tests/

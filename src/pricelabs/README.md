@@ -5,7 +5,7 @@ This directory is reserved for the weekly PriceLabs-to-CSV pipeline.
 No extraction is implemented yet. The subdirectories define future ownership boundaries:
 
 - `extract/`: acquire PriceLabs source data after the approved method is known.
-- `transform/`: map source records to the V1 CSV contract.
+- `transform/`: Python package for future mapping, validation, and manifest generation. No business logic is implemented yet.
 - `export/`: write contract-compliant CSV artifacts to `standardized/future_daily_pricing_<run_date>.csv`.
 - `pipeline/`: orchestrate stages, logging, validation, and run metadata.
 
