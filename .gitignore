@@ -1,4 +1,3 @@
-
 # Playwright
 node_modules/
 /test-results/
@@ -6,10 +5,27 @@ node_modules/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
-node_modules/
 .venv/
 playwright-report/
 test-results/
+
+# Local configuration and secrets
 .env
-data/
-logs/
+.env.*
+!config/*.example.env
+
+# Generated pipeline data and logs
+data/**
+!data/
+!data/incoming/
+!data/incoming/.gitkeep
+!data/processed/
+!data/processed/.gitkeep
+!data/exports/
+!data/exports/.gitkeep
+standardized/**
+!standardized/
+!standardized/.gitkeep
+logs/**
+!logs/
+!logs/.gitkeep

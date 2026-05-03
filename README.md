@@ -1,8 +1,36 @@
-# srt-optimizer - Unified E2E Test Framework
+# srt-optimizer
 
-End-to-end Playwright tests for SRT automation and subtitle optimization workflows.
+This repository currently contains a Playwright + TypeScript test framework for SRT automation experiments and the initial documentation scaffold for a weekly PriceLabs-to-CSV pipeline.
 
-This repository currently contains a self-contained Playwright + TypeScript demo used to validate test architecture, page-object style, and deterministic UI automation before wiring real SRT processing flows.
+## Active Workstreams
+
+### SRT Automation Test Framework
+
+The existing Playwright demo validates test architecture, page-object style, and deterministic UI automation before wiring real SRT processing flows.
+
+### Weekly PriceLabs-to-CSV Pipeline
+
+The repository now reserves structure and documentation for a weekly pipeline that will convert PriceLabs data into a V1 contract-compliant CSV export.
+
+Current state:
+
+- Repository structure and documentation only.
+- Revised V1 contract added at `contracts/pricelabs-weekly-csv-v1.md`.
+- Extraction is intentionally not implemented.
+- Local data, generated exports, and logs are gitignored.
+
+Start with:
+
+- `docs/pricelabs-pipeline.md` for architecture and boundaries.
+- `docs/runbook-weekly-pricelabs.md` for the weekly operating scaffold.
+- `src/pricelabs/README.md` for source module ownership boundaries.
+
+V1 separates two analytical views:
+
+- Open-night pricing view for available dates.
+- Booked-night value view for reserved dates, using booked-date `nightly_price` only as a provisional proxy.
+
+Daily listing occupancy versus market occupancy comparison is explicitly out of scope; occupancy comparisons belong only to aggregated 30/60/90-day windows.
 
 ## Architectural Principles
 
@@ -103,11 +131,20 @@ The focused demo command currently targets Chromium for quick iteration.
 
 ```text
 srt-optimizer/
+|-- contracts/
+|   `-- pricelabs-weekly-csv-v1.md   # Canonical V1 contract location
+|-- docs/
+|   |-- pricelabs-pipeline.md        # Pipeline architecture and operating notes
+|   `-- runbook-weekly-pricelabs.md  # Weekly runbook scaffold
 |-- e2e/
 |   |-- example.spec.ts              # Starter Playwright sample
+|-- src/
+|   `-- pricelabs/                   # Future PriceLabs pipeline package
+|-- standardized/
+|   `-- .gitkeep                     # Future standardized CSV output directory
 |-- tests/
 |   |-- fixtures/
-|   |   |-- srtOptimizerDemo.ts      # Sample subtitle data + demo UI renderer
+|   |   |-- srtOptimizerDemo.ts       # Sample subtitle data + demo UI renderer
 |   |-- example.spec.ts              # Demo Playwright spec with page-object helpers
 |-- package.json                     # Test scripts and dev dependencies
 |-- package-lock.json
@@ -118,9 +155,10 @@ srt-optimizer/
 
 ## Near-Term Direction
 
-As we expand this into real SRT automation, the framework should evolve toward:
+As we expand this into real SRT automation and the PriceLabs pipeline, the framework should evolve toward:
 
 - Shared page objects for subtitle upload, parsing, optimization, and export flows
 - Reusable fixtures for source files, environment configuration, and cleanup
 - Feature-focused tests that orchestrate flows without embedding UI details
 - Stable, deterministic selectors and assertions that work across environments
+- V1-contract-driven PriceLabs fixtures, transformations, validations, and CSV export tests
