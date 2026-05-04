@@ -1,0 +1,4 @@
+﻿#Note: Only listings refreshed in the last 48 hours are included in the CSV. This may cause row counts to vary across downloads.
+PMS Name,Listing ID,Listing Name,Tags,Date,Available,Recommended Price,Price with Default Customization,Your Price,Min Stay,Unbookable,Check In,Check Out,Status,Status Last Year,ADR,ADR Last Year,Booked Date,Booked Date Last Year
+lodgify,650255___717243,Aloha Poconos.,"",2026-05-03,False,380,263,367,1,"","","",Booked (Check-In),"",308.0,"",2026-04-04,""
+lodgify,650255___717243,Aloha Poconos.,"",2026-05-03,False,380,263,367,1,"","","",Booked (Check-In),"",308.0,"",2026-04-04,""

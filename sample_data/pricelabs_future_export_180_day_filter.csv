@@ -1,0 +1,5 @@
+#Note: 180-day filter test
+PMS Name,Listing ID,Listing Name,Tags,Date,Available,Recommended Price,Price with Default Customization,Your Price,Min Stay,Unbookable,Check In,Check Out,Status,Status Last Year,ADR,ADR Last Year,Booked Date,Booked Date Last Year
+lodgify,650255___717243,Aloha Poconos.,"",2026-05-03,True,380,263,367,1,"","","","","",308.0,"","",""
+lodgify,650255___717243,Aloha Poconos.,"",2026-10-29,True,400,280,390,2,"","","","","",320.0,"","",""
+lodgify,650255___717243,Aloha Poconos.,"",2026-10-30,True,410,285,395,2,"","","","","",325.0,"","",""

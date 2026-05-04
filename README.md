@@ -119,6 +119,24 @@ Run the focused SRT demo in Chromium:
 npm run test:e2e:demo
 ```
 
+## Running The Manual PriceLabs V1 Transform
+
+Place the manually downloaded PriceLabs CSV at the `input_path` from `config/pricelabs.single-listing.example.toml`, then set `listing_id` in that config for the single listing being transformed.
+
+Run from the repo root:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m pricelabs.transform.run --config config\pricelabs.single-listing.example.toml --run-date 2026-05-03
+```
+
+Outputs:
+
+- `standardized/future_daily_pricing_<run_date>.csv`
+- `manifest.json`
+
+The transform reads only PriceLabs CSV input, filters to the configured one listing, keeps stay dates in the next 180 days from `run_date`, normalizes status values, and writes the V1 standardized columns.
+
 ## Browser Coverage
 
 `playwright.config.ts` is configured for:

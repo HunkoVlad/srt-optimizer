@@ -26,6 +26,7 @@ data/**
 standardized/**
 !standardized/
 !standardized/.gitkeep
+manifest.json
 logs/**
 !logs/
 !logs/.gitkeep
