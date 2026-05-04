@@ -1,66 +1,50 @@
 # Weekly PriceLabs Runbook
 
-Status: Revised V1 scaffold
-Cadence: Weekly
-Extraction: Not implemented
+Operator checklist for the current V1 pipeline.
 
-## Purpose
+## Scope
 
-Run the weekly PriceLabs-to-CSV process and produce the V1 standardized daily pricing CSV.
+- PriceLabs only
+- One listing only
+- Manual CSV input only
+- Next 180 days only
+- No browser automation
+- No scheduling
+- No dashboards
 
-## Preconditions
+## Run Checklist
 
-- The revised V1 contract has been added to `contracts/pricelabs-weekly-csv-v1.md`.
-- Required credentials and source access have been documented outside the repository.
-- The weekly reporting window is known.
-- The extraction implementation exists and has been tested against non-production fixtures or approved sample data.
+- [ ] Download the PriceLabs future pricing CSV manually.
+- [ ] Place the CSV somewhere in the repo, or choose its existing path.
+- [ ] Open `config/pricelabs.single-listing.example.toml`.
+- [ ] Set `listing_id` to the one listing being transformed.
+- [ ] Set `input_path` to the manually downloaded PriceLabs CSV.
+- [ ] Keep `output_path` as `standardized/future_daily_pricing_<run_date>.csv`.
+- [ ] Activate the virtual environment, or use the venv Python directly.
+- [ ] Run from the repo root:
 
-## Planned Weekly Flow
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m pricelabs.transform.run --config config\pricelabs.single-listing.example.toml --run-date 2026-05-03
+```
 
-1. Confirm the reporting week and expected output file name: `standardized/future_daily_pricing_<run_date>.csv`.
-2. Acquire PriceLabs source data through the approved extraction mechanism.
-3. Store raw input in the local incoming area or configured secure storage.
-4. Transform the source records into the V1 standardized dataset.
-5. Validate column order, required values, formatting, status values, and comparison guardrails.
-6. Export the CSV artifact.
-7. Review validation output and run logs.
-8. Deliver or archive the CSV according to the V1 contract.
+## After The Run
 
-## Planned Review Views
+- [ ] Confirm `standardized/future_daily_pricing_<run_date>.csv` was written.
+- [ ] Confirm `manifest.json` was written.
+- [ ] Confirm `manifest.json` has `status = "success"`.
+- [ ] Spot check the standardized CSV header:
 
-Available-date pricing review:
+```text
+run_date,listing_id,stay_date,nightly_price,min_stay,status
+```
 
-- Filter to `status = available`.
-- Inspect current asking price, min-stay behavior, weekend premium, 1-night premium, and open-date market positioning.
-- Use daily `nightly_price` vs `market_price` comparison only when `market_price` is present.
+- [ ] Confirm rows are for the configured `listing_id`.
+- [ ] Confirm rows are within the next 180 days from `run_date`.
 
-Booked-date value review:
+## Failed Runs
 
-- Filter to `status = booked`.
-- Treat `nightly_price` as a provisional booked-value proxy, not final realized ADR.
-- Prefer 30/60/90-day windows for booked-value quality trends.
-
-Window-level review:
-
-- Compare booked share of nights against market occupancy only at 30/60/90-day windows.
-- Review booked-date proxy average vs market average for the same booked dates.
-- Review available-date pricing posture by window.
-
-## Failure Handling
-
-Stop the run when:
-
-- Required source data is missing or incomplete.
-- Contract-required fields cannot be derived.
-- CSV validation fails.
-- Output file naming, encoding, or delivery rules cannot be satisfied.
-- An analysis attempts daily listing occupancy vs market occupancy comparison.
-
-Record the failure reason in the run log and keep generated artifacts local until reviewed.
-
-## Open Items
-
-- Confirm weekly run day and timezone.
-- Confirm whether PriceLabs data is collected by API, export file, browser automation, or manual drop.
-- Confirm whether PriceLabs booked-date `nightly_price` remains stable after booking.
-- Define test fixtures for available-date and booked-date rows.
+- [ ] If the command fails, inspect `manifest.json`.
+- [ ] Confirm `manifest.json` was overwritten with `status = "failed"`.
+- [ ] Use the terminal error plus manifest paths to identify the bad input or config.
+- [ ] Fix the input/config and rerun.

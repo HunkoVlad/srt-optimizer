@@ -1,32 +1,22 @@
-# Playwright
-node_modules/
-/test-results/
-/playwright-report/
-/blob-report/
-/playwright/.cache/
-/playwright/.auth/
+# Virtual environment
+
 .venv/
-playwright-report/
-test-results/
 
 # Local configuration and secrets
+
 .env
 .env.*
 !config/*.example.env
 
-# Generated pipeline data and logs
-data/**
-!data/
-!data/incoming/
-!data/incoming/.gitkeep
-!data/processed/
-!data/processed/.gitkeep
-!data/exports/
-!data/exports/.gitkeep
+# Generated outputs
+
+manifest.json
 standardized/**
 !standardized/
 !standardized/.gitkeep
-manifest.json
+
+# Logs
+
 logs/**
 !logs/
 !logs/.gitkeep
