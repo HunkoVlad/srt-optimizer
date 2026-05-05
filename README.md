@@ -35,11 +35,11 @@ The reader also supports PriceLabs exports with leading `#` note/comment lines b
 
 ## Config
 
-Use [config/pricelabs.single-listing.example.toml](C:/Users/Volodymyr/srt-optimizer/config/pricelabs.single-listing.example.toml):
+Use [config/pricelabs.single-listing.example.toml](config/pricelabs.single-listing.example.toml):
 
 ```toml
 listing_id = "REPLACE_WITH_LISTING_ID"
-input_path = "data/incoming/pricelabs_export.csv"
+input_path = "sample_data/pricelabs_future_export_sample.csv"
 output_path = "standardized/future_daily_pricing_<run_date>.csv"
 ```
 
@@ -50,6 +50,12 @@ Set `listing_id` and `input_path` before running the transform.
 Run from the repo root:
 
 ```powershell
+.\run_pricelabs_transform.ps1 -RunDate 2026-05-03
+```
+
+Or run the Python module directly:
+
+```powershell
 $env:PYTHONPATH = "src"
 .\.venv\Scripts\python.exe -m pricelabs.transform.run --config config\pricelabs.single-listing.example.toml --run-date 2026-05-03
 ```
@@ -58,6 +64,32 @@ Outputs:
 
 - `standardized/future_daily_pricing_<run_date>.csv`
 - `manifest.json`
+
+## Run Future Enrichment
+
+After the standardized CSV exists, run the manual enrichment step:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m pricelabs.transform.enrich_future --run-date 2026-05-03
+```
+
+Output:
+
+- `analysis/future_daily_pricing_enriched_<run_date>.csv`
+
+## Run Future Window Summary
+
+After the enriched daily CSV exists, run the window summary step:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m pricelabs.transform.summarize_future --run-date 2026-05-03
+```
+
+Output:
+
+- `analysis/future_window_summary_<run_date>.csv`
 
 ## Validated V1 Behavior
 
@@ -81,7 +113,7 @@ Outputs:
 Required output columns, in order:
 
 ```text
-run_date,listing_id,stay_date,nightly_price,min_stay,status
+run_date,listing_id,stay_date,nightly_price,min_stay,status,analysis_status,status_confidence,status_reason
 ```
 
 Field mapping:
@@ -91,7 +123,10 @@ Field mapping:
 - `stay_date` <- PriceLabs `Date`
 - `nightly_price` <- PriceLabs `Your Price`
 - `min_stay` <- PriceLabs `Min Stay`
-- `status` <- normalized PriceLabs `Status` with `Available` fallback
+- `status` <- raw/source-driven normalized PriceLabs `Status` with `Available` fallback
+- `analysis_status` <- analysis-aware status from `Status` plus `Available`
+- `status_confidence` <- `high`, `medium`, or `low`
+- `status_reason` <- stable reason code for the analysis status
 
 ## Project Structure
 
@@ -120,6 +155,7 @@ srt-optimizer/
 
 ## Useful Docs
 
-- [contracts/pricelabs-weekly-csv-v1.md](C:/Users/Volodymyr/srt-optimizer/contracts/pricelabs-weekly-csv-v1.md)
-- [docs/runbook-weekly-pricelabs.md](C:/Users/Volodymyr/srt-optimizer/docs/runbook-weekly-pricelabs.md)
-- [docs/validation-checklist-v1.md](C:/Users/Volodymyr/srt-optimizer/docs/validation-checklist-v1.md)
+- [contracts/pricelabs-weekly-csv-v1.md](contracts/pricelabs-weekly-csv-v1.md)
+- [docs/source-triage-for-analysis.md](docs/source-triage-for-analysis.md)
+- [docs/runbook-weekly-pricelabs.md](docs/runbook-weekly-pricelabs.md)
+- [docs/validation-checklist-v1.md](docs/validation-checklist-v1.md)

@@ -102,6 +102,118 @@ Optional later fields from the same PriceLabs export:
 - `market_price`
 - `market_occupancy`
 
+## Second PriceLabs Source: Price Occ
+
+The operational V1 source remains the manually downloaded future pricing export. It remains primary for `listing_id`, `stay_date`, `nightly_price`, `min_stay`, and `status`.
+
+`sample_data/Price Occ for 650255___717243.csv` is a benchmark/enrichment source only. It contains `Date`, market occupancy fields, market price percentile fields, median booked price, booking count, pickup, event, and listing-adjacent occupancy/price fields. It does not contain `listing_id` or `Min Stay`.
+
+Minimal join:
+
+- `standardized.stay_date` = Price Occ `Date`
+
+Useful fields by analysis:
+
+- Available-date pricing: `Market 50th Percentile Price`, `Market 25th Percentile Price`, `Market 75th Percentile Price`, `Market 90th Percentile Price`, `Prices with Default Customization`, `Holiday/Event`
+- Booked-date value: `Median Booked Price`, `Number of Bookings`, `Market 50th Percentile Price`
+- Window-level occupancy: `Market Occupancy`, optionally `7-day market pickup`
+
+Minimum Price Occ contract columns:
+
+- `Date`
+- `Market Occupancy`
+- `Market 50th Percentile Price`
+
+Deferred:
+
+- Whether to trust `Your Booked Occupancy`, `booked_occupancy`, and `unavailable_occupancy` as listing-specific fields, because the file has no `listing_id` column.
+
+## Third PriceLabs Source: Historical Monthly
+
+`sample_data/Monthly Trends for 650255___717243.csv` is a historical monthly performance source only. It is not used by the operational daily transform and does not replace the Price Occ future benchmark source.
+
+Minimum contract columns:
+
+- `month_year`
+- `Revenue`
+- `Occupancy`
+- `Booked Occupancy`
+- `Blocked Occupancy`
+- `ADR`
+
+Useful later comparison fields:
+
+- `Revenue (LY)`, `Revenue (STLY)`, `Revenue STLY YoY Difference`
+- `Occupancy (LY)`, `Occupancy (STLY)`, `Occupancy STLY YoY Difference %`
+- `Booked Occupancy (LY)`, `Booked Occupancy (STLY)`
+- `Blocked Occupancy (LY)`, `Blocked Occupancy (STLY)`
+- `ADR (LY)`, `ADR (STLY)`, `ADR STLY YoY Difference`
+
+Intended use:
+
+- Monthly revenue, ADR, occupancy, and blocked occupancy trends
+- Revenue pace vs annual goal
+
+Limits:
+
+- Monthly grain only; do not join it to daily rows as if it were daily data.
+- Blank values should be treated as missing/unknown unless a future rule explicitly defines otherwise.
+- Completeness may vary by month.
+
+## Proposed Enriched Future-Analysis Dataset
+
+Design-only output:
+
+```text
+analysis/future_daily_pricing_enriched_<run_date>.csv
+```
+
+This dataset would combine the current operational daily output with Price Occ benchmark fields for analysis. It does not replace `standardized/future_daily_pricing_<run_date>.csv`.
+
+Grain:
+
+- One row per `stay_date`.
+
+Carry through from operational source:
+
+- `run_date`
+- `listing_id`
+- `stay_date`
+- `nightly_price`
+- `min_stay`
+- `status`
+
+Add from Price Occ:
+
+- Required: `market_occupancy`, `market_50th_price`
+- Optional: `market_25th_price`, `market_75th_price`, `market_90th_price`, `median_booked_price`, `last_seen_price`, `final_price`, `holiday_event`
+
+Join:
+
+- `operational.stay_date` = Price Occ `Date`
+
+Purpose:
+
+- Available-date pricing analysis
+- Booked-date value review
+- Market pricing position review
+
+Daily allowed:
+
+- Price comparisons against market price percentile fields.
+- Event/context review using `holiday_event`.
+
+Window-level only:
+
+- Any occupancy comparison involving `market_occupancy`.
+- Listing booked share vs market occupancy for next 30/60/90 days.
+- Average booked proxy value vs market benchmark by window.
+
+Deferred:
+
+- Handling duplicate Price Occ `Date` rows.
+- Whether to add derived price-position labels or ratios.
+
 ## Analytical Views
 
 ### Available Dates
@@ -127,12 +239,14 @@ Allowed daily:
 - Available-date `nightly_price` vs `market_price`
 - Booked-date proxy value vs `market_price`
 - Min-stay inspection by date
+- Standardized `nightly_price` vs Price Occ market price percentiles
 
 Required at 30/60/90-day windows:
 
 - Your booked share of nights vs `market_occupancy`
 - Booked-value quality trends
 - Available-date pricing posture
+- Any comparison involving Price Occ `Market Occupancy`
 
 Not allowed:
 

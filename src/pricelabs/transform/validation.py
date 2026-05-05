@@ -8,6 +8,8 @@ from pricelabs.transform.mapping import OUTPUT_COLUMNS, REQUIRED_SOURCE_COLUMNS
 
 
 ALLOWED_STATUSES = {"available", "booked", "blocked", "unavailable"}
+ALLOWED_ANALYSIS_STATUSES = {"available", "booked", "blocked"}
+ALLOWED_STATUS_CONFIDENCE = {"high", "medium", "low"}
 
 
 def require_input_file(path: Path) -> None:
@@ -35,6 +37,14 @@ def validate_standardized_rows(rows: list[dict[str, str]]) -> None:
         status = row["status"]
         if status not in ALLOWED_STATUSES:
             raise ValueError(f"Output row {index} has invalid status: {status!r}")
+
+        analysis_status = row["analysis_status"]
+        if analysis_status not in ALLOWED_ANALYSIS_STATUSES:
+            raise ValueError(f"Output row {index} has invalid analysis_status: {analysis_status!r}")
+
+        status_confidence = row["status_confidence"]
+        if status_confidence not in ALLOWED_STATUS_CONFIDENCE:
+            raise ValueError(f"Output row {index} has invalid status_confidence: {status_confidence!r}")
 
         primary_key = (row["run_date"], row["listing_id"], row["stay_date"])
         if primary_key in seen_keys:

@@ -59,6 +59,186 @@ Field source notes:
 - `market_price` maps from PriceLabs `Market 50th Percentile Price`.
 - `market_occupancy` maps from PriceLabs `Market Occupancy`.
 
+## Price Occ Benchmark Source
+
+The current operational PriceLabs export remains the primary V1 source for:
+
+- `listing_id`
+- `stay_date`
+- `nightly_price`
+- `min_stay`
+- `status`
+
+The file `sample_data/Price Occ for 650255___717243.csv` is a second PriceLabs source for benchmark/enrichment design only. It is not a replacement for the operational source.
+
+Actual columns present in the Price Occ file include:
+
+- `Date`
+- `Market Occupancy`
+- `Market 25th Percentile Price`
+- `Market 50th Percentile Price`
+- `Market 75th Percentile Price`
+- `Market 90th Percentile Price`
+- `Median Booked Price`
+- `Number of Bookings`
+- `7-day market pickup`
+- `Last Seen Price`
+- `Final Price`
+- `Your Booked Occupancy`
+- `Prices with Default Customization`
+- `booked_occupancy`
+- `unavailable_occupancy`
+- `Holiday/Event`
+- `Upcoming Booking`
+
+Practical join key:
+
+- Join standardized `stay_date` to Price Occ `Date`.
+- No `listing_id` is present in the Price Occ file, so listing identity must come from the operational source/config.
+
+Minimum Price Occ benchmark columns for V1 design:
+
+- `Date`
+- `Market Occupancy`
+- `Market 50th Percentile Price`
+
+Useful optional benchmark columns:
+
+- Price positioning: `Market 25th Percentile Price`, `Market 75th Percentile Price`, `Market 90th Percentile Price`, `Prices with Default Customization`
+- Booked-value context: `Median Booked Price`, `Number of Bookings`
+- Window-level demand context: `7-day market pickup`, `Holiday/Event`
+
+Limits:
+
+- The Price Occ file has no `listing_id`.
+- The Price Occ file has no `Min Stay`.
+- It is not suitable as the sole operational V1 source.
+- Daily market occupancy must not be compared directly to single-listing daily occupancy.
+- Occupancy comparison is valid only after aggregation across windows such as next 30/60/90 days.
+
+## Historical Monthly Performance Source
+
+The file `sample_data/Monthly Trends for 650255___717243.csv` is a third PriceLabs source for historical monthly performance analysis only. It is separate from the operational future source and the Price Occ future benchmark/enrichment source.
+
+Actual columns present in the historical monthly file:
+
+- `month_year`
+- `Revenue`
+- `Revenue (LY)`
+- `Revenue (STLY)`
+- `Revenue STLY YoY Difference`
+- `Occupancy`
+- `Occupancy (LY)`
+- `Occupancy (STLY)`
+- `Occupancy STLY YoY Difference %`
+- `Booked Occupancy`
+- `Booked Occupancy (LY)`
+- `Booked Occupancy (STLY)`
+- `Blocked Occupancy`
+- `Blocked Occupancy (LY)`
+- `Blocked Occupancy (STLY)`
+- `ADR`
+- `ADR (LY)`
+- `ADR (STLY)`
+- `ADR STLY YoY Difference`
+
+Minimum historical monthly contract columns:
+
+- `month_year`
+- `Revenue`
+- `Occupancy`
+- `Booked Occupancy`
+- `Blocked Occupancy`
+- `ADR`
+
+Useful optional comparison fields:
+
+- Revenue comparison: `Revenue (LY)`, `Revenue (STLY)`, `Revenue STLY YoY Difference`
+- Occupancy comparison: `Occupancy (LY)`, `Occupancy (STLY)`, `Occupancy STLY YoY Difference %`
+- Booked/blocked comparison: `Booked Occupancy (LY)`, `Booked Occupancy (STLY)`, `Blocked Occupancy (LY)`, `Blocked Occupancy (STLY)`
+- ADR comparison: `ADR (LY)`, `ADR (STLY)`, `ADR STLY YoY Difference`
+
+Intended uses:
+
+- Monthly revenue trend
+- Monthly ADR trend
+- Monthly occupancy trend
+- Blocked occupancy trend
+- Revenue pace vs annual goal
+
+Limits:
+
+- Monthly only, not daily.
+- Not suitable for operational daily transform logic.
+- Blank values may mean missing data, not zero.
+- Completeness may vary by month.
+
+## Proposed Enriched Future-Analysis Dataset
+
+This is a design-only dataset that combines the operational future daily data with Price Occ benchmark fields. It is analysis-oriented and does not replace the current operational standardized dataset.
+
+Proposed file name:
+
+```text
+analysis/future_daily_pricing_enriched_<run_date>.csv
+```
+
+Grain:
+
+- One row per `stay_date` for the configured listing.
+
+Required operational columns carried through:
+
+- `run_date`
+- `listing_id`
+- `stay_date`
+- `nightly_price`
+- `min_stay`
+- `status`
+
+Minimum Price Occ benchmark/enrichment columns:
+
+- `market_occupancy` from `Market Occupancy`
+- `market_50th_price` from `Market 50th Percentile Price`
+
+Useful optional Price Occ enrichment columns:
+
+- `market_25th_price` from `Market 25th Percentile Price`
+- `market_75th_price` from `Market 75th Percentile Price`
+- `market_90th_price` from `Market 90th Percentile Price`
+- `median_booked_price` from `Median Booked Price`
+- `last_seen_price` from `Last Seen Price`
+- `final_price` from `Final Price`
+- `holiday_event` from `Holiday/Event`
+
+Join rule:
+
+- `operational.stay_date` = Price Occ `Date`
+
+Join assumptions and risks:
+
+- Price Occ has no `listing_id`, so the configured operational listing remains the listing authority.
+- Missing Price Occ dates should leave benchmark fields blank/null rather than dropping operational rows.
+- Duplicate Price Occ `Date` rows are deferred; no rule is defined yet.
+
+Intended support:
+
+- Available-date pricing analysis
+- Booked-date value review
+- Market pricing position review
+
+Not for direct daily use:
+
+- Daily market occupancy vs single-listing daily occupancy comparison.
+
+Belongs only in later window-level summaries:
+
+- Listing booked share vs `market_occupancy`
+- Average market occupancy over next 30/60/90 days
+- Occupancy gap to market over next 30/60/90 days
+- Share of booked nights above/below market price benchmark
+- Average booked proxy value vs market benchmark by window
+
 ## Required V1 Base Fields
 
 These are the minimum common fields for both analysis tracks:
