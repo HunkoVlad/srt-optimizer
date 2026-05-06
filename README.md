@@ -33,6 +33,36 @@ Required PriceLabs source columns:
 
 The reader also supports PriceLabs exports with leading `#` note/comment lines before the real header.
 
+## Real Weekly Run Folders
+
+`sample_data/` is for debug fixtures only. Real weekly runs should use dated folders:
+
+```text
+data/runs/<run_date>/
+|-- raw/
+|-- standardized/
+|-- analysis/
+`-- settings/
+```
+
+For each real run, place these raw input files in `data/runs/<run_date>/raw/`:
+
+- `pricelabs_future_export.csv`
+- `price_occ.csv`
+- `pricelabs_settings_manual_input.json` with structured settings sections for orphan pricing, min-stay rules, occupancy adjustments, and length-of-stay pricing.
+
+Raw files should be retained with the run. Analysis outputs are snapshot-based and should not overwrite prior run folders.
+
+## Run Weekly Pipeline
+
+After the raw files are in place, run:
+
+```powershell
+.\run_weekly_pipeline.ps1 -RunDate 2026-05-03
+```
+
+The runner writes outputs under `data/runs/<run_date>/standardized/`, `data/runs/<run_date>/analysis/`, and `data/runs/<run_date>/settings/`.
+
 ## Config
 
 Use [config/pricelabs.single-listing.example.toml](config/pricelabs.single-listing.example.toml):
@@ -90,6 +120,47 @@ $env:PYTHONPATH = "src"
 Output:
 
 - `analysis/future_window_summary_<run_date>.csv`
+
+## Run Settings Snapshot
+
+Update `sample_data/pricelabs_settings_manual_input.json` with manually copied PriceLabs settings, then run:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m pricelabs.transform.settings_snapshot --run-date 2026-05-03
+```
+
+Output:
+
+- `analysis/pricelabs_settings_snapshot_<run_date>.json`
+
+## Run Settings Changes
+
+After current and prior settings snapshots exist, compare them with:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m pricelabs.transform.settings_changes --run-date 2026-05-03 --prior-run-date 2026-04-26
+```
+
+Output:
+
+- `analysis/pricelabs_settings_changes_<run_date>.csv`
+
+## Run Signal Change Review
+
+After current/prior signal files and current settings changes exist, run:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m pricelabs.transform.review_signal_changes --run-date 2026-05-03 --prior-run-date 2026-04-26
+```
+
+Output:
+
+- `analysis/future_signal_change_review_<run_date>.csv`
+
+Note: synthetic prior signal files may be created for pipeline debugging only. Do not use synthetic signal rows for business interpretation.
 
 ## Validated V1 Behavior
 

@@ -36,9 +36,9 @@ OUTPUT_COLUMNS = (
     "avg_booked_price_proxy",
 )
 WINDOWS = (
-    ("days_0_30", 0, 29),
-    ("days_31_60", 30, 59),
-    ("days_61_90", 60, 89),
+    ("days_0_15", 0, 14),
+    ("days_16_45", 15, 44),
+    ("days_46_90", 45, 89),
 )
 
 

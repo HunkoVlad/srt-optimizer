@@ -160,12 +160,12 @@ run_date,listing_id,stay_date,nightly_price,min_stay,status,analysis_status,stat
   - `market_occupancy`
   - `market_75th_price`
 - [ ] Output has exactly three rows:
-  - `days_0_30`
-  - `days_31_60`
-  - `days_61_90`
-- [ ] `days_0_30` covers `run_date` through `run_date + 29 days`.
-- [ ] `days_31_60` covers `run_date + 30 days` through `run_date + 59 days`.
-- [ ] `days_61_90` covers `run_date + 60 days` through `run_date + 89 days`.
+  - `days_0_15`
+  - `days_16_45`
+  - `days_46_90`
+- [ ] `days_0_15` covers `run_date` through `run_date + 14 days`.
+- [ ] `days_16_45` covers `run_date + 15 days` through `run_date + 44 days`.
+- [ ] `days_46_90` covers `run_date + 45 days` through `run_date + 89 days`.
 - [ ] Output columns are present in this exact order:
 
 ```text
@@ -191,9 +191,9 @@ run_date,listing_id,window_name,listing_booked_pct,market_occupancy_avg,occupanc
   - `price_vs_market_75th_pct`
   - `low_confidence_booked_days`
 - [ ] Output has exactly three rows:
-  - `days_0_30`
-  - `days_31_60`
-  - `days_61_90`
+  - `days_0_15`
+  - `days_16_45`
+  - `days_46_90`
 - [ ] Output columns are present in this exact order:
 
 ```text
@@ -203,8 +203,58 @@ run_date,listing_id,window_name,pace_status,price_position_status,confidence_not
 - [ ] `pace_status` uses `occupancy_vs_market_pct`.
 - [ ] `price_position_status` uses `price_vs_market_75th_pct`.
 - [ ] `confidence_note` uses `low_confidence_booked_days`.
-- [ ] `urgency_flag` marks only near-term behind-market pace as `critical_now`.
+- [ ] `urgency_flag` maps behind-market pace to `critical_now`, `advisory`, or `info_watch` by horizon bucket.
 - [ ] Signal output is a compact label layer, not a full recommendation engine.
+
+## Settings History Design
+
+- [ ] Settings snapshot output is documented:
+  - `analysis/pricelabs_settings_snapshot_<run_date>.json`
+- [ ] Snapshot grain is one snapshot per `run_date` for one `listing_id`.
+- [ ] JSON is the preferred snapshot format for complex settings traceability.
+- [ ] Required snapshot fields are documented:
+  - `run_date`
+  - `listing_id`
+  - `pms_account`
+  - `listing_name`
+  - `base_price`
+  - `last_minute_rule`
+  - `orphan_day_prices`
+  - `booking_recency_factor`
+  - `minimum_stay_settings`
+  - `extra_person_fee`
+  - `occupancy_based_adjustments`
+  - `occupancy_based_adjustments_snapshot`
+  - `custom_seasonality_factor`
+  - `length_of_stay_based_pricing`
+  - `demand_factor_sensitivity`
+  - `far_out_premium`
+  - `safety_minimum_price_rule`
+- [ ] `length_of_stay_based_pricing` uses structured keys such as `1_night`, `2_nights`, `3_nights`, and `4_plus_nights`.
+- [ ] `orphan_day_prices` uses structured weekday/weekend adjustment fields plus `gap_rule` fields.
+- [ ] `minimum_stay_settings` uses structured sections for profile, default, last-minute, far-out, orphan gaps, and lowest allowed min-stay.
+- [ ] `occupancy_based_adjustments` stores static mode separately, such as `mode`.
+- [ ] `occupancy_based_adjustments_snapshot` stores horizon buckets such as `days_0_15`, `days_16_30`, and `days_31_60`.
+- [ ] Optional `raw_text` is preserved for traceability where complex settings are manually copied.
+- [ ] Snapshot output preserves nested JSON objects without flattening structured sections into strings.
+- [ ] Settings changes output is documented:
+  - `analysis/pricelabs_settings_changes_<run_date>.csv`
+- [ ] Settings changes compare current snapshot to previous snapshot.
+- [ ] Settings changes emit one row per changed field.
+- [ ] Settings changes minimum columns are documented:
+  - `run_date`
+  - `listing_id`
+  - `field_name`
+  - `previous_value`
+  - `current_value`
+  - `changed_flag`
+- [ ] Signal change review output is documented:
+  - `analysis/future_signal_change_review_<run_date>.csv`
+- [ ] Signal change review compares the current and previous signal reports.
+- [ ] Signal change review uses `days_0_15`, `days_16_45`, and `days_46_90`.
+- [ ] Signal change review includes settings change count and summary.
+- [ ] Design states that settings/signal comparison is directional, not causal proof.
+- [ ] Settings capture automation is deferred.
 
 ## Out Of Scope
 

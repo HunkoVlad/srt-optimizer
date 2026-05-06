@@ -1,15 +1,12 @@
 # Virtual environment
-
 .venv/
 
 # Local configuration and secrets
-
 .env
 .env.*
 !config/*.example.env
 
-# Generated outputs
-
+# Legacy top-level generated outputs
 manifest.json
 standardized/**
 !standardized/
@@ -18,8 +15,12 @@ analysis/**
 !analysis/
 !analysis/.gitkeep
 
-# Logs
+# Real run artifacts
+data/runs/**
+!data/
+!data/runs/
 
+# Logs
 logs/**
 !logs/
 !logs/.gitkeep

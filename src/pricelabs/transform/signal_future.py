@@ -27,7 +27,7 @@ OUTPUT_COLUMNS = (
     "urgency_flag",
     "short_reason",
 )
-EXPECTED_WINDOWS = ("days_0_30", "days_31_60", "days_61_90")
+EXPECTED_WINDOWS = ("days_0_15", "days_16_45", "days_46_90")
 
 
 def parse_args() -> argparse.Namespace:
@@ -110,10 +110,12 @@ def confidence_note(value: str) -> str:
 
 
 def urgency_flag(window_name: str, pace: str) -> str:
-    if window_name == "days_0_30" and pace == "behind_market":
+    if window_name == "days_0_15" and pace == "behind_market":
         return "critical_now"
-    if window_name in ("days_31_60", "days_61_90") and pace == "behind_market":
+    if window_name == "days_16_45" and pace == "behind_market":
         return "advisory"
+    if window_name == "days_46_90" and pace == "behind_market":
+        return "info_watch"
     return "monitor"
 
 

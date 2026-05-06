@@ -15,7 +15,29 @@ Operator checklist for the current V1 pipeline.
 ## Run Checklist
 
 - [ ] Download the PriceLabs future pricing CSV manually.
-- [ ] Place the CSV somewhere in the repo, or choose its existing path.
+- [ ] Download or export the Price Occ benchmark CSV manually.
+- [ ] Prepare the manual PriceLabs settings JSON.
+- [ ] Create the run folder:
+
+```text
+data/runs/<run_date>/raw/
+```
+
+- [ ] Place the real raw input files in `data/runs/<run_date>/raw/`:
+  - `pricelabs_future_export.csv`
+  - `price_occ.csv`
+  - `pricelabs_settings_manual_input.json`
+- [ ] Treat `sample_data/` as debug fixtures only, not real weekly input storage.
+- [ ] Run the weekly runner from the repo root:
+
+```powershell
+.\run_weekly_pipeline.ps1 -RunDate 2026-05-03
+```
+
+## Manual Transform Only
+
+Use this lower-level command only when running the operational transform by itself.
+
 - [ ] Open `config/pricelabs.single-listing.example.toml`.
 - [ ] Set `listing_id` to the one listing being transformed.
 - [ ] Set `input_path` to the manually downloaded PriceLabs CSV.
@@ -30,9 +52,13 @@ $env:PYTHONPATH = "src"
 
 ## After The Run
 
-- [ ] Confirm `standardized/future_daily_pricing_<run_date>.csv` was written.
-- [ ] Confirm `manifest.json` was written.
+- [ ] Confirm `data/runs/<run_date>/standardized/future_daily_pricing_<run_date>.csv` was written.
+- [ ] Confirm `data/runs/<run_date>/manifest.json` was written.
 - [ ] Confirm `manifest.json` has `status = "success"`.
+- [ ] Confirm analysis outputs are under `data/runs/<run_date>/analysis/`.
+- [ ] Confirm settings outputs are under `data/runs/<run_date>/settings/`.
+- [ ] Retain `data/runs/<run_date>/raw/` with the run.
+- [ ] Do not overwrite prior run folders; outputs are snapshot-based.
 - [ ] Spot check the standardized CSV header:
 
 ```text

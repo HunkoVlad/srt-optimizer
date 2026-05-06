@@ -160,6 +160,97 @@ Limits:
 - Blank values should be treated as missing/unknown unless a future rule explicitly defines otherwise.
 - Completeness may vary by month.
 
+## Settings History Layer Design
+
+The settings history layer is design-only for now. It supports strategy review by preserving what PriceLabs settings were active on a run date, what changed from the prior snapshot, and how the next signal report changed afterward.
+
+### Settings Snapshot
+
+Preferred file:
+
+```text
+analysis/pricelabs_settings_snapshot_<run_date>.json
+```
+
+JSON is preferred because several settings are complex rule sections rather than simple scalar fields.
+
+Grain:
+
+- One snapshot per `run_date` for one configured listing.
+
+Required fields:
+
+- `run_date`
+- `listing_id`
+- `pms_account`
+- `listing_name`
+- `base_price`
+- `last_minute_rule`
+- `orphan_day_prices`
+- `booking_recency_factor`
+- `minimum_stay_settings`
+- `extra_person_fee`
+- `occupancy_based_adjustments`
+- `custom_seasonality_factor`
+- `length_of_stay_based_pricing`
+- `demand_factor_sensitivity`
+- `far_out_premium`
+- `safety_minimum_price_rule`
+
+Use flat fields for identity and scalar settings. Preserve complex settings as grouped text blocks or nested JSON, including raw copied/exported text when available.
+
+### Settings Changes
+
+Derived file:
+
+```text
+analysis/pricelabs_settings_changes_<run_date>.csv
+```
+
+Compare the current snapshot with the previous snapshot and emit one row per changed field.
+
+Minimum columns:
+
+- `run_date`
+- `listing_id`
+- `field_name`
+- `previous_value`
+- `current_value`
+- `changed_flag`
+
+### Signal Change Review
+
+Derived comparison file:
+
+```text
+analysis/future_signal_change_review_<run_date>.csv
+```
+
+Compare the current and prior `future_window_signals` files, then include current settings-change context.
+
+Minimum columns:
+
+- `run_date`
+- `prior_run_date`
+- `listing_id`
+- `window_name`
+- `previous_pace_status`
+- `current_pace_status`
+- `previous_price_position_status`
+- `current_price_position_status`
+- `previous_urgency_flag`
+- `current_urgency_flag`
+- `changed_settings_count`
+- `changed_settings_summary`
+- `interpretation_note`
+
+Rules:
+
+- Use `days_0_15`, `days_16_45`, and `days_46_90`.
+- Show settings changes and signal changes together.
+- Treat the review as directional context, not proof of causation.
+- No automation, scheduler, recommendation scoring, or Airbnb inputs are included.
+
 ## Proposed Enriched Future-Analysis Dataset
 
 Design-only output:

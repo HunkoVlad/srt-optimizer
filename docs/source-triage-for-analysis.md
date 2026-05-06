@@ -183,7 +183,7 @@ Use the Price Occ benchmark source when the business question needs market conte
 
 - How does current open-date price compare with market price percentiles?
 - Is a future date affected by event context?
-- How does listing booked share compare with market occupancy over isolated 0-30, 31-60, and 61-90-day horizon buckets?
+- How does listing booked share compare with market occupancy over isolated 0-15, 16-45, and 46-90-day horizon buckets?
 
 Use the historical monthly source when the business question is historical performance:
 
@@ -247,13 +247,13 @@ analysis/future_window_summary_<run_date>.csv
 
 Role: compact decision-support summary built from the enriched daily future-analysis dataset.
 
-Grain: one row per isolated horizon bucket: `days_0_30`, `days_31_60`, and `days_61_90`.
+Grain: one row per isolated horizon bucket: `days_0_15`, `days_16_45`, and `days_46_90`.
 
 Bucket definitions:
 
-- `days_0_30`: `stay_date` from `run_date` through `run_date + 29 days`.
-- `days_31_60`: `stay_date` from `run_date + 30 days` through `run_date + 59 days`.
-- `days_61_90`: `stay_date` from `run_date + 60 days` through `run_date + 89 days`.
+- `days_0_15`: immediate action zone, `stay_date` from `run_date` through `run_date + 14 days`.
+- `days_16_45`: advisory zone, `stay_date` from `run_date + 15 days` through `run_date + 44 days`.
+- `days_46_90`: informational / watch zone, `stay_date` from `run_date + 45 days` through `run_date + 89 days`.
 
 Required fields:
 
@@ -295,7 +295,7 @@ analysis/future_window_signals_<run_date>.csv
 
 Role: compact rule-based labels built from the isolated future window summary.
 
-Grain: one row per isolated horizon bucket: `days_0_30`, `days_31_60`, and `days_61_90`.
+Grain: one row per isolated horizon bucket: `days_0_15`, `days_16_45`, and `days_46_90`.
 
 Required fields:
 
@@ -320,6 +320,90 @@ Do not use for:
 - Automated pricing changes.
 - Full recommendation scoring.
 - Weighted confidence math.
+
+## PriceLabs Settings History Layer
+
+Source name: PriceLabs settings snapshot
+
+Example file:
+
+```text
+analysis/pricelabs_settings_snapshot_<run_date>.json
+```
+
+Grain: one snapshot per `run_date` for one listing
+
+Primary purpose: preserve the PriceLabs strategy settings active at a run date, then compare settings changes against movement in future window signals.
+
+Required fields:
+
+- `run_date`
+- `listing_id`
+- `pms_account`
+- `listing_name`
+- `base_price`
+- `last_minute_rule`
+- `orphan_day_prices`
+- `booking_recency_factor`
+- `minimum_stay_settings`
+- `extra_person_fee`
+- `occupancy_based_adjustments`
+- `occupancy_based_adjustments_snapshot`
+- `custom_seasonality_factor`
+- `length_of_stay_based_pricing`
+- `demand_factor_sensitivity`
+- `far_out_premium`
+- `safety_minimum_price_rule`
+
+Useful optional fields:
+
+- Raw copied/exported settings text.
+- Section labels or source notes for complex rule blocks.
+- Capture timestamp if it differs from `run_date`.
+
+Structured settings guidance:
+
+- `orphan_day_prices` should preserve `weekday.adjustment`, `weekend.adjustment`, and `gap_rule` fields for min/max gaps and application horizon, with `raw_text` retained if useful.
+- `minimum_stay_settings` should preserve `profile_name`, `default`, `last_minute`, `far_out`, `orphan_gaps`, and `lowest_minstay_allowed`, with `raw_text` retained if useful.
+- `length_of_stay_based_pricing` should use stable keys such as `1_night`, `2_nights`, `3_nights`, and `4_plus_nights`, with `raw_text` retained if useful.
+- `occupancy_based_adjustments` should separate static mode, such as `mode = "Market Driven"`.
+- `occupancy_based_adjustments_snapshot` should preserve dynamic horizon buckets such as `days_0_15`, `days_16_30`, and `days_31_60`, with `adjustment` and `market_position_note`.
+- Structured fields are the primary comparison source; raw text is backward traceability.
+- Snapshot handling preserves nested objects as-is and does not flatten structured sections.
+
+Should not be used for:
+
+- Replacing the operational future source.
+- Proving that a settings change caused a signal change.
+- Automated pricing changes.
+
+Allowed analysis level:
+
+- Snapshot-level: yes.
+- Change-level: yes, compared to the previous snapshot.
+- Window-level: yes, only when paired with `future_window_signals`.
+
+Derived changes file:
+
+```text
+analysis/pricelabs_settings_changes_<run_date>.csv
+```
+
+Minimum columns: `run_date`, `listing_id`, `field_name`, `previous_value`, `current_value`, `changed_flag`.
+
+Signal comparison file:
+
+```text
+analysis/future_signal_change_review_<run_date>.csv
+```
+
+Minimum columns: `run_date`, `prior_run_date`, `listing_id`, `window_name`, `previous_pace_status`, `current_pace_status`, `previous_price_position_status`, `current_price_position_status`, `previous_urgency_flag`, `current_urgency_flag`, `changed_settings_count`, `changed_settings_summary`, `interpretation_note`.
+
+Main risks / limitations:
+
+- No automated settings capture yet.
+- Complex settings may need raw text preservation before reliable parsing.
+- Signal movement after a settings change is directional evidence only, not causal proof.
 
 Invalid comparisons:
 

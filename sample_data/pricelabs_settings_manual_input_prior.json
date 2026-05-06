@@ -1,0 +1,25 @@
+{
+  "listing_id": "650255___717243",
+  "pms_account": "Lodgify",
+  "listing_name": "Aloha Poconos.",
+  "base_price": "400",
+  "last_minute_rule": "10% premium within 1 day (Flat)",
+  "orphan_day_prices": "Weekday: 10% Discount | Weekend: None for gaps between 1 and 1 night applied within 0 and 999 nights",
+  "booking_recency_factor": "Gradual discount from 5% (no bookings in the last 15 days) up to 15% (no bookings in the last 45 days), affecting prices for the next 30 days.",
+  "minimum_stay_settings": {
+    "raw_text": "ACTIVE MINSTAY PROFILE : EffortSaver - Revenue Optimized\nDefault :\nFixed Weekday: 1 night | Weekend: 2 nights\nLast Minute :\nWeekday: 1 night | Weekend: 1 night within 7 nights\nFar Out :\nWeekday: 2 nights | Weekend: 2 nights beyond 61 nights\nOrphan Gaps :\nWeekday: 1 nights | Weekend: 1 nights for gaps between 1 and 2 nights\nLowest Minstay Allowed :\nWeekday: 1| Weekend: 1"
+  },
+  "extra_person_fee": "10% after 8 guests",
+  "occupancy_based_adjustments": {
+    "raw_text": "Market Driven"
+  },
+  "custom_seasonality_factor": {
+    "raw_text": "Recommended"
+  },
+  "length_of_stay_based_pricing": {
+    "raw_text": "Custom"
+  },
+  "demand_factor_sensitivity": "Recommended",
+  "far_out_premium": "After 90 days, flat premium of 10.0%",
+  "safety_minimum_price_rule": "Set Safety Minimum Price to 110% of last-year-same-day ADR for nights beyond 180 days from today."
+}

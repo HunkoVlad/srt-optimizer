@@ -173,6 +173,111 @@ Limits:
 - Blank values may mean missing data, not zero.
 - Completeness may vary by month.
 
+## PriceLabs Settings History Design
+
+Settings history is an analysis layer for short-term strategy review. It does not change the operational future transform, enrichment, summary, or signal outputs.
+
+### Settings Snapshot Contract
+
+Preferred file:
+
+```text
+analysis/pricelabs_settings_snapshot_<run_date>.json
+```
+
+Preferred format: JSON, because PriceLabs settings can contain nested rules, long text blocks, and structured sections that should be preserved without flattening away traceability.
+
+Grain:
+
+- One snapshot per `run_date` for one `listing_id`.
+
+Minimum required fields:
+
+- `run_date`
+- `listing_id`
+- `pms_account`
+- `listing_name`
+- `base_price`
+- `last_minute_rule`
+- `orphan_day_prices`
+- `booking_recency_factor`
+- `minimum_stay_settings`
+- `extra_person_fee`
+- `occupancy_based_adjustments`
+- `custom_seasonality_factor`
+- `length_of_stay_based_pricing`
+- `demand_factor_sensitivity`
+- `far_out_premium`
+- `safety_minimum_price_rule`
+
+Flat fields should be used for stable scalar values such as `run_date`, `listing_id`, `pms_account`, `listing_name`, and `base_price`. Complex rule sections should be stored as grouped text or nested JSON objects, preserving raw copied/exported text where possible.
+
+### Settings Changes Contract
+
+Derived file:
+
+```text
+analysis/pricelabs_settings_changes_<run_date>.csv
+```
+
+Rule:
+
+- Compare the current settings snapshot to the previous available settings snapshot.
+- Emit one row per changed field.
+
+Minimum columns:
+
+- `run_date`
+- `listing_id`
+- `field_name`
+- `previous_value`
+- `current_value`
+- `changed_flag`
+
+### Signal Change Review Contract
+
+Comparison file:
+
+```text
+analysis/future_signal_change_review_<run_date>.csv
+```
+
+Rule:
+
+- Compare `future_window_signals_<run_date>.csv` to the previous `future_window_signals_<prior_run_date>.csv`.
+- Join in the current `pricelabs_settings_changes_<run_date>.csv` as context.
+- Use the main windows: `days_0_15`, `days_16_45`, and `days_46_90`.
+
+Minimum columns:
+
+- `run_date`
+- `prior_run_date`
+- `listing_id`
+- `window_name`
+- `previous_pace_status`
+- `current_pace_status`
+- `previous_price_position_status`
+- `current_price_position_status`
+- `previous_urgency_flag`
+- `current_urgency_flag`
+- `changed_settings_count`
+- `changed_settings_summary`
+- `interpretation_note`
+
+Design rules:
+
+- Show settings changes and signal changes together for directional review.
+- Do not treat this as proof of causation.
+- Compare the last two signal reports first.
+- Do not add recommendation scoring from settings changes in V1.
+
+Deferred:
+
+- Automated settings capture.
+- Exact parsing for complex PriceLabs settings sections.
+- Causal inference logic.
+- Scheduler integration.
+
 ## Proposed Enriched Future-Analysis Dataset
 
 This is a design-only dataset that combines the operational future daily data with Price Occ benchmark fields. It is analysis-oriented and does not replace the current operational standardized dataset.

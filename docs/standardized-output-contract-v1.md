@@ -74,7 +74,7 @@ Daily allowed:
 Window-level only:
 
 - Compare listing booked share to Price Occ `Market Occupancy`.
-- Use occupancy over isolated 0-30, 31-60, and 61-90-day horizon buckets.
+- Use occupancy over isolated 0-15, 16-45, and 46-90-day horizon buckets.
 
 Not allowed:
 
@@ -173,13 +173,13 @@ analysis/future_window_summary_<run_date>.csv
 
 Grain:
 
-- One row per isolated horizon bucket: `days_0_30`, `days_31_60`, and `days_61_90`.
+- One row per isolated horizon bucket: `days_0_15`, `days_16_45`, and `days_46_90`.
 
 Bucket definitions:
 
-- `days_0_30`: `stay_date` from `run_date` through `run_date + 29 days`.
-- `days_31_60`: `stay_date` from `run_date + 30 days` through `run_date + 59 days`.
-- `days_61_90`: `stay_date` from `run_date + 60 days` through `run_date + 89 days`.
+- `days_0_15`: immediate action zone, `stay_date` from `run_date` through `run_date + 14 days`.
+- `days_16_45`: advisory zone, `stay_date` from `run_date + 15 days` through `run_date + 44 days`.
+- `days_46_90`: informational / watch zone, `stay_date` from `run_date + 45 days` through `run_date + 89 days`.
 
 Columns, in order:
 
@@ -226,7 +226,7 @@ analysis/future_window_signals_<run_date>.csv
 
 Grain:
 
-- One row per isolated horizon bucket: `days_0_30`, `days_31_60`, and `days_61_90`.
+- One row per isolated horizon bucket: `days_0_15`, `days_16_45`, and `days_46_90`.
 
 Columns, in order:
 
@@ -244,13 +244,137 @@ Signal rules:
 - `pace_status` uses `occupancy_vs_market_pct`: `ahead_of_market` at `>= 5.0`, `near_market` above `-5.0` and below `5.0`, and `behind_market` at `<= -5.0`.
 - `price_position_status` uses `price_vs_market_75th_pct`: `above_75th` above `10.0`, `near_75th` from `-10.0` through `10.0`, and `below_75th` below `-10.0`.
 - `confidence_note` uses `low_confidence_booked_days`: `clean` at `0`, `some_low_confidence_bookings` at `1-2`, and `many_low_confidence_bookings` above `2`.
-- `urgency_flag` is `critical_now` only for `days_0_30` behind market, `advisory` for later buckets behind market, and `monitor` otherwise.
+- `urgency_flag` is `critical_now` for `days_0_15` behind market, `advisory` for `days_16_45` behind market, `info_watch` for `days_46_90` behind market, and `monitor` otherwise.
 
 Not included:
 
 - Recommendation scoring.
 - Automated actions.
 - Weighted confidence metrics.
+
+## PriceLabs Settings Snapshot Dataset
+
+The settings snapshot is an analysis-oriented record of PriceLabs settings active for one listing at a run date. It does not replace or feed the operational daily transform.
+
+Preferred file:
+
+```text
+analysis/pricelabs_settings_snapshot_<run_date>.json
+```
+
+Preferred format:
+
+- JSON, because settings can include complex rule sections, nested values, and raw copied/exported text.
+
+Grain:
+
+- One snapshot per `run_date` for one `listing_id`.
+
+Required fields:
+
+- `run_date`
+- `listing_id`
+- `pms_account`
+- `listing_name`
+- `base_price`
+- `last_minute_rule`
+- `orphan_day_prices`
+- `booking_recency_factor`
+- `minimum_stay_settings`
+- `extra_person_fee`
+- `occupancy_based_adjustments`
+- `occupancy_based_adjustments_snapshot`
+- `custom_seasonality_factor`
+- `length_of_stay_based_pricing`
+- `demand_factor_sensitivity`
+- `far_out_premium`
+- `safety_minimum_price_rule`
+
+Storage rule:
+
+- Keep identity and scalar values as flat fields.
+- Keep complex settings as grouped text blocks or nested JSON objects.
+- Preserve raw copied/exported text where possible for traceability.
+- Use structured fields as the primary comparison source where settings are stable enough to model.
+- `orphan_day_prices` should preserve `weekday.adjustment`, `weekend.adjustment`, `gap_rule.gap_min_nights`, `gap_rule.gap_max_nights`, `gap_rule.applied_within_min_nights`, `gap_rule.applied_within_max_nights`, and optional `raw_text`.
+- `minimum_stay_settings` should preserve `profile_name`, `default`, `last_minute`, `far_out`, `orphan_gaps`, `lowest_minstay_allowed`, and optional `raw_text`.
+- `occupancy_based_adjustments` should keep static mode separately, such as `mode = "Market Driven"`, with optional `raw_text`.
+- `occupancy_based_adjustments_snapshot` should capture dynamic horizon buckets such as `days_0_15`, `days_16_30`, and `days_31_60`, with optional `raw_text`.
+- `length_of_stay_based_pricing` should include structured keys such as `1_night`, `2_nights`, `3_nights`, and `4_plus_nights`, with optional `raw_text`.
+- The snapshot transform validates required top-level fields, then preserves nested objects as-is rather than flattening them into strings.
+
+## PriceLabs Settings Changes Dataset
+
+The settings changes dataset compares the current settings snapshot with the previous available snapshot.
+
+File:
+
+```text
+analysis/pricelabs_settings_changes_<run_date>.csv
+```
+
+Grain:
+
+- One row per changed settings field.
+
+Columns:
+
+- `run_date`
+- `listing_id`
+- `field_name`
+- `previous_value`
+- `current_value`
+- `changed_flag`
+
+## Future Signal Change Review Dataset
+
+The signal change review compares the last two signal reports and places settings changes next to signal movement.
+
+File:
+
+```text
+analysis/future_signal_change_review_<run_date>.csv
+```
+
+Inputs:
+
+- Current `analysis/future_window_signals_<run_date>.csv`
+- Previous `analysis/future_window_signals_<prior_run_date>.csv`
+- Current `analysis/pricelabs_settings_changes_<run_date>.csv`
+
+Grain:
+
+- One row per signal window: `days_0_15`, `days_16_45`, and `days_46_90`.
+
+Columns:
+
+- `run_date`
+- `prior_run_date`
+- `listing_id`
+- `window_name`
+- `previous_pace_status`
+- `current_pace_status`
+- `previous_price_position_status`
+- `current_price_position_status`
+- `previous_urgency_flag`
+- `current_urgency_flag`
+- `changed_settings_count`
+- `changed_settings_summary`
+- `interpretation_note`
+
+Design rules:
+
+- Settings changes and signal changes should be shown together.
+- This view is directional review, not proof of causation.
+- Compare the last two signal reports first.
+- Do not produce recommendation scoring from settings changes yet.
+
+Deferred:
+
+- Automated settings capture.
+- Causal inference logic.
+- Recommendation scoring from settings changes.
+- Scheduler or Airbnb integration.
 
 ## Field Expectations
 
