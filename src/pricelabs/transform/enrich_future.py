@@ -4,11 +4,24 @@ from __future__ import annotations
 
 import argparse
 import csv
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 import sys
 
 
 OPERATIONAL_COLUMNS = (
+    "run_date",
+    "listing_id",
+    "stay_date",
+    "nightly_price",
+    "min_stay",
+    "status",
+    "upcoming_adr",
+    "analysis_status",
+    "status_confidence",
+    "status_reason",
+)
+REQUIRED_OPERATIONAL_COLUMNS = (
     "run_date",
     "listing_id",
     "stay_date",
@@ -27,6 +40,13 @@ ENRICHED_COLUMNS = (
     "nightly_price",
     "min_stay",
     "status",
+    "upcoming_adr",
+    "booked_revenue_proxy",
+    "open_revenue_ask",
+    "previous_status",
+    "previous_upcoming_adr",
+    "booked_stay_start_proxy",
+    "booked_stay_id_proxy",
     "analysis_status",
     "status_confidence",
     "status_reason",
@@ -52,6 +72,33 @@ PRICE_OCC_FIELD_MAP = {
     "Final Price": "final_price",
     "Holiday/Event": "holiday_event",
 }
+ZERO = Decimal("0")
+
+
+def parse_decimal(value: str) -> Decimal | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        return Decimal(stripped.replace("$", "").replace(",", ""))
+    except InvalidOperation:
+        return None
+
+
+def decimal_for_output(value: Decimal | None) -> str:
+    if value is None:
+        return ""
+    rounded = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if rounded == rounded.to_integral():
+        return str(rounded.to_integral())
+    return str(rounded)
+
+
+def rounded_money(value: str) -> Decimal | None:
+    parsed = parse_decimal(value)
+    if parsed is None:
+        return None
+    return parsed.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,18 +150,63 @@ def build_price_occ_by_date(rows: list[dict[str, str]]) -> dict[str, dict[str, s
     return by_date
 
 
+def add_revenue_and_stay_proxies(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    enriched_rows = sorted(rows, key=lambda row: row["stay_date"])
+    previous_status = ""
+    previous_upcoming_adr = ""
+    previous_booked_adr: Decimal | None = None
+    booked_stay_id = 0
+
+    for row in enriched_rows:
+        status = row["status"].strip()
+        upcoming_adr = rounded_money(row["upcoming_adr"])
+        nightly_price = parse_decimal(row["nightly_price"])
+        row["upcoming_adr"] = decimal_for_output(upcoming_adr)
+
+        row["previous_status"] = previous_status
+        row["previous_upcoming_adr"] = previous_upcoming_adr
+
+        if status == "booked":
+            row["booked_revenue_proxy"] = decimal_for_output(upcoming_adr or ZERO)
+            row["open_revenue_ask"] = "0"
+            is_new_stay = previous_status != "booked" or upcoming_adr != previous_booked_adr
+            if is_new_stay:
+                booked_stay_id += 1
+            row["booked_stay_start_proxy"] = "1" if is_new_stay else "0"
+            row["booked_stay_id_proxy"] = str(booked_stay_id)
+            previous_booked_adr = upcoming_adr
+        elif status == "available":
+            row["booked_revenue_proxy"] = "0"
+            row["open_revenue_ask"] = decimal_for_output(nightly_price or ZERO)
+            row["booked_stay_start_proxy"] = "0"
+            row["booked_stay_id_proxy"] = ""
+            previous_booked_adr = None
+        else:
+            row["booked_revenue_proxy"] = "0"
+            row["open_revenue_ask"] = "0"
+            row["booked_stay_start_proxy"] = "0"
+            row["booked_stay_id_proxy"] = ""
+            previous_booked_adr = None
+
+        previous_status = status
+        previous_upcoming_adr = decimal_for_output(upcoming_adr)
+
+    return enriched_rows
+
+
 def enrich_rows(
     operational_rows: list[dict[str, str]],
     price_occ_by_date: dict[str, dict[str, str]],
 ) -> list[dict[str, str]]:
     enriched_rows = []
     for row in operational_rows:
-        enriched_row = {column: row[column].strip() for column in OPERATIONAL_COLUMNS}
+        enriched_row = {column: row.get(column, "").strip() for column in OPERATIONAL_COLUMNS}
         enrichment = price_occ_by_date.get(row["stay_date"].strip(), {})
         for column in ENRICHED_COLUMNS:
-            enriched_row.setdefault(column, enrichment.get(column, ""))
+            if not enriched_row.get(column):
+                enriched_row[column] = enrichment.get(column, "")
         enriched_rows.append(enriched_row)
-    return enriched_rows
+    return add_revenue_and_stay_proxies(enriched_rows)
 
 
 def write_enriched_rows(path: Path, rows: list[dict[str, str]]) -> None:
@@ -131,7 +223,7 @@ def run() -> int:
     price_occ_path = Path(args.price_occ_file)
     output_path = Path(args.output_file or f"analysis/future_daily_pricing_enriched_{args.run_date}.csv")
 
-    operational_rows = read_csv_rows(standardized_path, OPERATIONAL_COLUMNS, "Standardized")
+    operational_rows = read_csv_rows(standardized_path, REQUIRED_OPERATIONAL_COLUMNS, "Standardized")
     price_occ_rows = read_csv_rows(price_occ_path, PRICE_OCC_REQUIRED_COLUMNS, "Price Occ")
     price_occ_by_date = build_price_occ_by_date(price_occ_rows)
     enriched_rows = enrich_rows(operational_rows, price_occ_by_date)

@@ -10,6 +10,11 @@ if ($RunDate -notmatch '^\d{4}-\d{2}-\d{2}$') {
     exit 1
 }
 
+$pythonExe = "python"
+if (Test-Path ".\.venv\Scripts\python.exe") {
+    $pythonExe = ".\.venv\Scripts\python.exe"
+}
+
 $runRoot = Join-Path "data\runs" $RunDate
 $rawDir = Join-Path $runRoot "raw"
 $standardizedDir = Join-Path $runRoot "standardized"
@@ -45,7 +50,7 @@ function Invoke-PythonStep {
 
     Write-Host ""
     Write-Host "== $Label =="
-    & python @Arguments
+    & $pythonExe @Arguments
     if ($LASTEXITCODE -ne 0) {
         Write-Error "$Label failed."
         exit $LASTEXITCODE

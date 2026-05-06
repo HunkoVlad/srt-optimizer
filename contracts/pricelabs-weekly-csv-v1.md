@@ -1,298 +1,122 @@
 # PriceLabs Weekly CSV Contract V1
 
-Status: Revised V1
+Status: Current V1
 Owner: SRT pipeline
-Scope: Weekly PriceLabs-to-CSV pipeline
+Scope: Manual weekly PriceLabs pipeline for one listing
 
-This contract defines the initial standardized dataset and analytical interpretation for a weekly PriceLabs export. V1 supports two separate analysis tracks and intentionally does not implement extraction.
-
-## Two Analysis Tracks
-
-### A. Available-Date Pricing Analysis
-
-Purpose: evaluate current asking price and restriction strategy for dates still open.
-
-Use for:
-
-- Pricing strength
-- Weekend premium
-- 1-night premium
-- Min-stay behavior
-- Market price positioning on open dates
-
-### B. Booked-Date Value Analysis
-
-Purpose: evaluate booked-value quality of dates already reserved.
-
-Use for:
-
-- Upcoming ADR quality
-- Whether booked nights were captured at strong value
-- Booked-window quality versus market benchmarks
-
-This contract keeps these tracks separate so current asking price for open nights is not mixed with booked-value quality for reserved nights.
-
-## Standardized Dataset
-
-V1 keeps one minimal standardized file:
+This contract defines the current Python-only V1 pipeline shape:
 
 ```text
-standardized/future_daily_pricing_<run_date>.csv
+manual raw PriceLabs files -> standardized daily CSV -> enriched daily CSV -> analysis/settings outputs
 ```
 
-Required columns:
+V1 is manual and local. It does not include browser automation, scheduling, Airbnb data, dashboards, or monthly revenue pace.
 
-- `run_date`
-- `listing_id`
-- `stay_date`
-- `nightly_price`
-- `min_stay`
-- `status`
+## Run Folder Contract
 
-Optional later columns from the same PriceLabs export:
+Real weekly runs live under:
 
-- `market_price`
-- `market_occupancy`
+```text
+data/runs/<run_date>/
+```
 
-Field source notes:
+Required raw input files:
 
-- `market_price` maps from PriceLabs `Market 50th Percentile Price`.
-- `market_occupancy` maps from PriceLabs `Market Occupancy`.
+```text
+data/runs/<run_date>/raw/priceLabs_future_export.csv
+data/runs/<run_date>/raw/price_occ.csv
+data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
+```
 
-## Price Occ Benchmark Source
+Canonical filename casing:
 
-The current operational PriceLabs export remains the primary V1 source for:
+```text
+priceLabs_future_export.csv
+```
 
-- `listing_id`
-- `stay_date`
-- `nightly_price`
-- `min_stay`
-- `status`
+Generated outputs are reproducible from the raw inputs and live under:
 
-The file `sample_data/Price Occ for 650255___717243.csv` is a second PriceLabs source for benchmark/enrichment design only. It is not a replacement for the operational source.
+```text
+data/runs/<run_date>/standardized/
+data/runs/<run_date>/analysis/
+data/runs/<run_date>/settings/
+```
 
-Actual columns present in the Price Occ file include:
+`sample_data/` is debug/test fixture data only. It is not operational input for real weekly runs.
+
+## Source Roles
+
+### Operational Future Source
+
+File:
+
+```text
+data/runs/<run_date>/raw/priceLabs_future_export.csv
+```
+
+Role: primary listing-level calendar source for the operational transform.
+
+Required source fields:
+
+- `Date`
+- `Listing ID`
+- `Price with Default Customization` or `Your Price`
+- `Min Stay`
+- `Status`
+- `ADR`
+
+Important mapping:
+
+- `ADR` -> `upcoming_adr`
+
+The raw future export is the authority for listing identity, stay dates, nightly asking price, min stay, status interpretation, and upcoming ADR proxy.
+
+### Price Occ Benchmark Source
+
+File:
+
+```text
+data/runs/<run_date>/raw/price_occ.csv
+```
+
+Role: market/context enrichment only.
+
+Minimum useful source fields:
 
 - `Date`
 - `Market Occupancy`
-- `Market 25th Percentile Price`
 - `Market 50th Percentile Price`
 - `Market 75th Percentile Price`
+
+Useful optional fields:
+
+- `Market 25th Percentile Price`
 - `Market 90th Percentile Price`
 - `Median Booked Price`
-- `Number of Bookings`
-- `7-day market pickup`
 - `Last Seen Price`
 - `Final Price`
-- `Your Booked Occupancy`
-- `Prices with Default Customization`
-- `booked_occupancy`
-- `unavailable_occupancy`
 - `Holiday/Event`
-- `Upcoming Booking`
 
-Practical join key:
+Rules:
 
-- Join standardized `stay_date` to Price Occ `Date`.
-- No `listing_id` is present in the Price Occ file, so listing identity must come from the operational source/config.
+- Join to operational data on `Date` = `stay_date`.
+- Do not use `price_occ.csv` for `upcoming_adr`.
+- Do not use `price_occ.csv` as the sole operational source.
+- Do not compare daily market occupancy directly to single-listing daily occupancy.
 
-Minimum Price Occ benchmark columns for V1 design:
+## Standardized Daily Contract
 
-- `Date`
-- `Market Occupancy`
-- `Market 50th Percentile Price`
-
-Useful optional benchmark columns:
-
-- Price positioning: `Market 25th Percentile Price`, `Market 75th Percentile Price`, `Market 90th Percentile Price`, `Prices with Default Customization`
-- Booked-value context: `Median Booked Price`, `Number of Bookings`
-- Window-level demand context: `7-day market pickup`, `Holiday/Event`
-
-Limits:
-
-- The Price Occ file has no `listing_id`.
-- The Price Occ file has no `Min Stay`.
-- It is not suitable as the sole operational V1 source.
-- Daily market occupancy must not be compared directly to single-listing daily occupancy.
-- Occupancy comparison is valid only after aggregation across windows such as next 30/60/90 days.
-
-## Historical Monthly Performance Source
-
-The file `sample_data/Monthly Trends for 650255___717243.csv` is a third PriceLabs source for historical monthly performance analysis only. It is separate from the operational future source and the Price Occ future benchmark/enrichment source.
-
-Actual columns present in the historical monthly file:
-
-- `month_year`
-- `Revenue`
-- `Revenue (LY)`
-- `Revenue (STLY)`
-- `Revenue STLY YoY Difference`
-- `Occupancy`
-- `Occupancy (LY)`
-- `Occupancy (STLY)`
-- `Occupancy STLY YoY Difference %`
-- `Booked Occupancy`
-- `Booked Occupancy (LY)`
-- `Booked Occupancy (STLY)`
-- `Blocked Occupancy`
-- `Blocked Occupancy (LY)`
-- `Blocked Occupancy (STLY)`
-- `ADR`
-- `ADR (LY)`
-- `ADR (STLY)`
-- `ADR STLY YoY Difference`
-
-Minimum historical monthly contract columns:
-
-- `month_year`
-- `Revenue`
-- `Occupancy`
-- `Booked Occupancy`
-- `Blocked Occupancy`
-- `ADR`
-
-Useful optional comparison fields:
-
-- Revenue comparison: `Revenue (LY)`, `Revenue (STLY)`, `Revenue STLY YoY Difference`
-- Occupancy comparison: `Occupancy (LY)`, `Occupancy (STLY)`, `Occupancy STLY YoY Difference %`
-- Booked/blocked comparison: `Booked Occupancy (LY)`, `Booked Occupancy (STLY)`, `Blocked Occupancy (LY)`, `Blocked Occupancy (STLY)`
-- ADR comparison: `ADR (LY)`, `ADR (STLY)`, `ADR STLY YoY Difference`
-
-Intended uses:
-
-- Monthly revenue trend
-- Monthly ADR trend
-- Monthly occupancy trend
-- Blocked occupancy trend
-- Revenue pace vs annual goal
-
-Limits:
-
-- Monthly only, not daily.
-- Not suitable for operational daily transform logic.
-- Blank values may mean missing data, not zero.
-- Completeness may vary by month.
-
-## PriceLabs Settings History Design
-
-Settings history is an analysis layer for short-term strategy review. It does not change the operational future transform, enrichment, summary, or signal outputs.
-
-### Settings Snapshot Contract
-
-Preferred file:
+Output:
 
 ```text
-analysis/pricelabs_settings_snapshot_<run_date>.json
-```
-
-Preferred format: JSON, because PriceLabs settings can contain nested rules, long text blocks, and structured sections that should be preserved without flattening away traceability.
-
-Grain:
-
-- One snapshot per `run_date` for one `listing_id`.
-
-Minimum required fields:
-
-- `run_date`
-- `listing_id`
-- `pms_account`
-- `listing_name`
-- `base_price`
-- `last_minute_rule`
-- `orphan_day_prices`
-- `booking_recency_factor`
-- `minimum_stay_settings`
-- `extra_person_fee`
-- `occupancy_based_adjustments`
-- `custom_seasonality_factor`
-- `length_of_stay_based_pricing`
-- `demand_factor_sensitivity`
-- `far_out_premium`
-- `safety_minimum_price_rule`
-
-Flat fields should be used for stable scalar values such as `run_date`, `listing_id`, `pms_account`, `listing_name`, and `base_price`. Complex rule sections should be stored as grouped text or nested JSON objects, preserving raw copied/exported text where possible.
-
-### Settings Changes Contract
-
-Derived file:
-
-```text
-analysis/pricelabs_settings_changes_<run_date>.csv
-```
-
-Rule:
-
-- Compare the current settings snapshot to the previous available settings snapshot.
-- Emit one row per changed field.
-
-Minimum columns:
-
-- `run_date`
-- `listing_id`
-- `field_name`
-- `previous_value`
-- `current_value`
-- `changed_flag`
-
-### Signal Change Review Contract
-
-Comparison file:
-
-```text
-analysis/future_signal_change_review_<run_date>.csv
-```
-
-Rule:
-
-- Compare `future_window_signals_<run_date>.csv` to the previous `future_window_signals_<prior_run_date>.csv`.
-- Join in the current `pricelabs_settings_changes_<run_date>.csv` as context.
-- Use the main windows: `days_0_15`, `days_16_45`, and `days_46_90`.
-
-Minimum columns:
-
-- `run_date`
-- `prior_run_date`
-- `listing_id`
-- `window_name`
-- `previous_pace_status`
-- `current_pace_status`
-- `previous_price_position_status`
-- `current_price_position_status`
-- `previous_urgency_flag`
-- `current_urgency_flag`
-- `changed_settings_count`
-- `changed_settings_summary`
-- `interpretation_note`
-
-Design rules:
-
-- Show settings changes and signal changes together for directional review.
-- Do not treat this as proof of causation.
-- Compare the last two signal reports first.
-- Do not add recommendation scoring from settings changes in V1.
-
-Deferred:
-
-- Automated settings capture.
-- Exact parsing for complex PriceLabs settings sections.
-- Causal inference logic.
-- Scheduler integration.
-
-## Proposed Enriched Future-Analysis Dataset
-
-This is a design-only dataset that combines the operational future daily data with Price Occ benchmark fields. It is analysis-oriented and does not replace the current operational standardized dataset.
-
-Proposed file name:
-
-```text
-analysis/future_daily_pricing_enriched_<run_date>.csv
+data/runs/<run_date>/standardized/future_daily_pricing_<run_date>.csv
 ```
 
 Grain:
 
-- One row per `stay_date` for the configured listing.
+- One row per `run_date`, `listing_id`, and `stay_date`.
 
-Required operational columns carried through:
+Required output columns:
 
 - `run_date`
 - `listing_id`
@@ -300,183 +124,154 @@ Required operational columns carried through:
 - `nightly_price`
 - `min_stay`
 - `status`
+- `upcoming_adr`
+- `analysis_status`
+- `status_confidence`
+- `status_reason`
 
-Minimum Price Occ benchmark/enrichment columns:
+Source-to-target mapping:
 
-- `market_occupancy` from `Market Occupancy`
-- `market_50th_price` from `Market 50th Percentile Price`
+| Source field | Target field |
+| --- | --- |
+| pipeline metadata | `run_date` |
+| `Listing ID` | `listing_id` |
+| `Date` | `stay_date` |
+| `Your Price` or `Price with Default Customization` | `nightly_price` |
+| `Min Stay` | `min_stay` |
+| `Status` plus availability fields | `status` |
+| `ADR` | `upcoming_adr` |
 
-Useful optional Price Occ enrichment columns:
+Status interpretation keeps the raw operational `status` and adds analysis-aware fields:
 
-- `market_25th_price` from `Market 25th Percentile Price`
-- `market_75th_price` from `Market 75th Percentile Price`
-- `market_90th_price` from `Market 90th Percentile Price`
-- `median_booked_price` from `Median Booked Price`
-- `last_seen_price` from `Last Seen Price`
-- `final_price` from `Final Price`
-- `holiday_event` from `Holiday/Event`
+- `analysis_status`
+- `status_confidence`
+- `status_reason`
 
-Join rule:
+## Enriched Daily Step 1 Contract
 
-- `operational.stay_date` = Price Occ `Date`
-
-Join assumptions and risks:
-
-- Price Occ has no `listing_id`, so the configured operational listing remains the listing authority.
-- Missing Price Occ dates should leave benchmark fields blank/null rather than dropping operational rows.
-- Duplicate Price Occ `Date` rows are deferred; no rule is defined yet.
-
-Intended support:
-
-- Available-date pricing analysis
-- Booked-date value review
-- Market pricing position review
-
-Not for direct daily use:
-
-- Daily market occupancy vs single-listing daily occupancy comparison.
-
-Belongs only in later window-level summaries:
-
-- Listing booked share vs `market_occupancy`
-- Average market occupancy over next 30/60/90 days
-- Occupancy gap to market over next 30/60/90 days
-- Share of booked nights above/below market price benchmark
-- Average booked proxy value vs market benchmark by window
-
-## Required V1 Base Fields
-
-These are the minimum common fields for both analysis tracks:
-
-| Field | Needed for available-date pricing | Needed for booked-date value | V1 status |
-| --- | --- | --- | --- |
-| `run_date` | yes | yes | required |
-| `listing_id` | yes | yes | required |
-| `stay_date` | yes | yes | required |
-| `nightly_price` | yes | yes | required |
-| `min_stay` | yes | not essential | required |
-| `status` | yes | yes | required |
-| `market_price` | useful | useful | optional later |
-| `market_occupancy` | not for daily compare | yes, window-level only | optional later |
-
-## Available-Date Pricing Analysis
-
-Filter:
+Output:
 
 ```text
-status = available
+data/runs/<run_date>/analysis/future_daily_pricing_enriched_<run_date>.csv
 ```
 
-Minimum useful fields:
+Role: analysis-oriented daily file combining operational future rows with Price Occ market/context fields and Step 1 revenue-proxy fields. It does not replace the standardized daily output.
 
+Grain:
+
+- One row per standardized `stay_date`.
+
+Required operational carry-through columns:
+
+- `run_date`
+- `listing_id`
 - `stay_date`
 - `nightly_price`
 - `min_stay`
 - `status`
+- `upcoming_adr`
+- `analysis_status`
+- `status_confidence`
+- `status_reason`
 
-Main use:
+Required Step 1 revenue-proxy columns:
 
-- Current asking price analysis
-- Market positioning
-- Min-stay review
+- `booked_revenue_proxy`
+- `open_revenue_ask`
+- `previous_status`
+- `previous_upcoming_adr`
+- `booked_stay_start_proxy`
+- `booked_stay_id_proxy`
 
-Optional later fields:
+Required market/context columns:
 
-- `market_price`
 - `market_occupancy`
+- `market_50th_price`
+- `market_75th_price`
+
+Optional market/context columns may include:
+
+- `market_25th_price`
+- `market_90th_price`
+- `median_booked_price`
+- `last_seen_price`
+- `final_price`
+- `holiday_event`
+
+Step 1 business rules:
+
+- `booked_revenue_proxy` = `upcoming_adr` when `status = booked`, else `0`.
+- `open_revenue_ask` = `nightly_price` when `status = available`, else `0`.
+- Unavailable, blocked, and unbookable rows contribute `0` to both revenue fields.
+- `booked_stay_start_proxy = 1` when current `status = booked` and either previous status is not booked or rounded `upcoming_adr` differs from rounded `previous_upcoming_adr`.
+- `booked_stay_id_proxy` is populated only for booked rows.
+- Non-booked rows have null/blank `booked_stay_id_proxy`.
+
+Limits:
+
+- These are proxy fields, not exact reservation records.
+- `upcoming_adr` comes from the raw future export `ADR` field.
+- `price_occ.csv` must not provide `upcoming_adr`.
+
+## Analysis Rules
+
+V1 keeps available-date pricing analysis separate from booked-date value analysis.
+
+Available-date pricing analysis uses:
+
+- `status = available`
+- `nightly_price`
+- `open_revenue_ask`
+- Price Occ market price context
+- `min_stay`
+
+Booked-date value analysis uses:
+
+- `status = booked`
+- `upcoming_adr`
+- `booked_revenue_proxy`
+- `booked_stay_start_proxy`
+- `booked_stay_id_proxy`
 
 Daily comparisons allowed:
 
-- `nightly_price` vs `market_price`
-- Weekday and weekend price pattern
-- Min-stay by date
-- Open-date pricing outliers
-- Open-date orphan or gap candidate review later
+- Available-date asking price vs market price context.
+- Booked-date revenue proxy review by date.
+- Min-stay inspection by date.
+
+Daily comparisons not allowed:
+
+- Single-listing daily occupancy vs daily market occupancy.
 
 Window-level comparisons allowed:
 
-- Average open-date price vs average market price for the next 30/60/90 days
-- Average open-date min stay for the next 30/60/90 days
-- Overall available-date pricing posture by window
+- Listing booked share vs average market occupancy.
+- Asking-price posture vs market price context.
+- Booked revenue proxy trends by window.
 
-## Booked-Date Value Analysis
+Current window summaries use market 75th percentile as context only. Revenue pace is the business goal, but `monthly_revenue_pace` is not implemented in V1 Step 1.
 
-Filter:
+## Settings Outputs
+
+Settings snapshot:
 
 ```text
-status = booked
+data/runs/<run_date>/settings/pricelabs_settings_snapshot_<run_date>.json
 ```
 
-Minimum useful fields:
+Settings changes, when a prior snapshot exists:
 
-- `stay_date`
-- `nightly_price`
-- `status`
+```text
+data/runs/<run_date>/settings/pricelabs_settings_changes_<run_date>.csv
+```
 
-Main use:
+Settings files are analysis context. They do not change the operational transform or Step 1 revenue-proxy logic.
 
-- Proxy booked-value quality analysis
-- Upcoming ADR quality directionally
-- Market-relative quality at window level
+## Non-Goals
 
-V1 interpretation:
-
-- For booked dates, `nightly_price` may be treated as a proxy for booked-value quality only if PriceLabs export behavior is stable enough.
-- If PriceLabs changes the displayed value after booking, `nightly_price` is only a weak proxy and must be labeled as such.
-- Booked-date value analysis is provisional in V1.
-- It is useful for directional review, not final truth for realized ADR.
-
-Daily comparisons allowed:
-
-- Inspect booked-date proxy value by date
-- Inspect whether a booked date appears weak or strong relative to `market_price` on that date
-
-Window-level comparisons preferred:
-
-- Average booked-date proxy value for the next 30/60/90 days
-- Booked-date average vs market average for the same booked dates
-- Share of booked nights above or below market benchmark
-
-## Comparison Rules
-
-### Daily Comparisons
-
-Allowed:
-
-- Available-date `nightly_price` vs `market_price`
-- Booked-date proxy value vs `market_price`
-- Min-stay inspection by date
-- Open-date pricing outlier review
-
-Not allowed:
-
-- Single-date booked occupancy vs single-date market occupancy
-
-### Window-Level Comparisons
-
-Window-level comparisons must aggregate over the next 30, 60, and 90 days.
-
-Required for:
-
-- Your booked share of nights vs market occupancy
-- Booked-value quality trends
-- Available-date pricing posture
-
-Why: your listing is binary per date, while `market_occupancy` is a market-wide rate. Occupancy comparisons are valid only after aggregation across a window.
-
-## Final V1 Rule
-
-V1 treats the PriceLabs export as supporting two separate views:
-
-1. Open-night pricing view: analyze current price and restrictions on available dates.
-2. Booked-night value view: analyze booked-value quality directionally on reserved dates, mainly at 30/60/90-day windows.
-
-V1 must not use daily row-level comparison of listing occupancy versus market occupancy. That comparison belongs only to aggregated windows.
-
-## Non-Goals For V1 Scaffold
-
-- No PriceLabs extraction is implemented.
-- No browser automation is added for PriceLabs.
-- No authenticated network access is configured.
-- No production scheduling is enabled.
-- No final realized ADR claims are made from booked-date `nightly_price`.
+- No browser automation.
+- No scheduler.
+- No Airbnb data.
+- No dashboard.
+- No monthly revenue pace output.
+- No final realized ADR claims from `upcoming_adr` or `booked_revenue_proxy`.
