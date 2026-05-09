@@ -142,6 +142,71 @@ def build_executive_summary(rows: list[dict[str, str]]) -> list[str]:
     return bullets
 
 
+def available_rows_for_action(rows: list[dict[str, str]], action_level: str) -> list[dict[str, str]]:
+    return [
+        row
+        for row in rows
+        if row["data_availability"] == "available"
+        and row["month_action_level"] == action_level
+    ]
+
+
+def build_action_lines(rows: list[dict[str, str]], action_level: str) -> list[str]:
+    action_rows = available_rows_for_action(rows, action_level)
+    if action_level == "monitor":
+        action_rows = [
+            row
+            for row in action_rows
+            if row["revenue_pace_status"] != "partial_horizon"
+        ]
+    if not action_rows:
+        return ["- None."]
+
+    lines = []
+    for row in action_rows:
+        if action_level in {"critical_now", "advisory"}:
+            lines.append(
+                "- "
+                f"{row['stay_month']}: {row['revenue_pace_status']} - "
+                f"booked {format_currency(row['booked_revenue_proxy'])}, "
+                f"total future value {format_currency(row['total_future_revenue_proxy'])}, "
+                f"cleaning {row['cleaning_efficiency_status']}."
+            )
+        elif action_level == "protect":
+            lines.append(
+                "- "
+                f"{row['stay_month']}: {row['revenue_pace_status']} - "
+                f"total future value {format_currency(row['total_future_revenue_proxy'])}."
+            )
+        else:
+            lines.append(f"- {row['stay_month']}: {row['revenue_pace_status']}.")
+    return lines
+
+
+def build_executive_decision_view(rows: list[dict[str, str]]) -> list[str]:
+    sections = [
+        "## Executive Decision View",
+        "",
+        "### Critical Now",
+        "",
+        *build_action_lines(rows, "critical_now"),
+        "",
+        "### Advisory",
+        "",
+        *build_action_lines(rows, "advisory"),
+        "",
+        "### Protect",
+        "",
+        *build_action_lines(rows, "protect"),
+        "",
+        "### Monitor",
+        "",
+        *build_action_lines(rows, "monitor"),
+        "",
+    ]
+    return sections
+
+
 def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
@@ -151,9 +216,9 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
         "",
     ]
     lines.extend(f"- {bullet}" for bullet in build_executive_summary(sorted_rows))
+    lines.extend(["", *build_executive_decision_view(sorted_rows)])
     lines.extend(
         [
-            "",
             "## Monthly Revenue Pace",
             "",
             "| Month | Position | Bucket | Scope | Data | Booked Revenue | Open Ask | Total Future Value | Target | Booked % | Total % | Revenue Status | Cleaning Status | Action Level |",

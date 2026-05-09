@@ -185,6 +185,15 @@ def test_monthly_revenue_summary_markdown_content() -> None:
     assert "Historical months without source data are shown for context." in markdown
     assert "- Market benchmark is context only." in markdown
     assert "2026-11 revenue pace" not in markdown
+    assert "## Executive Decision View" in markdown
+    assert "### Advisory" in markdown
+    assert "- 2026-05: conversion_risk - booked $2,834, total future value $10,259, cleaning inefficient." in markdown
+    assert "- 2026-06: conversion_risk - booked $314, total future value $14,404, cleaning inefficient." in markdown
+    assert "### Protect" in markdown
+    assert "- 2026-07: protect_open_value - total future value $22,614." in markdown
+    assert "- 2026-10: protect_open_value - total future value $12,647." in markdown
+    assert "- 2025-11:" not in markdown
+    assert "- 2026-11:" not in markdown
     assert "$2,834" in markdown
     assert "$22,614" in markdown
     assert "28.3%" in markdown

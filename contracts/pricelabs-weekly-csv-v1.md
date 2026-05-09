@@ -362,6 +362,7 @@ Required sections:
 
 - `Monthly Revenue Summary - <run_date>` title.
 - Executive summary bullets.
+- Executive Decision View.
 - Monthly revenue pace table.
 - Key diagnostics.
 
@@ -377,10 +378,44 @@ Required behavior:
 - Executive Summary must always include: `Historical months without source data are shown for context.`
 - Executive Summary must always include: `Market benchmark is context only.`
 
+Executive Decision View:
+
+- Appears after Executive Summary and before Monthly Revenue Pace.
+- Groups available months by `month_action_level`.
+- Summarizes existing diagnostic statuses only.
+- Must not include PriceLabs rule recommendations.
+- Market benchmark remains context only.
+
+`Critical Now` group:
+
+- Includes months where `data_availability = available` and `month_action_level = critical_now`.
+- If there are no matching months, show `None.`
+
+`Advisory` group:
+
+- Includes months where `data_availability = available` and `month_action_level = advisory`.
+- Each row should include `stay_month`, `revenue_pace_status`, booked revenue, total future value, and `cleaning_efficiency_status`.
+
+`Protect` group:
+
+- Includes months where `data_availability = available` and `month_action_level = protect`.
+- Each row should include `stay_month`, `revenue_pace_status`, and total future value.
+
+`Monitor` group:
+
+- Includes months where `data_availability = available` and `month_action_level = monitor`.
+
+Executive Decision View rules:
+
+- `no_source_data` rows must not be listed as action items.
+- `partial_horizon` rows must not be listed as advisory.
+- This section does not create pricing recommendations.
+
 Limits:
 
-- Step 4/6 is reporting only.
+- Step 4/6/7 is reporting and decision grouping only.
 - It does not create PriceLabs recommendations.
+- It does not create pricing recommendations.
 - It does not modify window signals.
 - Market benchmark remains context only.
 
