@@ -146,7 +146,7 @@ Invoke-PythonStep "Rolling 13-month revenue view" @(
 Invoke-PythonStep "Monthly revenue summary" @(
     "-m", "pricelabs.transform.monthly_revenue_summary",
     "--run-date", $RunDate,
-    "--monthly-file", $monthlyRevenuePaceFile,
+    "--rolling-file", $rollingRevenueViewFile,
     "--output-file", $monthlyRevenueSummaryFile
 )
 

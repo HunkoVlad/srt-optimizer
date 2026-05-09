@@ -13,6 +13,8 @@ REQUIRED_INPUT_COLUMNS = (
     "run_date",
     "listing_id",
     "stay_month",
+    "month_window_position",
+    "data_availability",
     "month_time_bucket",
     "month_scope_status",
     "booked_revenue_proxy",
@@ -31,8 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a Markdown monthly revenue summary.")
     parser.add_argument("--run-date", required=True, help="Pipeline run date in YYYY-MM-DD format.")
     parser.add_argument(
+        "--rolling-file",
+        help="Rolling 13-month revenue view CSV. Defaults to analysis/rolling_13_month_revenue_view_<run-date>.csv.",
+    )
+    parser.add_argument(
         "--monthly-file",
-        help="Monthly revenue pace CSV. Defaults to analysis/monthly_revenue_pace_<run-date>.csv.",
+        help="Deprecated alias for --rolling-file.",
     )
     parser.add_argument(
         "--output-file",
@@ -69,37 +75,57 @@ def parse_decimal(value: str) -> Decimal:
 
 
 def format_currency(value: str) -> str:
+    if not value.strip():
+        return "-"
     amount = parse_decimal(value).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     sign = "-" if amount < 0 else ""
     return f"{sign}${abs(amount):,}"
 
 
 def format_percent(value: str) -> str:
+    if not value.strip():
+        return "-"
     pct = (parse_decimal(value) * Decimal("100")).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
     return f"{pct}%"
 
 
 def find_row(rows: list[dict[str, str]], bucket: str) -> dict[str, str] | None:
-    return next((row for row in rows if row["month_time_bucket"] == bucket), None)
+    return next(
+        (
+            row
+            for row in rows
+            if row["data_availability"] == "available" and row["month_time_bucket"] == bucket
+        ),
+        None,
+    )
 
 
 def build_executive_summary(rows: list[dict[str, str]]) -> list[str]:
     bullets: list[str] = []
-    current = find_row(rows, "current_month")
-    next_month = find_row(rows, "next_month")
-    protected_far_out = [
+    available_rows = [row for row in rows if row["data_availability"] == "available"]
+    historical_no_source = [
         row
         for row in rows
+        if row["month_window_position"] == "historical"
+        and row["data_availability"] == "no_source_data"
+    ]
+    current = find_row(available_rows, "current_month")
+    next_month = find_row(available_rows, "next_month")
+    protected_far_out = [
+        row
+        for row in available_rows
         if row["month_time_bucket"] in {"future_month", "far_future_month"}
         and row["revenue_pace_status"] == "protect_open_value"
     ]
     inefficient_months = [
         row["stay_month"]
-        for row in rows
+        for row in available_rows
         if row["cleaning_efficiency_status"] == "inefficient"
         and row["revenue_pace_status"] != "partial_horizon"
     ]
 
+    if historical_no_source:
+        bullets.append("Historical months without source data are shown for context.")
     if current:
         bullets.append(
             f"Current month {current['stay_month']} revenue pace is {current['revenue_pace_status']}."
@@ -111,8 +137,9 @@ def build_executive_summary(rows: list[dict[str, str]]) -> list[str]:
         bullets.append(f"Far-out open value is protected in {months}.")
     if inefficient_months:
         bullets.append(f"Cleaning efficiency concern in {', '.join(inefficient_months)}.")
+    bullets = bullets[:4]
     bullets.append("Market benchmark is context only.")
-    return bullets[:5]
+    return bullets
 
 
 def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
@@ -129,8 +156,8 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
             "",
             "## Monthly Revenue Pace",
             "",
-            "| Month | Bucket | Scope | Booked Revenue | Open Ask | Total Future Value | Target | Booked % | Total % | Revenue Status | Cleaning Status | Action Level |",
-            "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
+            "| Month | Position | Bucket | Scope | Data | Booked Revenue | Open Ask | Total Future Value | Target | Booked % | Total % | Revenue Status | Cleaning Status | Action Level |",
+            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
         ]
     )
 
@@ -140,8 +167,10 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
             + " | ".join(
                 (
                     row["stay_month"],
+                    row["month_window_position"],
                     row["month_time_bucket"],
                     row["month_scope_status"],
+                    row["data_availability"],
                     format_currency(row["booked_revenue_proxy"]),
                     format_currency(row["open_revenue_ask"]),
                     format_currency(row["total_future_revenue_proxy"]),
@@ -178,7 +207,11 @@ def write_markdown(path: Path, content: str) -> None:
 
 def run() -> int:
     args = parse_args()
-    monthly_path = Path(args.monthly_file or f"analysis/monthly_revenue_pace_{args.run_date}.csv")
+    monthly_path = Path(
+        args.rolling_file
+        or args.monthly_file
+        or f"analysis/rolling_13_month_revenue_view_{args.run_date}.csv"
+    )
     output_path = Path(args.output_file or f"analysis/monthly_revenue_summary_{args.run_date}.md")
 
     rows = read_monthly_rows(monthly_path)

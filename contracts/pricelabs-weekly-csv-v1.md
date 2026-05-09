@@ -336,7 +336,7 @@ Limits:
 - No PriceLabs recommendations are generated.
 - Market 75th percentile remains context only.
 
-## Monthly Revenue Summary Step 4 Contract
+## Monthly Revenue Summary Step 4/6 Contract
 
 Output:
 
@@ -345,6 +345,12 @@ data/runs/<run_date>/analysis/monthly_revenue_summary_<run_date>.md
 ```
 
 Generated from:
+
+```text
+data/runs/<run_date>/analysis/rolling_13_month_revenue_view_<run_date>.csv
+```
+
+The summary no longer reads directly from:
 
 ```text
 data/runs/<run_date>/analysis/monthly_revenue_pace_<run_date>.csv
@@ -359,9 +365,21 @@ Required sections:
 - Monthly revenue pace table.
 - Key diagnostics.
 
+Required behavior:
+
+- The summary table must include all 13 months from the rolling view.
+- The table must include six historical months, the current month, and six future months.
+- Historical `no_source_data` months must appear in the table.
+- `no_source_data` rows use `revenue_pace_status = no_source_data`.
+- `no_source_data` rows use `month_action_level = monitor`.
+- `no_source_data` rows must not create advisory or concern bullets.
+- `partial_horizon` rows must not create advisory or concern bullets.
+- Executive Summary must always include: `Historical months without source data are shown for context.`
+- Executive Summary must always include: `Market benchmark is context only.`
+
 Limits:
 
-- Step 4 is reporting only.
+- Step 4/6 is reporting only.
 - It does not create PriceLabs recommendations.
 - It does not modify window signals.
 - Market benchmark remains context only.
