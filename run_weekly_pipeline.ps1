@@ -97,6 +97,7 @@ $standardizedFile = Join-Path $standardizedDir "future_daily_pricing_$RunDate.cs
 $manifestFile = Join-Path $runRoot "manifest.json"
 $enrichedFile = Join-Path $analysisDir "future_daily_pricing_enriched_$RunDate.csv"
 $monthlyRevenuePaceFile = Join-Path $analysisDir "monthly_revenue_pace_$RunDate.csv"
+$rollingRevenueViewFile = Join-Path $analysisDir "rolling_13_month_revenue_view_$RunDate.csv"
 $monthlyRevenueSummaryFile = Join-Path $analysisDir "monthly_revenue_summary_$RunDate.md"
 $summaryFile = Join-Path $analysisDir "future_window_summary_$RunDate.csv"
 $signalsFile = Join-Path $analysisDir "future_window_signals_$RunDate.csv"
@@ -133,6 +134,13 @@ Invoke-PythonStep "Monthly revenue pace" @(
     "--run-date", $RunDate,
     "--enriched-file", $enrichedFile,
     "--output-file", $monthlyRevenuePaceFile
+)
+
+Invoke-PythonStep "Rolling 13-month revenue view" @(
+    "-m", "pricelabs.transform.rolling_13_month_revenue_view",
+    "--run-date", $RunDate,
+    "--monthly-file", $monthlyRevenuePaceFile,
+    "--output-file", $rollingRevenueViewFile
 )
 
 Invoke-PythonStep "Monthly revenue summary" @(

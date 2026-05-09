@@ -304,6 +304,7 @@ Step 3 diagnostic rules:
 - `urgent`
 - `protect_open_value`
 - `partial_horizon`
+- `no_source_data`
 
 Time-aware revenue pace interpretation:
 
@@ -365,6 +366,81 @@ Limits:
 - It does not modify window signals.
 - Market benchmark remains context only.
 
+## Rolling 13-Month Revenue View Step 5 Contract
+
+Output:
+
+```text
+data/runs/<run_date>/analysis/rolling_13_month_revenue_view_<run_date>.csv
+```
+
+Generated from:
+
+```text
+data/runs/<run_date>/analysis/monthly_revenue_pace_<run_date>.csv
+```
+
+Purpose: stable monthly reporting window covering six months before the `run_date` month, the `run_date` month, and six months after the `run_date` month.
+
+Required behavior:
+
+- Output must always contain exactly 13 rows.
+- `month_relative_index` must run from `-6` through `6`.
+- `month_relative_index = 0` means the `run_date` month.
+- Missing months from `monthly_revenue_pace_<run_date>.csv` must still appear.
+- Missing months must use `data_availability = no_source_data`.
+- Missing months must use `revenue_pace_status = no_source_data`.
+- Missing months must use `month_action_level = monitor`.
+- Historical revenue values must not be faked.
+
+Required output columns:
+
+- `run_date`
+- `listing_id`
+- `stay_month`
+- `month_relative_index`
+- `month_window_position`
+- `data_availability`
+- `days_in_scope`
+- `days_in_month`
+- `month_scope_status`
+- `booked_nights`
+- `available_nights`
+- `unavailable_nights`
+- `booked_revenue_proxy`
+- `open_revenue_ask`
+- `total_future_revenue_proxy`
+- `monthly_target`
+- `booked_gap_to_target`
+- `total_gap_to_target`
+- `booked_cleanings_proxy`
+- `avg_stay_length_proxy`
+- `revenue_per_cleaning_proxy`
+- `booked_revenue_pct_of_target`
+- `total_future_revenue_pct_of_target`
+- `month_time_bucket`
+- `revenue_pace_status`
+- `cleaning_efficiency_status`
+- `month_action_level`
+
+`month_window_position` values:
+
+- `historical`
+- `current`
+- `future`
+
+`data_availability` values:
+
+- `available`
+- `no_source_data`
+
+Limits:
+
+- Step 5 is reporting/structure only.
+- It does not create PriceLabs recommendations.
+- Historical months remain blank until a historical source is added.
+- Market benchmark remains context only.
+
 ## Analysis Rules
 
 V1 keeps available-date pricing analysis separate from booked-date value analysis.
@@ -402,7 +478,7 @@ Window-level comparisons allowed:
 - Booked revenue proxy trends by window.
 - Monthly revenue pace vs monthly target.
 
-Current window summaries use market 75th percentile as context only. Revenue pace is the business goal, and Step 4 adds a human-readable monthly report only.
+Current window summaries use market 75th percentile as context only. Revenue pace is the business goal, and Step 5 adds a stable rolling monthly reporting structure only.
 
 ## Settings Outputs
 
