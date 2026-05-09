@@ -363,6 +363,7 @@ Required sections:
 - `Monthly Revenue Summary - <run_date>` title.
 - Executive summary bullets.
 - Executive Decision View.
+- Interpretation.
 - Monthly revenue pace table.
 - Key diagnostics.
 
@@ -411,9 +412,27 @@ Executive Decision View rules:
 - `partial_horizon` rows must not be listed as advisory.
 - This section does not create pricing recommendations.
 
+Interpretation:
+
+- Appears after Executive Decision View and before Monthly Revenue Pace.
+- Explains existing diagnostic statuses in plain English.
+- Uses only rows where `data_availability = available`.
+- Keeps wording concise.
+- Does not create PriceLabs setting recommendations.
+
+Interpretation rules:
+
+- `conversion_risk`: explain that booked revenue is low while total future value is at or above target. This means the issue is conversion risk, not weak open calendar value.
+- `protect_open_value`: explain that far-out open calendar value is healthy and supports protecting premium positioning.
+- `inefficient`: explain that revenue per cleaning is below the current efficiency threshold and should be monitored as a booking-quality concern.
+- `partial_horizon`: explain that only part of the month is inside the current export horizon, so it should not be judged against the full monthly target.
+- `no_source_data`: historical `no_source_data` rows should not create month-level interpretation bullets because they are already covered in the Executive Summary.
+
+Interpretation text must not mention changing base price, min price, LOS, discounts, orphan rules, or other PriceLabs settings.
+
 Limits:
 
-- Step 4/6/7 is reporting and decision grouping only.
+- Step 4/6/7/8 is reporting, decision grouping, and interpretation only.
 - It does not create PriceLabs recommendations.
 - It does not create pricing recommendations.
 - It does not modify window signals.

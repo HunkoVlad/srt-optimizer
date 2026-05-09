@@ -207,6 +207,46 @@ def build_executive_decision_view(rows: list[dict[str, str]]) -> list[str]:
     return sections
 
 
+def build_interpretation(rows: list[dict[str, str]]) -> list[str]:
+    lines = ["## Interpretation", ""]
+    bullets: list[str] = []
+    for row in rows:
+        if row["data_availability"] != "available":
+            continue
+
+        if row["revenue_pace_status"] == "conversion_risk":
+            bullets.append(
+                "- "
+                f"{row['stay_month']}: Booked revenue is low, but total future value is above target. "
+                "This points to conversion risk rather than weak calendar value."
+            )
+        elif row["revenue_pace_status"] == "protect_open_value":
+            bullets.append(
+                "- "
+                f"{row['stay_month']}: Open calendar value is healthy for a future month. "
+                "This supports protecting premium positioning."
+            )
+        elif row["revenue_pace_status"] == "partial_horizon":
+            bullets.append(
+                "- "
+                f"{row['stay_month']}: Only part of the month is inside the current export horizon, "
+                "so it is not judged against the full monthly target."
+            )
+
+        if row["cleaning_efficiency_status"] == "inefficient":
+            bullets.append(
+                "- "
+                f"{row['stay_month']}: Revenue per cleaning is below the current efficiency threshold, "
+                "so booking quality should be monitored."
+            )
+
+    if not bullets:
+        bullets.append("- None.")
+    lines.extend(bullets)
+    lines.append("")
+    return lines
+
+
 def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
@@ -217,6 +257,7 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
     ]
     lines.extend(f"- {bullet}" for bullet in build_executive_summary(sorted_rows))
     lines.extend(["", *build_executive_decision_view(sorted_rows)])
+    lines.extend(build_interpretation(sorted_rows))
     lines.extend(
         [
             "## Monthly Revenue Pace",

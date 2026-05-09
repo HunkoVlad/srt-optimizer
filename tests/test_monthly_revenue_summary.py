@@ -193,12 +193,34 @@ def test_monthly_revenue_summary_markdown_content() -> None:
     assert "- 2026-07: protect_open_value - total future value $22,614." in markdown
     assert "- 2026-10: protect_open_value - total future value $12,647." in markdown
     assert "- 2025-11:" not in markdown
-    assert "- 2026-11:" not in markdown
+    assert "- 2026-11: partial_horizon" not in markdown
+    assert "## Interpretation" in markdown
+    assert (
+        "- 2026-05: Booked revenue is low, but total future value is above target. "
+        "This points to conversion risk rather than weak calendar value."
+    ) in markdown
+    assert (
+        "- 2026-07: Open calendar value is healthy for a future month. "
+        "This supports protecting premium positioning."
+    ) in markdown
+    assert (
+        "- 2026-05: Revenue per cleaning is below the current efficiency threshold, "
+        "so booking quality should be monitored."
+    ) in markdown
+    assert (
+        "- 2026-11: Only part of the month is inside the current export horizon, "
+        "so it is not judged against the full monthly target."
+    ) in markdown
+    assert "2025-11: Booked revenue" not in markdown
     assert "$2,834" in markdown
     assert "$22,614" in markdown
     assert "28.3%" in markdown
     assert "226.1%" in markdown
     assert "recommend" not in markdown.lower()
+    assert "change base price" not in markdown.lower()
+    assert "change min price" not in markdown.lower()
+    assert "change los" not in markdown.lower()
+    assert "change discounts" not in markdown.lower()
 
 
 def test_monthly_revenue_summary_cli_writes_file(tmp_path, monkeypatch) -> None:
