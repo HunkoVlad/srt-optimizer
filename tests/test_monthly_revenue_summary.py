@@ -211,12 +211,36 @@ def test_monthly_revenue_summary_markdown_content() -> None:
         "- 2026-11: Only part of the month is inside the current export horizon, "
         "so it is not judged against the full monthly target."
     ) in markdown
+    assert "## Recommendation Review" in markdown
+    assert "### Critical Now" in markdown
+    assert "### Advisory" in markdown
+    assert "### Protect / No Change" in markdown
+    assert "### Monitor" in markdown
+    assert "- None." in markdown
+    assert (
+        "- 2026-05: Review near-term conversion behavior and booking quality before changing premium positioning. "
+        "Rule areas to review: Booking Recency Factor; last-minute behavior; 1-night LOS premium. "
+        "Avoid broad pricing pressure."
+    ) in markdown
+    assert (
+        "- 2026-06: Monitor next-month conversion risk while protecting premium positioning. "
+        "Rule areas to review: Booking Recency Factor; minimum stay rules; 1-night LOS premium. "
+        "Avoid early pricing pressure."
+    ) in markdown
+    assert "- 2026-07: Protect far-out open value; no PriceLabs rule change recommended now." in markdown
+    assert "- 2026-11: Monitor only; do not judge this partial horizon month against the full monthly target." in markdown
     assert "2025-11: Booked revenue" not in markdown
+    assert "2025-11: Monitor" not in markdown
     assert "$2,834" in markdown
     assert "$22,614" in markdown
     assert "28.3%" in markdown
     assert "226.1%" in markdown
-    assert "recommend" not in markdown.lower()
+    assert "lower prices" not in markdown.lower()
+    assert "match the 75th percentile" not in markdown.lower()
+    assert "discount all open dates" not in markdown.lower()
+    assert "blanket discounting" not in markdown.lower()
+    assert "aggressive early discounting" not in markdown.lower()
+    assert "manually override" not in markdown.lower()
     assert "change base price" not in markdown.lower()
     assert "change min price" not in markdown.lower()
     assert "change los" not in markdown.lower()

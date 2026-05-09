@@ -247,6 +247,93 @@ def build_interpretation(rows: list[dict[str, str]]) -> list[str]:
     return lines
 
 
+def rule_areas_text(rule_areas: tuple[str, ...]) -> str:
+    if not rule_areas:
+        return "none"
+    return "; ".join(rule_areas)
+
+
+def recommendation_for_row(row: dict[str, str]) -> str:
+    month = row["stay_month"]
+    bucket = row["month_time_bucket"]
+    revenue_status = row["revenue_pace_status"]
+    cleaning_status = row["cleaning_efficiency_status"]
+
+    if bucket == "current_month" and revenue_status == "urgent":
+        return (
+            f"- {month}: Review current-month revenue weakness. "
+            "Rule areas to review: "
+            f"{rule_areas_text(('Booking Recency Factor', 'last-minute behavior', 'minimum stay rules'))}. "
+            "Avoid automatic base price reduction."
+        )
+    if bucket == "current_month" and revenue_status == "conversion_risk" and cleaning_status == "inefficient":
+        return (
+            f"- {month}: Review near-term conversion behavior and booking quality before changing premium positioning. "
+            "Rule areas to review: "
+            f"{rule_areas_text(('Booking Recency Factor', 'last-minute behavior', '1-night LOS premium'))}. "
+            "Avoid broad pricing pressure."
+        )
+    if bucket == "next_month" and revenue_status == "conversion_risk":
+        return (
+            f"- {month}: Monitor next-month conversion risk while protecting premium positioning. "
+            "Rule areas to review: "
+            f"{rule_areas_text(('Booking Recency Factor', 'minimum stay rules', '1-night LOS premium'))}. "
+            "Avoid early pricing pressure."
+        )
+    if bucket == "future_month" and revenue_status == "protect_open_value":
+        return (
+            f"- {month}: Protect far-out open value; no PriceLabs rule change recommended now. "
+            "Rule areas to review: far-out premium only if repeated weakness appears."
+        )
+    if bucket == "far_future_month" and revenue_status == "protect_open_value":
+        return (
+            f"- {month}: Protect far-out open value; no PriceLabs rule change recommended now. "
+            "Rule areas to review: none unless repeated weak ask value appears."
+        )
+    if revenue_status == "partial_horizon":
+        return f"- {month}: Monitor only; do not judge this partial horizon month against the full monthly target."
+    return f"- {month}: Monitor existing diagnostic status."
+
+
+def recommendation_rows(rows: list[dict[str, str]], action_level: str) -> list[dict[str, str]]:
+    return [
+        row
+        for row in rows
+        if row["data_availability"] == "available"
+        and row["month_action_level"] == action_level
+    ]
+
+
+def build_recommendation_lines(rows: list[dict[str, str]], action_level: str) -> list[str]:
+    rows_for_action = recommendation_rows(rows, action_level)
+    if not rows_for_action:
+        return ["- None."]
+    return [recommendation_for_row(row) for row in rows_for_action]
+
+
+def build_recommendation_review(rows: list[dict[str, str]]) -> list[str]:
+    return [
+        "## Recommendation Review",
+        "",
+        "### Critical Now",
+        "",
+        *build_recommendation_lines(rows, "critical_now"),
+        "",
+        "### Advisory",
+        "",
+        *build_recommendation_lines(rows, "advisory"),
+        "",
+        "### Protect / No Change",
+        "",
+        *build_recommendation_lines(rows, "protect"),
+        "",
+        "### Monitor",
+        "",
+        *build_recommendation_lines(rows, "monitor"),
+        "",
+    ]
+
+
 def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
@@ -258,6 +345,7 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
     lines.extend(f"- {bullet}" for bullet in build_executive_summary(sorted_rows))
     lines.extend(["", *build_executive_decision_view(sorted_rows)])
     lines.extend(build_interpretation(sorted_rows))
+    lines.extend(build_recommendation_review(sorted_rows))
     lines.extend(
         [
             "## Monthly Revenue Pace",
