@@ -7,10 +7,10 @@ Scope: Manual weekly PriceLabs pipeline for one listing
 This contract defines the current Python-only V1 pipeline shape:
 
 ```text
-manual raw PriceLabs files -> standardized daily CSV -> enriched daily CSV -> analysis/settings outputs
+manual raw PriceLabs files -> standardized daily CSV -> enriched daily CSV -> monthly revenue pace -> analysis/settings outputs
 ```
 
-V1 is manual and local. It does not include browser automation, scheduling, Airbnb data, dashboards, or monthly revenue pace.
+V1 is manual and local. It does not include browser automation, scheduling, Airbnb data, dashboards, or recommendation logic.
 
 ## Run Folder Contract
 
@@ -213,6 +213,158 @@ Limits:
 - `upcoming_adr` comes from the raw future export `ADR` field.
 - `price_occ.csv` must not provide `upcoming_adr`.
 
+## Monthly Revenue Pace Step 2-3 Contract
+
+Output:
+
+```text
+data/runs/<run_date>/analysis/monthly_revenue_pace_<run_date>.csv
+```
+
+Generated from:
+
+```text
+data/runs/<run_date>/analysis/future_daily_pricing_enriched_<run_date>.csv
+```
+
+Role: aggregation and diagnostic-only monthly revenue pace view from the enriched daily file. It does not implement PriceLabs recommendation logic.
+
+Grain:
+
+- One row per `run_date`, `listing_id`, and `stay_month`.
+- `stay_month` is `YYYY-MM` from `stay_date`.
+
+Required output columns:
+
+- `run_date`
+- `listing_id`
+- `stay_month`
+- `month_time_bucket`
+- `days_in_scope`
+- `days_in_month`
+- `month_scope_status`
+- `booked_nights`
+- `available_nights`
+- `unavailable_nights`
+- `booked_revenue_proxy`
+- `open_revenue_ask`
+- `total_future_revenue_proxy`
+- `monthly_target`
+- `booked_gap_to_target`
+- `total_gap_to_target`
+- `booked_cleanings_proxy`
+- `avg_stay_length_proxy`
+- `revenue_per_cleaning_proxy`
+- `booked_revenue_pct_of_target`
+- `total_future_revenue_pct_of_target`
+- `revenue_pace_status`
+- `cleaning_efficiency_status`
+- `month_action_level`
+
+Step 2 business rules:
+
+- `booked_nights` = count rows where `status = booked`.
+- `available_nights` = count rows where `status = available`.
+- `unavailable_nights` = count rows where `status` is not booked and not available.
+- `booked_revenue_proxy` = sum `booked_revenue_proxy` from enriched daily.
+- `open_revenue_ask` = sum `open_revenue_ask` from enriched daily.
+- `total_future_revenue_proxy` = `booked_revenue_proxy + open_revenue_ask`.
+- `monthly_target` = `10000` for now.
+- `booked_gap_to_target` = `monthly_target - booked_revenue_proxy`.
+- `total_gap_to_target` = `monthly_target - total_future_revenue_proxy`.
+- `booked_cleanings_proxy` = sum `booked_stay_start_proxy`.
+- `avg_stay_length_proxy` = `booked_nights / booked_cleanings_proxy`, blank/null if no cleanings.
+- `revenue_per_cleaning_proxy` = `booked_revenue_proxy / booked_cleanings_proxy`, blank/null if no cleanings.
+
+Step 3 diagnostic rules:
+
+- `booked_revenue_pct_of_target` = `booked_revenue_proxy / monthly_target`, rounded to 4 decimals.
+- `total_future_revenue_pct_of_target` = `total_future_revenue_proxy / monthly_target`, rounded to 4 decimals.
+- `days_in_scope` = number of enriched daily rows for the `stay_month`.
+- `days_in_month` = calendar days in the `stay_month`.
+
+`month_time_bucket` values:
+
+- `current_month`: `stay_month` equals the `run_date` month.
+- `next_month`: `stay_month` is one month after the `run_date` month.
+- `future_month`: `stay_month` is 2-3 months after the `run_date` month.
+- `far_future_month`: `stay_month` is 4+ months after the `run_date` month.
+
+`month_scope_status` values:
+
+- `full_month`: `days_in_scope = days_in_month`.
+- `partial_month`: `days_in_scope < days_in_month`.
+
+`revenue_pace_status` values:
+
+- `on_track`
+- `watch`
+- `conversion_risk`
+- `behind`
+- `urgent`
+- `protect_open_value`
+- `partial_horizon`
+
+Time-aware revenue pace interpretation:
+
+- Current month can be `conversion_risk` when booked revenue is low but total future value is at or above target.
+- Current month can be `partial_month` but must still use normal current-month revenue diagnostics.
+- Next month can also be `conversion_risk`, with lower booked-revenue thresholds than current month.
+- Future and far-future months with strong total future revenue value should be `protect_open_value`, not `conversion_risk`.
+- `partial_horizon` applies only when `month_scope_status = partial_month` and `month_time_bucket = far_future_month`.
+- `partial_horizon` uses `revenue_pace_status = partial_horizon` and `month_action_level = monitor`.
+
+`cleaning_efficiency_status` values:
+
+- `no_booked_cleanings`
+- `strong`
+- `acceptable`
+- `watch`
+- `inefficient`
+
+`month_action_level` values:
+
+- `critical_now`
+- `advisory`
+- `monitor`
+- `protect`
+
+Limits:
+
+- This is aggregation and diagnostic status labeling only.
+- No PriceLabs recommendations are generated.
+- Market 75th percentile remains context only.
+
+## Monthly Revenue Summary Step 4 Contract
+
+Output:
+
+```text
+data/runs/<run_date>/analysis/monthly_revenue_summary_<run_date>.md
+```
+
+Generated from:
+
+```text
+data/runs/<run_date>/analysis/monthly_revenue_pace_<run_date>.csv
+```
+
+Purpose: human-readable monthly revenue summary based on revenue pace, open ask, cleaning efficiency, and diagnostic statuses.
+
+Required sections:
+
+- `Monthly Revenue Summary - <run_date>` title.
+- Executive summary bullets.
+- Monthly revenue pace table.
+- Key diagnostics.
+
+Limits:
+
+- Step 4 is reporting only.
+- It does not create PriceLabs recommendations.
+- It does not modify window signals.
+- Market benchmark remains context only.
+
 ## Analysis Rules
 
 V1 keeps available-date pricing analysis separate from booked-date value analysis.
@@ -248,8 +400,9 @@ Window-level comparisons allowed:
 - Listing booked share vs average market occupancy.
 - Asking-price posture vs market price context.
 - Booked revenue proxy trends by window.
+- Monthly revenue pace vs monthly target.
 
-Current window summaries use market 75th percentile as context only. Revenue pace is the business goal, but `monthly_revenue_pace` is not implemented in V1 Step 1.
+Current window summaries use market 75th percentile as context only. Revenue pace is the business goal, and Step 4 adds a human-readable monthly report only.
 
 ## Settings Outputs
 
@@ -273,5 +426,5 @@ Settings files are analysis context. They do not change the operational transfor
 - No scheduler.
 - No Airbnb data.
 - No dashboard.
-- No monthly revenue pace output.
+- No recommendation logic.
 - No final realized ADR claims from `upcoming_adr` or `booked_revenue_proxy`.

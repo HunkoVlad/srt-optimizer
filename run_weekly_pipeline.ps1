@@ -25,7 +25,7 @@ foreach ($dir in @($rawDir, $standardizedDir, $analysisDir, $settingsDir)) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
 
-$futureExport = Join-Path $rawDir "pricelabs_future_export.csv"
+$futureExport = Join-Path $rawDir "priceLabs_future_export.csv"
 $priceOcc = Join-Path $rawDir "price_occ.csv"
 $settingsInput = Join-Path $rawDir "pricelabs_settings_manual_input.json"
 
@@ -96,6 +96,8 @@ $listingId = [string]$settings.listing_id
 $standardizedFile = Join-Path $standardizedDir "future_daily_pricing_$RunDate.csv"
 $manifestFile = Join-Path $runRoot "manifest.json"
 $enrichedFile = Join-Path $analysisDir "future_daily_pricing_enriched_$RunDate.csv"
+$monthlyRevenuePaceFile = Join-Path $analysisDir "monthly_revenue_pace_$RunDate.csv"
+$monthlyRevenueSummaryFile = Join-Path $analysisDir "monthly_revenue_summary_$RunDate.md"
 $summaryFile = Join-Path $analysisDir "future_window_summary_$RunDate.csv"
 $signalsFile = Join-Path $analysisDir "future_window_signals_$RunDate.csv"
 $settingsSnapshotFile = Join-Path $settingsDir "pricelabs_settings_snapshot_$RunDate.json"
@@ -124,6 +126,20 @@ Invoke-PythonStep "Future enrichment" @(
     "--standardized-file", $standardizedFile,
     "--price-occ-file", $priceOcc,
     "--output-file", $enrichedFile
+)
+
+Invoke-PythonStep "Monthly revenue pace" @(
+    "-m", "pricelabs.transform.monthly_revenue_pace",
+    "--run-date", $RunDate,
+    "--enriched-file", $enrichedFile,
+    "--output-file", $monthlyRevenuePaceFile
+)
+
+Invoke-PythonStep "Monthly revenue summary" @(
+    "-m", "pricelabs.transform.monthly_revenue_summary",
+    "--run-date", $RunDate,
+    "--monthly-file", $monthlyRevenuePaceFile,
+    "--output-file", $monthlyRevenueSummaryFile
 )
 
 Invoke-PythonStep "Future window summary" @(
