@@ -1,0 +1,24 @@
+# Email draft configuration template.
+# Copy to config/email.toml for local use.
+# Keep mode as "draft" for V1. Do not enable automatic sending.
+[email]
+mode = "draft"
+
+# Configure locally in config/email.toml. Do not commit real personal values.
+recipient_email = "your-email@example.com"
+
+# Optional. Leave blank if no copy recipient is needed.
+cc_email = ""
+
+# Optional text prepended to the generated report subject.
+subject_prefix = ""
+
+# Attachments are disabled for V1.
+include_attachments = false
+
+[report]
+# Points to the generated email_revenue_report_<run_date>.md file.
+source = "email_revenue_report"
+
+# Email body source format for now.
+format = "markdown"

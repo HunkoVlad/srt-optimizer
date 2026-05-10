@@ -63,7 +63,22 @@ Future config should include:
 - Optional `cc_email`
 - Optional `email_mode = draft`
 
-Do not store secrets in the repo.
+Config files:
+
+- `config/email.example.toml` is committed as a safe template.
+- `config/email.toml` is local-only and ignored by Git.
+
+`config/email.example.toml` should define:
+
+- `[email] mode = "draft"`
+- `[email] recipient_email`
+- `[email] cc_email`
+- `[email] subject_prefix`
+- `[email] include_attachments = false`
+- `[report] source = "email_revenue_report"`
+- `[report] format = "markdown"`
+
+Do not store secrets in either file. Gmail OAuth/token files must stay outside the repo or be ignored later if introduced.
 
 ## Credential Guardrails
 
