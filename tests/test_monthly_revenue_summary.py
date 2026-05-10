@@ -13,12 +13,16 @@ def monthly_row(
     booked_revenue: str = "",
     open_ask: str = "",
     total_future_value: str = "",
+    booked_nights: str = "",
+    revenue_per_cleaning: str = "",
     booked_pct: str = "",
     total_pct: str = "",
     revenue_status: str = "no_source_data",
     cleaning_status: str = "",
     action_level: str = "monitor",
     historical_booked_nights: str = "",
+    historical_occupancy_pct: str = "",
+    historical_calendar_occupancy_pct: str = "",
     historical_total_revenue: str = "",
     historical_rental_adr: str = "",
     historical_data_quality_flag: str = "",
@@ -31,19 +35,22 @@ def monthly_row(
         "data_availability": data,
         "month_time_bucket": bucket,
         "month_scope_status": scope,
+        "booked_nights": booked_nights,
         "booked_revenue_proxy": booked_revenue,
         "open_revenue_ask": open_ask,
         "total_future_revenue_proxy": total_future_value,
         "monthly_target": "10000" if data == "available" else "",
         "booked_revenue_pct_of_target": booked_pct,
         "total_future_revenue_pct_of_target": total_pct,
+        "revenue_per_cleaning_proxy": revenue_per_cleaning,
         "revenue_pace_status": revenue_status,
         "cleaning_efficiency_status": cleaning_status,
         "month_action_level": action_level,
         "historical_bookable_nights": "",
         "historical_booked_nights": historical_booked_nights,
         "historical_paid_occupancy_pct": "",
-        "historical_occupancy_pct": "",
+        "historical_occupancy_pct": historical_occupancy_pct,
+        "historical_calendar_occupancy_pct": historical_calendar_occupancy_pct,
         "historical_rental_adr": historical_rental_adr,
         "historical_rental_revpar": "",
         "historical_total_revenue": historical_total_revenue,
@@ -65,6 +72,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "historical_actuals",
                 revenue_status="historical_actuals",
                 historical_booked_nights="0",
+                historical_occupancy_pct="0",
+                historical_calendar_occupancy_pct="0",
                 historical_total_revenue="0",
                 historical_rental_adr="0",
                 historical_data_quality_flag="suspicious",
@@ -75,6 +84,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "historical_actuals",
                 revenue_status="historical_actuals",
                 historical_booked_nights="19",
+                historical_occupancy_pct="38",
+                historical_calendar_occupancy_pct="67.9",
                 historical_total_revenue="9511.34",
                 historical_rental_adr="455.32",
                 historical_data_quality_flag="suspicious",
@@ -85,6 +96,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "historical_actuals",
                 revenue_status="historical_actuals",
                 historical_booked_nights="23",
+                historical_occupancy_pct="74.19",
+                historical_calendar_occupancy_pct="74.2",
                 historical_total_revenue="8887.86",
                 historical_rental_adr="351.26",
                 historical_data_quality_flag="ok",
@@ -95,6 +108,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "historical_actuals",
                 revenue_status="historical_actuals",
                 historical_booked_nights="16",
+                historical_occupancy_pct="55.17",
+                historical_calendar_occupancy_pct="53.3",
                 historical_total_revenue="6609.76",
                 historical_rental_adr="369.63",
                 historical_data_quality_flag="ok",
@@ -112,6 +127,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "2834",
                 "7425",
                 "10259",
+                "7",
+                "472.33",
                 "0.2834",
                 "1.0259",
                 "conversion_risk",
@@ -127,6 +144,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "314",
                 "14090",
                 "14404",
+                "1",
+                "314",
                 "0.0314",
                 "1.4404",
                 "conversion_risk",
@@ -143,6 +162,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "22614",
                 "22614",
                 "0",
+                "",
+                "0",
                 "2.2614",
                 "protect_open_value",
                 "no_booked_cleanings",
@@ -157,6 +178,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "0",
                 "23669",
                 "23669",
+                "0",
+                "",
                 "0",
                 "2.3669",
                 "protect_open_value",
@@ -173,6 +196,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "14672",
                 "14672",
                 "0",
+                "",
+                "0",
                 "1.4672",
                 "protect_open_value",
                 "no_booked_cleanings",
@@ -188,6 +213,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "12647",
                 "12647",
                 "0",
+                "",
+                "0",
                 "1.2647",
                 "protect_open_value",
                 "no_booked_cleanings",
@@ -202,6 +229,8 @@ def sample_rows() -> list[dict[str, str]]:
                 "0",
                 "988",
                 "988",
+                "0",
+                "",
                 "0",
                 "0.0988",
                 "partial_horizon",
@@ -234,8 +263,16 @@ def test_monthly_revenue_summary_markdown_content() -> None:
     ):
         assert f"| {month} |" in markdown
 
+    assert "Revenue Captured" in markdown
+    assert "Total Calendar Value" in markdown
+    assert "Booked Revenue" not in markdown
+    assert "Total Future Value" not in markdown
+    assert "Revenue / Cleaning" in markdown
     assert "| 2025-11 | historical |  |  | no_source_data | - |" in markdown
-    assert "| 2026-03 | historical |  |  | historical_actuals | $8,888 | - | $8,888 |" in markdown
+    assert "| 2026-02 | historical |  |  | historical_actuals | $9,511 | - | $9,511 | - | - | - | 19 | 67.9% | $455 | - | historical_actuals |" in markdown
+    assert "| 2026-02 | historical |  |  | historical_actuals | $9,511 | - | $9,511 | - | - | - | 19 | 38.0% |" not in markdown
+    assert "| 2026-03 | historical |  |  | historical_actuals | $8,888 | - | $8,888 | - | - | - | 23 | 74.2% | $351 | - | historical_actuals |" in markdown
+    assert "| 2026-05 | current | current_month | partial_month | available | $2,834 | $7,425 | $10,259 | $10,000 | 28.3% | 102.6% | 7 | - | $405 | $472 | conversion_risk |" in markdown
     assert "| 2026-05 | current | current_month | partial_month | available |" in markdown
     assert "Current month 2026-05 revenue pace is conversion_risk." in markdown
     assert "Next month 2026-06 revenue pace is conversion_risk." in markdown
@@ -248,16 +285,16 @@ def test_monthly_revenue_summary_markdown_content() -> None:
     assert "2026-11 revenue pace" not in markdown
     assert "## Executive Decision View" in markdown
     assert "### Advisory" in markdown
-    assert "- 2026-05: conversion_risk - booked $2,834, total future value $10,259, cleaning inefficient." in markdown
-    assert "- 2026-06: conversion_risk - booked $314, total future value $14,404, cleaning inefficient." in markdown
+    assert "- 2026-05: conversion_risk - booked $2,834, total calendar value $10,259, cleaning inefficient." in markdown
+    assert "- 2026-06: conversion_risk - booked $314, total calendar value $14,404, cleaning inefficient." in markdown
     assert "### Protect" in markdown
-    assert "- 2026-07: protect_open_value - total future value $22,614." in markdown
-    assert "- 2026-10: protect_open_value - total future value $12,647." in markdown
+    assert "- 2026-07: protect_open_value - total calendar value $22,614." in markdown
+    assert "- 2026-10: protect_open_value - total calendar value $12,647." in markdown
     assert "- 2025-11:" not in markdown
     assert "- 2026-11: partial_horizon" not in markdown
     assert "## Interpretation" in markdown
     assert (
-        "- 2026-05: Booked revenue is low, but total future value is above target. "
+        "- 2026-05: Booked revenue is low, but total calendar value is above target. "
         "This points to conversion risk rather than weak calendar value."
     ) in markdown
     assert (
@@ -306,8 +343,10 @@ def test_monthly_revenue_summary_markdown_content() -> None:
     assert "$22,614" in markdown
     assert "28.3%" in markdown
     assert "226.1%" in markdown
+    assert "ADR per cleaning" not in markdown
     assert "`historical_actuals` means the month was filled from PriceLabs KPI On The Books historical data." in markdown
     assert "`suspicious` means the historical KPI row passed through but has a data-quality warning" in markdown
+    assert "Historical occupancy is calculated from booked nights divided by calendar days in month" in markdown
     assert "lower prices" not in markdown.lower()
     assert "match the 75th percentile" not in markdown.lower()
     assert "discount all open dates" not in markdown.lower()

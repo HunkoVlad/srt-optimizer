@@ -431,6 +431,7 @@ Interpretation rules:
 - `partial_horizon`: explain that only part of the month is inside the current export horizon, so it should not be judged against the full monthly target.
 - `historical_actuals`: explain that historical actuals are available from PriceLabs KPI data, including total revenue, booked nights, and ADR.
 - `suspicious`: append a caution note that the PriceLabs historical denominator should be reviewed before using occupancy as final truth.
+- Historical occupancy in the summary is calculated from booked nights divided by calendar days in the month.
 - `no_source_data`: historical `no_source_data` rows should not create month-level interpretation bullets because they are already covered in the Executive Summary.
 
 Interpretation text must not mention changing base price, min price, LOS, discounts, orphan rules, or other PriceLabs settings.
@@ -509,6 +510,7 @@ Required output columns:
 - `historical_booked_nights`
 - `historical_paid_occupancy_pct`
 - `historical_occupancy_pct`
+- `historical_calendar_occupancy_pct`
 - `historical_rental_adr`
 - `historical_rental_revpar`
 - `historical_total_revenue`
@@ -544,6 +546,16 @@ Step 13 historical merge rules:
   - keep `revenue_pace_status = no_source_data`
   - keep `month_action_level = monitor`
 - Do not fake historical values.
+
+Step 15 calculated historical occupancy:
+
+- `historical_calendar_occupancy_pct = historical_booked_nights / days_in_month * 100`.
+- Use `historical_calendar_occupancy_pct` as the main displayed historical occupancy for single-listing analysis.
+- `historical_occupancy_pct` remains the raw PriceLabs KPI reported occupancy.
+- Preserve `historical_occupancy_pct` for debugging and source comparison.
+- `monthly_revenue_summary_<run_date>.md` should display `historical_calendar_occupancy_pct` for `historical_actuals` rows.
+- Do not use `historical_bookable_nights` as the main occupancy denominator in the summary.
+- This avoids portfolio-style or PriceLabs-specific denominators when analyzing one listing.
 
 `historical_data_quality_flag` values:
 

@@ -17,12 +17,14 @@ REQUIRED_INPUT_COLUMNS = (
     "data_availability",
     "month_time_bucket",
     "month_scope_status",
+    "booked_nights",
     "booked_revenue_proxy",
     "open_revenue_ask",
     "total_future_revenue_proxy",
     "monthly_target",
     "booked_revenue_pct_of_target",
     "total_future_revenue_pct_of_target",
+    "revenue_per_cleaning_proxy",
     "revenue_pace_status",
     "cleaning_efficiency_status",
     "month_action_level",
@@ -89,6 +91,22 @@ def format_percent(value: str) -> str:
     return f"{pct}%"
 
 
+def format_percent_value(value: str) -> str:
+    if not value.strip():
+        return "-"
+    pct = parse_decimal(value).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    return f"{pct}%"
+
+
+def divide_currency(numerator: str, denominator: str) -> str:
+    denominator_value = parse_decimal(denominator)
+    if denominator_value == 0:
+        return "-"
+    amount = (parse_decimal(numerator) / denominator_value).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    sign = "-" if amount < 0 else ""
+    return f"{sign}${abs(amount):,}"
+
+
 def historical_total_revenue(row: dict[str, str]) -> str:
     return row.get("historical_total_revenue", "")
 
@@ -99,6 +117,10 @@ def historical_booked_nights(row: dict[str, str]) -> str:
 
 def historical_rental_adr(row: dict[str, str]) -> str:
     return row.get("historical_rental_adr", "")
+
+
+def historical_occupancy(row: dict[str, str]) -> str:
+    return row.get("historical_calendar_occupancy_pct", "")
 
 
 def table_booked_revenue(row: dict[str, str]) -> str:
@@ -117,6 +139,30 @@ def table_total_future_value(row: dict[str, str]) -> str:
     if row["data_availability"] == "historical_actuals":
         return format_currency(historical_total_revenue(row))
     return format_currency(row["total_future_revenue_proxy"])
+
+
+def table_booked_nights(row: dict[str, str]) -> str:
+    if row["data_availability"] == "historical_actuals":
+        return historical_booked_nights(row) or "-"
+    return row.get("booked_nights", "") or "-"
+
+
+def table_occupancy(row: dict[str, str]) -> str:
+    if row["data_availability"] == "historical_actuals":
+        return format_percent_value(historical_occupancy(row))
+    return "-"
+
+
+def table_adr(row: dict[str, str]) -> str:
+    if row["data_availability"] == "historical_actuals":
+        return format_currency(historical_rental_adr(row))
+    return divide_currency(row.get("booked_revenue_proxy", ""), row.get("booked_nights", ""))
+
+
+def table_revenue_per_cleaning(row: dict[str, str]) -> str:
+    if row["data_availability"] == "historical_actuals":
+        return "-"
+    return format_currency(row.get("revenue_per_cleaning_proxy", ""))
 
 
 def find_row(rows: list[dict[str, str]], bucket: str) -> dict[str, str] | None:
@@ -213,14 +259,14 @@ def build_action_lines(rows: list[dict[str, str]], action_level: str) -> list[st
                 "- "
                 f"{row['stay_month']}: {row['revenue_pace_status']} - "
                 f"booked {format_currency(row['booked_revenue_proxy'])}, "
-                f"total future value {format_currency(row['total_future_revenue_proxy'])}, "
+                f"total calendar value {format_currency(row['total_future_revenue_proxy'])}, "
                 f"cleaning {row['cleaning_efficiency_status']}."
             )
         elif action_level == "protect":
             lines.append(
                 "- "
                 f"{row['stay_month']}: {row['revenue_pace_status']} - "
-                f"total future value {format_currency(row['total_future_revenue_proxy'])}."
+                f"total calendar value {format_currency(row['total_future_revenue_proxy'])}."
             )
         else:
             lines.append(f"- {row['stay_month']}: {row['revenue_pace_status']}.")
@@ -277,7 +323,7 @@ def build_interpretation(rows: list[dict[str, str]]) -> list[str]:
         if row["revenue_pace_status"] == "conversion_risk":
             bullets.append(
                 "- "
-                f"{row['stay_month']}: Booked revenue is low, but total future value is above target. "
+                f"{row['stay_month']}: Booked revenue is low, but total calendar value is above target. "
                 "This points to conversion risk rather than weak calendar value."
             )
         elif row["revenue_pace_status"] == "protect_open_value":
@@ -410,8 +456,8 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
         [
             "## Monthly Revenue Pace",
             "",
-            "| Month | Position | Bucket | Scope | Data | Booked Revenue | Open Ask | Total Future Value | Target | Booked % | Total % | Revenue Status | Cleaning Status | Action Level |",
-            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
+            "| Month | Position | Bucket | Scope | Data | Revenue Captured | Open Ask | Total Calendar Value | Target | Booked % | Total % | Booked Nights | Occupancy | ADR | Revenue / Cleaning | Revenue Status | Cleaning Status | Action Level |",
+            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
         ]
     )
 
@@ -431,6 +477,10 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
                     format_currency(row["monthly_target"]),
                     format_percent(row["booked_revenue_pct_of_target"]),
                     format_percent(row["total_future_revenue_pct_of_target"]),
+                    table_booked_nights(row),
+                    table_occupancy(row),
+                    table_adr(row),
+                    table_revenue_per_cleaning(row),
                     row["revenue_pace_status"],
                     row["cleaning_efficiency_status"],
                     row["month_action_level"],
@@ -444,10 +494,11 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
             "",
             "## Key Diagnostics",
             "",
-            "- `conversion_risk` means enough total future value exists, but booked revenue is still low.",
+            "- `conversion_risk` means enough total calendar value exists, but booked revenue is still low.",
             "- `protect_open_value` means far-out calendar value is healthy and should not be pushed too early.",
             "- `historical_actuals` means the month was filled from PriceLabs KPI On The Books historical data.",
             "- `suspicious` means the historical KPI row passed through but has a data-quality warning, usually because the PriceLabs denominator looks unusual.",
+            "- Historical occupancy is calculated from booked nights divided by calendar days in month for single-listing analysis.",
             "- `partial_horizon` means only part of the month is inside the current future export window, so it is not judged against the full monthly target.",
             "- `inefficient` cleaning status means booked revenue per cleaning is below the current efficiency threshold.",
             "",

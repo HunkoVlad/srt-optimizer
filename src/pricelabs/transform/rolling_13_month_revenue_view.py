@@ -6,7 +6,7 @@ import argparse
 import calendar
 import csv
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 import sys
 
@@ -39,6 +39,7 @@ HISTORICAL_COLUMNS = (
     "historical_booked_nights",
     "historical_paid_occupancy_pct",
     "historical_occupancy_pct",
+    "historical_calendar_occupancy_pct",
     "historical_rental_adr",
     "historical_rental_revpar",
     "historical_total_revenue",
@@ -159,6 +160,15 @@ def historical_quality_flag(row: dict[str, str], days_in_month: str) -> str:
     return "suspicious" if suspicious else "ok"
 
 
+def historical_calendar_occupancy_pct(row: dict[str, str], days_in_month: str) -> str:
+    booked_nights = parse_decimal(row.get("historical_booked_nights", ""))
+    days = parse_decimal(days_in_month)
+    if booked_nights is None or days is None or days == 0:
+        return ""
+    occupancy = (booked_nights / days * Decimal("100")).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    return f"{occupancy.normalize():f}"
+
+
 def calendar_days_for_stay_month(stay_month: str) -> str:
     year, month = (int(part) for part in stay_month.split("-"))
     return str(calendar.monthrange(year, month)[1])
@@ -186,6 +196,7 @@ def merge_historical_actuals(
             if column != "historical_data_quality_flag":
                 row[column] = historical_row.get(column, "")
         days_in_month = row.get("days_in_month", "") or calendar_days_for_stay_month(row["stay_month"])
+        row["historical_calendar_occupancy_pct"] = historical_calendar_occupancy_pct(historical_row, days_in_month)
         row["historical_data_quality_flag"] = historical_quality_flag(historical_row, days_in_month)
         row["data_availability"] = "historical_actuals"
         row["revenue_pace_status"] = "historical_actuals"

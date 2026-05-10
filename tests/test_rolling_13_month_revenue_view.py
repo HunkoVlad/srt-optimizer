@@ -115,6 +115,8 @@ def test_historical_actuals_merge_only_into_historical_rows() -> None:
 
     assert february["data_availability"] == "historical_actuals"
     assert february["historical_total_revenue"] == "5114.28"
+    assert february["historical_occupancy_pct"] == "38.71"
+    assert february["historical_calendar_occupancy_pct"] == "42.9"
     assert february["historical_source"] == "pricelabs_kpis_on_the_books"
     assert february["historical_data_quality_flag"] == "ok"
     assert february["revenue_pace_status"] == "historical_actuals"
@@ -127,6 +129,21 @@ def test_historical_actuals_merge_only_into_historical_rows() -> None:
 
     assert january["data_availability"] == "no_source_data"
     assert january["historical_data_quality_flag"] == "no_historical_source"
+
+
+def test_historical_calendar_occupancy_uses_calendar_days_not_kpi_denominator() -> None:
+    rows = build_rolling_rows(
+        [],
+        "2026-05-08",
+        [
+            historical_row("2026-02", bookable="50", booked="19", occupancy="38.0"),
+        ],
+    )
+
+    february = by_month(rows, "2026-02")
+
+    assert february["historical_occupancy_pct"] == "38.0"
+    assert february["historical_calendar_occupancy_pct"] == "67.9"
 
 
 def test_suspicious_historical_actuals_are_flagged_without_failure() -> None:
