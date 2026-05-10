@@ -372,11 +372,14 @@ Required behavior:
 - The summary table must include all 13 months from the rolling view.
 - The table must include six historical months, the current month, and six future months.
 - Historical `no_source_data` months must appear in the table.
+- Historical `historical_actuals` months must appear in the table when available.
 - `no_source_data` rows use `revenue_pace_status = no_source_data`.
 - `no_source_data` rows use `month_action_level = monitor`.
 - `no_source_data` rows must not create advisory or concern bullets.
+- `historical_actuals` rows must not create Critical Now, Advisory, or Protect recommendations.
 - `partial_horizon` rows must not create advisory or concern bullets.
-- Executive Summary must always include: `Historical months without source data are shown for context.`
+- If historical actuals are available, Executive Summary should state which months have historical actuals and that missing historical months remain `no_source_data`.
+- If no historical actuals are available, Executive Summary must include: `Historical months without source data are shown for context.`
 - Executive Summary must always include: `Market benchmark is context only.`
 
 Executive Decision View:
@@ -416,7 +419,7 @@ Interpretation:
 
 - Appears after Executive Decision View and before Monthly Revenue Pace.
 - Explains existing diagnostic statuses in plain English.
-- Uses only rows where `data_availability = available`.
+- Uses rows where `data_availability = available` or `data_availability = historical_actuals`.
 - Keeps wording concise.
 - Does not create PriceLabs setting recommendations.
 
@@ -426,6 +429,8 @@ Interpretation rules:
 - `protect_open_value`: explain that far-out open calendar value is healthy and supports protecting premium positioning.
 - `inefficient`: explain that revenue per cleaning is below the current efficiency threshold and should be monitored as a booking-quality concern.
 - `partial_horizon`: explain that only part of the month is inside the current export horizon, so it should not be judged against the full monthly target.
+- `historical_actuals`: explain that historical actuals are available from PriceLabs KPI data, including total revenue, booked nights, and ADR.
+- `suspicious`: append a caution note that the PriceLabs historical denominator should be reviewed before using occupancy as final truth.
 - `no_source_data`: historical `no_source_data` rows should not create month-level interpretation bullets because they are already covered in the Executive Summary.
 
 Interpretation text must not mention changing base price, min price, LOS, discounts, orphan rules, or other PriceLabs settings.
@@ -450,6 +455,12 @@ Generated from:
 
 ```text
 data/runs/<run_date>/analysis/monthly_revenue_pace_<run_date>.csv
+```
+
+May also be enriched by Step 13 from:
+
+```text
+data/runs/<run_date>/analysis/historical_monthly_actuals_<run_date>.csv
 ```
 
 Purpose: stable monthly reporting window covering six months before the `run_date` month, the `run_date` month, and six months after the `run_date` month.
@@ -494,6 +505,15 @@ Required output columns:
 - `revenue_pace_status`
 - `cleaning_efficiency_status`
 - `month_action_level`
+- `historical_bookable_nights`
+- `historical_booked_nights`
+- `historical_paid_occupancy_pct`
+- `historical_occupancy_pct`
+- `historical_rental_adr`
+- `historical_rental_revpar`
+- `historical_total_revenue`
+- `historical_source`
+- `historical_data_quality_flag`
 
 `month_window_position` values:
 
@@ -505,13 +525,96 @@ Required output columns:
 
 - `available`
 - `no_source_data`
+- `historical_actuals`
+
+`revenue_pace_status` additionally allows:
+
+- `historical_actuals`
+
+Step 13 historical merge rules:
+
+- Historical actuals may merge only into historical rows.
+- Current and future PriceLabs pace rows must not be overwritten by historical actuals.
+- If historical actuals exist for a historical month:
+  - `data_availability = historical_actuals`
+  - `revenue_pace_status = historical_actuals`
+  - `month_action_level = monitor`
+- If no historical actuals exist:
+  - keep `data_availability = no_source_data`
+  - keep `revenue_pace_status = no_source_data`
+  - keep `month_action_level = monitor`
+- Do not fake historical values.
+
+`historical_data_quality_flag` values:
+
+- `no_historical_source`
+- `ok`
+- `suspicious`
+
+`suspicious` applies when any of these are true:
+
+- `historical_bookable_nights > days_in_month * 1.5`
+- `historical_booked_nights > historical_bookable_nights`
+- `historical_total_revenue < 0`
+- `historical_occupancy_pct > 100`
+- `historical_rental_adr < 0`
 
 Limits:
 
 - Step 5 is reporting/structure only.
 - It does not create PriceLabs recommendations.
-- Historical months remain blank until a historical source is added.
+- Suspicious historical data should not fail the pipeline.
+- Suspicious means use caution, not discard.
+- Historical actuals are context and should not create PriceLabs recommendations.
+- PriceLabs KPI denominators may differ from calendar-day assumptions.
 - Market benchmark remains context only.
+
+## Historical Monthly Actuals Step 12 Contract
+
+Output:
+
+```text
+data/runs/<run_date>/analysis/historical_monthly_actuals_<run_date>.csv
+```
+
+Source:
+
+```text
+data/runs/<run_date>/raw/kpis_on_the_books.xlsx
+```
+
+Source type: PriceLabs KPIs On The Books historical report.
+
+Important:
+
+- This file is optional.
+- If `kpis_on_the_books.xlsx` is missing, the pipeline should continue without failing.
+
+Required output columns:
+
+- `run_date`
+- `stay_month`
+- `historical_bookable_nights`
+- `historical_booked_nights`
+- `historical_paid_occupancy_pct`
+- `historical_occupancy_pct`
+- `historical_rental_adr`
+- `historical_rental_revpar`
+- `historical_total_revenue`
+- `historical_source`
+
+`historical_source` value:
+
+- `pricelabs_kpis_on_the_books`
+
+Rules:
+
+- `stay_month` is normalized to `YYYY-MM`.
+- Currency values are numeric after removing currency symbols and commas.
+- Percentage values remain numeric percentage values, not fractions.
+- Blank or missing values remain blank/null.
+- Total or summary rows are excluded.
+- Rows without a valid `stay_month` are excluded.
 
 ## Analysis Rules
 

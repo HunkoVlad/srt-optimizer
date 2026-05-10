@@ -18,6 +18,10 @@ def monthly_row(
     revenue_status: str = "no_source_data",
     cleaning_status: str = "",
     action_level: str = "monitor",
+    historical_booked_nights: str = "",
+    historical_total_revenue: str = "",
+    historical_rental_adr: str = "",
+    historical_data_quality_flag: str = "",
 ) -> dict[str, str]:
     return {
         "run_date": "2026-05-08",
@@ -36,14 +40,67 @@ def monthly_row(
         "revenue_pace_status": revenue_status,
         "cleaning_efficiency_status": cleaning_status,
         "month_action_level": action_level,
+        "historical_bookable_nights": "",
+        "historical_booked_nights": historical_booked_nights,
+        "historical_paid_occupancy_pct": "",
+        "historical_occupancy_pct": "",
+        "historical_rental_adr": historical_rental_adr,
+        "historical_rental_revpar": "",
+        "historical_total_revenue": historical_total_revenue,
+        "historical_source": "pricelabs_kpis_on_the_books" if data == "historical_actuals" else "",
+        "historical_data_quality_flag": historical_data_quality_flag,
     }
 
 
 def sample_rows() -> list[dict[str, str]]:
     rows = [
         monthly_row(month, "historical", "no_source_data")
-        for month in ("2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04")
+        for month in ("2025-11", "2025-12")
     ]
+    rows.extend(
+        [
+            monthly_row(
+                "2026-01",
+                "historical",
+                "historical_actuals",
+                revenue_status="historical_actuals",
+                historical_booked_nights="0",
+                historical_total_revenue="0",
+                historical_rental_adr="0",
+                historical_data_quality_flag="suspicious",
+            ),
+            monthly_row(
+                "2026-02",
+                "historical",
+                "historical_actuals",
+                revenue_status="historical_actuals",
+                historical_booked_nights="19",
+                historical_total_revenue="9511.34",
+                historical_rental_adr="455.32",
+                historical_data_quality_flag="suspicious",
+            ),
+            monthly_row(
+                "2026-03",
+                "historical",
+                "historical_actuals",
+                revenue_status="historical_actuals",
+                historical_booked_nights="23",
+                historical_total_revenue="8887.86",
+                historical_rental_adr="351.26",
+                historical_data_quality_flag="ok",
+            ),
+            monthly_row(
+                "2026-04",
+                "historical",
+                "historical_actuals",
+                revenue_status="historical_actuals",
+                historical_booked_nights="16",
+                historical_total_revenue="6609.76",
+                historical_rental_adr="369.63",
+                historical_data_quality_flag="ok",
+            ),
+        ]
+    )
     rows.extend(
         [
             monthly_row(
@@ -178,11 +235,15 @@ def test_monthly_revenue_summary_markdown_content() -> None:
         assert f"| {month} |" in markdown
 
     assert "| 2025-11 | historical |  |  | no_source_data | - |" in markdown
+    assert "| 2026-03 | historical |  |  | historical_actuals | $8,888 | - | $8,888 |" in markdown
     assert "| 2026-05 | current | current_month | partial_month | available |" in markdown
     assert "Current month 2026-05 revenue pace is conversion_risk." in markdown
     assert "Next month 2026-06 revenue pace is conversion_risk." in markdown
     assert "Far-out open value is protected in 2026-07, 2026-08, 2026-09, 2026-10." in markdown
-    assert "Historical months without source data are shown for context." in markdown
+    assert (
+        "Historical actuals are available for 2026-01, 2026-02, 2026-03, 2026-04; "
+        "missing historical months remain no_source_data."
+    ) in markdown
     assert "- Market benchmark is context only." in markdown
     assert "2026-11 revenue pace" not in markdown
     assert "## Executive Decision View" in markdown
@@ -198,6 +259,14 @@ def test_monthly_revenue_summary_markdown_content() -> None:
     assert (
         "- 2026-05: Booked revenue is low, but total future value is above target. "
         "This points to conversion risk rather than weak calendar value."
+    ) in markdown
+    assert (
+        "- 2026-03: Historical actuals are available from PriceLabs KPI data: "
+        "total revenue $8,888, booked nights 23, ADR $351."
+    ) in markdown
+    assert (
+        "Data quality flag: suspicious; review PriceLabs historical denominator "
+        "before using occupancy as final truth."
     ) in markdown
     assert (
         "- 2026-07: Open calendar value is healthy for a future month. "
@@ -229,12 +298,16 @@ def test_monthly_revenue_summary_markdown_content() -> None:
     ) in markdown
     assert "- 2026-07: Protect far-out open value; no PriceLabs rule change recommended now." in markdown
     assert "- 2026-11: Monitor only; do not judge this partial horizon month against the full monthly target." in markdown
+    assert "2026-03: Monitor" not in markdown
+    assert "2026-03: Review" not in markdown
     assert "2025-11: Booked revenue" not in markdown
     assert "2025-11: Monitor" not in markdown
     assert "$2,834" in markdown
     assert "$22,614" in markdown
     assert "28.3%" in markdown
     assert "226.1%" in markdown
+    assert "`historical_actuals` means the month was filled from PriceLabs KPI On The Books historical data." in markdown
+    assert "`suspicious` means the historical KPI row passed through but has a data-quality warning" in markdown
     assert "lower prices" not in markdown.lower()
     assert "match the 75th percentile" not in markdown.lower()
     assert "discount all open dates" not in markdown.lower()

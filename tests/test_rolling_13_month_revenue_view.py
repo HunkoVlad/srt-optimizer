@@ -33,6 +33,28 @@ def monthly_row(stay_month: str, revenue_status: str = "conversion_risk") -> dic
     }
 
 
+def historical_row(
+    stay_month: str,
+    bookable: str = "31",
+    booked: str = "12",
+    occupancy: str = "38.71",
+    adr: str = "391",
+    revenue: str = "5114.28",
+) -> dict[str, str]:
+    return {
+        "run_date": "2026-05-08",
+        "stay_month": stay_month,
+        "historical_bookable_nights": bookable,
+        "historical_booked_nights": booked,
+        "historical_paid_occupancy_pct": "19.35",
+        "historical_occupancy_pct": occupancy,
+        "historical_rental_adr": adr,
+        "historical_rental_revpar": "151.35",
+        "historical_total_revenue": revenue,
+        "historical_source": "pricelabs_kpis_on_the_books",
+    }
+
+
 def by_month(rows: list[dict[str, str]], month: str) -> dict[str, str]:
     return next(row for row in rows if row["stay_month"] == month)
 
@@ -71,6 +93,56 @@ def test_build_rolling_rows_preserves_available_months_and_marks_missing() -> No
     assert november["booked_revenue_proxy"] == ""
     assert november["revenue_pace_status"] == "no_source_data"
     assert november["month_action_level"] == "monitor"
+    assert november["historical_data_quality_flag"] == "no_historical_source"
+
+
+def test_historical_actuals_merge_only_into_historical_rows() -> None:
+    rows = build_rolling_rows(
+        [
+            monthly_row("2026-05"),
+            monthly_row("2026-06"),
+        ],
+        "2026-05-08",
+        [
+            historical_row("2026-02"),
+            historical_row("2026-05", revenue="9999"),
+        ],
+    )
+
+    february = by_month(rows, "2026-02")
+    may = by_month(rows, "2026-05")
+    january = by_month(rows, "2026-01")
+
+    assert february["data_availability"] == "historical_actuals"
+    assert february["historical_total_revenue"] == "5114.28"
+    assert february["historical_source"] == "pricelabs_kpis_on_the_books"
+    assert february["historical_data_quality_flag"] == "ok"
+    assert february["revenue_pace_status"] == "historical_actuals"
+    assert february["month_action_level"] == "monitor"
+
+    assert may["data_availability"] == "available"
+    assert may["booked_revenue_proxy"] == "314"
+    assert may["historical_total_revenue"] == ""
+    assert may["revenue_pace_status"] == "conversion_risk"
+
+    assert january["data_availability"] == "no_source_data"
+    assert january["historical_data_quality_flag"] == "no_historical_source"
+
+
+def test_suspicious_historical_actuals_are_flagged_without_failure() -> None:
+    rows = build_rolling_rows(
+        [],
+        "2026-05-08",
+        [
+            historical_row("2026-02", bookable="100", booked="120", occupancy="120", adr="-1", revenue="-10"),
+        ],
+    )
+
+    february = by_month(rows, "2026-02")
+
+    assert february["data_availability"] == "historical_actuals"
+    assert february["historical_data_quality_flag"] == "suspicious"
+    assert february["historical_total_revenue"] == "-10"
 
 
 def test_rolling_view_cli_writes_output(tmp_path, monkeypatch) -> None:

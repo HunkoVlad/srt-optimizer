@@ -28,6 +28,7 @@ foreach ($dir in @($rawDir, $standardizedDir, $analysisDir, $settingsDir)) {
 $futureExport = Join-Path $rawDir "priceLabs_future_export.csv"
 $priceOcc = Join-Path $rawDir "price_occ.csv"
 $settingsInput = Join-Path $rawDir "pricelabs_settings_manual_input.json"
+$kpisOnTheBooks = Join-Path $rawDir "kpis_on_the_books.xlsx"
 
 $missingInputs = @()
 foreach ($path in @($futureExport, $priceOcc, $settingsInput)) {
@@ -97,6 +98,7 @@ $standardizedFile = Join-Path $standardizedDir "future_daily_pricing_$RunDate.cs
 $manifestFile = Join-Path $runRoot "manifest.json"
 $enrichedFile = Join-Path $analysisDir "future_daily_pricing_enriched_$RunDate.csv"
 $monthlyRevenuePaceFile = Join-Path $analysisDir "monthly_revenue_pace_$RunDate.csv"
+$historicalMonthlyActualsFile = Join-Path $analysisDir "historical_monthly_actuals_$RunDate.csv"
 $rollingRevenueViewFile = Join-Path $analysisDir "rolling_13_month_revenue_view_$RunDate.csv"
 $monthlyRevenueSummaryFile = Join-Path $analysisDir "monthly_revenue_summary_$RunDate.md"
 $summaryFile = Join-Path $analysisDir "future_window_summary_$RunDate.csv"
@@ -136,12 +138,34 @@ Invoke-PythonStep "Monthly revenue pace" @(
     "--output-file", $monthlyRevenuePaceFile
 )
 
-Invoke-PythonStep "Rolling 13-month revenue view" @(
-    "-m", "pricelabs.transform.rolling_13_month_revenue_view",
-    "--run-date", $RunDate,
-    "--monthly-file", $monthlyRevenuePaceFile,
-    "--output-file", $rollingRevenueViewFile
-)
+if (Test-Path $kpisOnTheBooks) {
+    Invoke-PythonStep "Historical monthly actuals" @(
+        "-m", "pricelabs.transform.historical_monthly_actuals",
+        "--run-date", $RunDate,
+        "--input-file", $kpisOnTheBooks,
+        "--output-file", $historicalMonthlyActualsFile
+    )
+} else {
+    Write-Host ""
+    Write-Host "Skipping historical monthly actuals: optional KPI workbook not found at $kpisOnTheBooks."
+}
+
+if (Test-Path $historicalMonthlyActualsFile) {
+    Invoke-PythonStep "Rolling 13-month revenue view" @(
+        "-m", "pricelabs.transform.rolling_13_month_revenue_view",
+        "--run-date", $RunDate,
+        "--monthly-file", $monthlyRevenuePaceFile,
+        "--historical-file", $historicalMonthlyActualsFile,
+        "--output-file", $rollingRevenueViewFile
+    )
+} else {
+    Invoke-PythonStep "Rolling 13-month revenue view" @(
+        "-m", "pricelabs.transform.rolling_13_month_revenue_view",
+        "--run-date", $RunDate,
+        "--monthly-file", $monthlyRevenuePaceFile,
+        "--output-file", $rollingRevenueViewFile
+    )
+}
 
 Invoke-PythonStep "Monthly revenue summary" @(
     "-m", "pricelabs.transform.monthly_revenue_summary",
