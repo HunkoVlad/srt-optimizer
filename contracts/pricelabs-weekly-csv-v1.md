@@ -444,6 +444,52 @@ Limits:
 - It does not modify window signals.
 - Market benchmark remains context only.
 
+## Email Revenue Report Step 16 Contract
+
+Output:
+
+```text
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
+```
+
+Generated from:
+
+```text
+data/runs/<run_date>/analysis/rolling_13_month_revenue_view_<run_date>.csv
+data/runs/<run_date>/analysis/monthly_revenue_summary_<run_date>.md
+```
+
+Purpose: concise email-ready markdown report for the weekly revenue snapshot, analysis, and recommendation review.
+
+Required sections:
+
+- Subject line.
+- Executive Snapshot.
+- What Needs Attention.
+- What To Protect.
+- Recommendation Review.
+- Key Monthly Snapshot.
+- Data Notes.
+
+Rules:
+
+- This file is email-ready content only.
+- It must not send email.
+- It must not include SMTP, Gmail, or delivery logic.
+- It must not include manual date-level recommendations.
+- It must not include exact price recommendations.
+- It must keep Airbnb revenue separate unless a dedicated Airbnb field is added later.
+- Historical `no_source_data` rows should be excluded from the Key Monthly Snapshot.
+- Historical actuals should be included where available.
+- Partial horizon months may be included as monitor context.
+- Market benchmark remains context only.
+
+Limits:
+
+- Step 16 is the final report content layer before future email delivery implementation.
+- It does not create email delivery automation.
+- It does not modify metric calculations, recommendation logic, or window signals.
+
 ## Rolling 13-Month Revenue View Step 5 Contract
 
 Output:
