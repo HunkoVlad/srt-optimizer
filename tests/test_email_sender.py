@@ -21,6 +21,7 @@ def write_config(
     mode: str = "draft",
     smtp_enabled: str = "false",
     recipient: str = "owner@example.com",
+    report_format: str = "markdown",
 ) -> None:
     path.write_text(
         "[email]\n"
@@ -34,7 +35,10 @@ def write_config(
         "port = 587\n"
         'sender_email = "sender@gmail.com"\n'
         'password_env_var = "ALOHA_GMAIL_APP_PASSWORD"\n'
-        "use_tls = true\n",
+        "use_tls = true\n"
+        "\n"
+        "[report]\n"
+        f'format = "{report_format}"\n',
         encoding="utf-8",
     )
 
@@ -120,6 +124,28 @@ def test_send_mode_uses_configured_sender_recipient_and_report_body(tmp_path, mo
     assert "Subject:" not in message.get_content()
     assert "# Revenue Snapshot" in message.get_content()
     assert "Body text" in message.get_content()
+    assert message.get_content_type() == "text/plain"
+
+
+def test_send_mode_uses_html_body_when_configured(tmp_path, monkeypatch) -> None:
+    report = tmp_path / "email_revenue_report_2026-05-08.md"
+    html_report = tmp_path / "email_revenue_report_2026-05-08.html"
+    config = tmp_path / "email.toml"
+    write_report(report)
+    html_report.write_text("<html><body><h1>Revenue Snapshot</h1></body></html>", encoding="utf-8")
+    write_config(config, mode="send", smtp_enabled="true", report_format="html")
+    monkeypatch.setenv("ALOHA_GMAIL_APP_PASSWORD", "secret-password")
+    send_mock = Mock()
+    monkeypatch.setattr(email_sender, "send_message", send_mock)
+
+    status = send_if_configured(report, config, html_report)
+
+    assert status == "Email sent to owner@example.com."
+    message = send_mock.call_args.args[0]
+    assert message.is_multipart()
+    assert message.get_body(preferencelist=("html",)).get_content_type() == "text/html"
+    assert "<h1>Revenue Snapshot</h1>" in message.get_body(preferencelist=("html",)).get_content()
+    assert "# Revenue Snapshot" in message.get_body(preferencelist=("plain",)).get_content()
 
 
 def test_cli_reports_draft_skip_without_sending(tmp_path, monkeypatch, capsys) -> None:

@@ -22,6 +22,10 @@ def parse_args() -> argparse.Namespace:
         help="Email-ready markdown report. Defaults to analysis/email_revenue_report_<run-date>.md.",
     )
     parser.add_argument(
+        "--html-file",
+        help="Optional HTML email report. Defaults to analysis/email_revenue_report_<run-date>.html.",
+    )
+    parser.add_argument(
         "--config-file",
         default="config/email.toml",
         help="Local email config TOML. Defaults to config/email.toml.",
@@ -46,6 +50,7 @@ def build_message(
     sender: str,
     recipient: str,
     cc_email: str = "",
+    html_body: str = "",
 ) -> EmailMessage:
     message = EmailMessage(policy=SMTP)
     message["From"] = sender
@@ -55,6 +60,8 @@ def build_message(
     message["Subject"] = subject
     message["MIME-Version"] = "1.0"
     message.set_content(body, subtype="plain", charset="utf-8", cte="8bit")
+    if html_body:
+        message.add_alternative(html_body, subtype="html", charset="utf-8", cte="8bit")
     return message
 
 
@@ -73,15 +80,17 @@ def send_message(
         smtp.send_message(message)
 
 
-def send_if_configured(report_path: Path, config_path: Path) -> str:
+def send_if_configured(report_path: Path, config_path: Path, html_path: Path | None = None) -> str:
     config = read_config(config_path)
     if not config:
         return "Email mode: draft — send skipped."
 
     email_config = config.get("email", {})
     smtp_config = config.get("smtp", {})
+    report_config = config.get("report", {})
     mode = str(email_config.get("mode", "draft")).strip().lower()
     smtp_enabled = bool_value(smtp_config.get("enabled", False))
+    report_format = str(report_config.get("format", "markdown")).strip().lower()
 
     if mode != "send":
         return "Email mode: draft — send skipped."
@@ -103,7 +112,13 @@ def send_if_configured(report_path: Path, config_path: Path) -> str:
         raise RuntimeError(f"SMTP password environment variable is missing: {password_env_var}")
 
     subject, body = read_report(report_path)
-    message = build_message(subject, body, sender, recipient, cc_email)
+    html_body = ""
+    if report_format == "html":
+        resolved_html_path = html_path or report_path.with_suffix(".html")
+        if not resolved_html_path.exists():
+            raise FileNotFoundError(f"HTML email report does not exist: {resolved_html_path}")
+        html_body = resolved_html_path.read_text(encoding="utf-8-sig")
+    message = build_message(subject, body, sender, recipient, cc_email, html_body)
     send_message(
         message,
         str(smtp_config.get("host", "smtp.gmail.com")).strip() or "smtp.gmail.com",
@@ -118,8 +133,9 @@ def send_if_configured(report_path: Path, config_path: Path) -> str:
 def run() -> int:
     args = parse_args()
     report_path = Path(args.report_file or f"analysis/email_revenue_report_{args.run_date}.md")
+    html_path = Path(args.html_file or f"analysis/email_revenue_report_{args.run_date}.html")
     config_path = Path(args.config_file)
-    print(send_if_configured(report_path, config_path))
+    print(send_if_configured(report_path, config_path, html_path))
     return 0
 
 

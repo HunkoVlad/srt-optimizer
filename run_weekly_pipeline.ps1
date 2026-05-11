@@ -102,6 +102,7 @@ $historicalMonthlyActualsFile = Join-Path $analysisDir "historical_monthly_actua
 $rollingRevenueViewFile = Join-Path $analysisDir "rolling_13_month_revenue_view_$RunDate.csv"
 $monthlyRevenueSummaryFile = Join-Path $analysisDir "monthly_revenue_summary_$RunDate.md"
 $emailRevenueReportFile = Join-Path $analysisDir "email_revenue_report_$RunDate.md"
+$emailHtmlReportFile = Join-Path $analysisDir "email_revenue_report_$RunDate.html"
 $emailDraftFile = Join-Path $analysisDir "email_revenue_report_$RunDate.eml"
 $summaryFile = Join-Path $analysisDir "future_window_summary_$RunDate.csv"
 $signalsFile = Join-Path $analysisDir "future_window_signals_$RunDate.csv"
@@ -184,6 +185,13 @@ Invoke-PythonStep "Email revenue report" @(
     "--output-file", $emailRevenueReportFile
 )
 
+Invoke-PythonStep "Email HTML report" @(
+    "-m", "pricelabs.transform.email_html_report",
+    "--run-date", $RunDate,
+    "--report-file", $emailRevenueReportFile,
+    "--output-file", $emailHtmlReportFile
+)
+
 Invoke-PythonStep "Email draft file" @(
     "-m", "pricelabs.transform.email_draft_file",
     "--run-date", $RunDate,
@@ -196,6 +204,7 @@ Invoke-PythonStep "Email send mode" @(
     "-m", "pricelabs.transform.email_sender",
     "--run-date", $RunDate,
     "--report-file", $emailRevenueReportFile,
+    "--html-file", $emailHtmlReportFile,
     "--config-file", "config\email.toml"
 )
 

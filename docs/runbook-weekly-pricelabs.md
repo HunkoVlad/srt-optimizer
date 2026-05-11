@@ -75,6 +75,12 @@ data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
 data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
 ```
 
+- [ ] Confirm the readable HTML email report was written:
+
+```text
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.html
+```
+
 - [ ] Confirm the local email draft file was written:
 
 ```text
@@ -113,6 +119,7 @@ The runner always generates:
 
 ```text
 data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.html
 data/runs/<run_date>/analysis/email_revenue_report_<run_date>.eml
 ```
 
@@ -145,6 +152,68 @@ ALOHA_GMAIL_APP_PASSWORD
 Do not store the password in `config/email.toml` and do not commit credentials. A persistent Windows user environment variable can be used later for scheduled automation.
 
 If send mode is enabled and the password environment variable is missing, the pipeline fails clearly at `Email send mode`. For development, switch back to draft mode to avoid sending test emails.
+
+SMTP body format is controlled by:
+
+```toml
+[report]
+format = "markdown"
+```
+
+Use `format = "html"` to send the readable HTML report. Use `format = "markdown"` to send plain text.
+
+To test in draft mode:
+
+1. Set local `config/email.toml` to:
+
+```toml
+[email]
+mode = "draft"
+
+[smtp]
+enabled = false
+
+[report]
+format = "html"
+```
+
+2. Run:
+
+```powershell
+.\run_weekly_pipeline.ps1 -RunDate YYYY-MM-DD
+```
+
+3. Confirm `.md`, `.html`, and `.eml` outputs exist under `data/runs/<run_date>/analysis/`.
+4. Confirm the pipeline prints `Email mode: draft — send skipped.`
+
+To test one real HTML send:
+
+1. Confirm `config/email.toml` has the intended `recipient_email` and `sender_email`.
+2. Confirm `ALOHA_GMAIL_APP_PASSWORD` is available in the current PowerShell session or as a persistent Windows user environment variable.
+3. Set local `config/email.toml` to:
+
+```toml
+[email]
+mode = "send"
+
+[smtp]
+enabled = true
+
+[report]
+format = "html"
+```
+
+4. Run the weekly pipeline once.
+5. Confirm the terminal prints `Email sent to <recipient>.`
+6. Immediately switch back to draft mode for development:
+
+```toml
+[email]
+mode = "draft"
+
+[smtp]
+enabled = false
+```
 
 ## Validation
 

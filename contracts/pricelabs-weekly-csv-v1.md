@@ -495,6 +495,7 @@ Generated outputs:
 ```text
 data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
 data/runs/<run_date>/analysis/email_revenue_report_<run_date>.eml
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.html
 ```
 
 Source:
@@ -507,6 +508,7 @@ Behavior:
 
 - The email report `.md` is always generated.
 - The local `.eml` draft file is always generated.
+- The HTML email report is always generated.
 - SMTP send mode is optional and explicit.
 - SMTP send mode must not change revenue calculations, recommendation logic, or window signals.
 
@@ -544,6 +546,45 @@ Failure behavior:
 - If `[email].mode = "draft"`, send is skipped and `.eml` remains available.
 - If send mode is enabled and the password environment variable is missing, the pipeline fails clearly at `Email send mode`.
 - For development, switch back to draft mode to avoid sending test emails.
+
+Step 22 HTML report:
+
+Output:
+
+```text
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.html
+```
+
+Source:
+
+```text
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
+```
+
+Purpose: readable HTML version of the weekly revenue email report for Gmail/SMTP delivery.
+
+Rules:
+
+- Markdown report is still generated.
+- Plain-text `.eml` draft is still generated.
+- HTML report is generated for readable email delivery.
+- HTML uses simple inline/internal styling.
+- No external CSS.
+- No images.
+- No scripts.
+- SMTP sender may use HTML when `config/email.toml` has:
+
+```toml
+[report]
+format = "html"
+```
+
+- If `[report].format = "markdown"`, sender uses plain text.
+- Draft mode still skips sending.
+- Send mode still requires:
+  - `[email].mode = "send"`
+  - `[smtp].enabled = true`
+  - `ALOHA_GMAIL_APP_PASSWORD` available in the environment.
 
 ## Rolling 13-Month Revenue View Step 5 Contract
 

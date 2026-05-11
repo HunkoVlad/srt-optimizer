@@ -37,5 +37,5 @@ use_tls = true
 # Points to the generated email_revenue_report_<run_date>.md file.
 source = "email_revenue_report"
 
-# Email body source format for now.
+# Email body source format. Use "markdown" for plain text or "html" for HTML SMTP sends.
 format = "markdown"

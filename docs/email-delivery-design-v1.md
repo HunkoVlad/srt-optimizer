@@ -8,7 +8,7 @@ The pipeline already generates the email-ready revenue report:
 data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
 ```
 
-The pipeline now creates a local `.eml` draft file and can optionally send through Gmail SMTP only when explicitly enabled in local config.
+The pipeline now creates a local `.eml` draft file, a readable HTML report, and can optionally send through Gmail SMTP only when explicitly enabled in local config.
 
 ## Recommended Delivery Mode
 
@@ -51,7 +51,8 @@ Current draft behavior:
 2. Extract the subject.
 3. Use the remaining markdown body as plain text.
 4. Write `email_revenue_report_<run_date>.eml`.
-5. Keep the `.eml` file as a local reviewable copy even when SMTP send mode is enabled.
+5. Write `email_revenue_report_<run_date>.html`.
+6. Keep the `.eml` file as a local reviewable copy even when SMTP send mode is enabled.
 
 ## Configuration
 
@@ -81,7 +82,7 @@ Config files:
 - `[smtp] password_env_var = "ALOHA_GMAIL_APP_PASSWORD"`
 - `[smtp] use_tls = true`
 - `[report] source = "email_revenue_report"`
-- `[report] format = "markdown"`
+- `[report] format = "markdown"` or `"html"`
 
 Do not store secrets in either file. Gmail OAuth/token files must stay outside the repo or be ignored later if introduced.
 
@@ -92,6 +93,7 @@ The pipeline always generates:
 ```text
 data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
 data/runs/<run_date>/analysis/email_revenue_report_<run_date>.eml
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.html
 ```
 
 SMTP send mode is optional and explicit. Default development mode should be:
@@ -124,6 +126,39 @@ No password should be committed to Git or stored in `config/email.toml`. A persi
 
 If send mode is enabled and the password environment variable is missing, the pipeline fails clearly at `Email send mode`. For development, switch back to draft mode to avoid sending test emails. Draft/file generation remains the safe fallback.
 
+## HTML Email Formatting
+
+The HTML report is generated from:
+
+```text
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
+```
+
+Output:
+
+```text
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.html
+```
+
+Purpose: readable HTML version of the weekly revenue email report for Gmail/SMTP delivery.
+
+Rules:
+
+- Markdown report is still generated.
+- Plain-text `.eml` draft is still generated.
+- HTML report is generated for readable email delivery.
+- HTML uses simple inline/internal styling.
+- No external CSS.
+- No images.
+- No scripts.
+
+SMTP body selection:
+
+- If `[report].format = "html"`, SMTP sends the HTML report with a plain-text fallback.
+- If `[report].format = "markdown"`, SMTP sends the markdown report as plain text.
+- Draft mode still skips sending.
+- Send mode still requires `[email].mode = "send"`, `[smtp].enabled = true`, and `ALOHA_GMAIL_APP_PASSWORD` available in the environment.
+
 ## Credential Guardrails
 
 - No credentials committed to Git.
@@ -137,6 +172,7 @@ If send mode is enabled and the password environment variable is missing, the pi
 Included:
 
 - Create local `.eml` draft file.
+- Create readable HTML email report.
 - Optional explicit Gmail SMTP send mode.
 - Subject extraction.
 - Markdown/plain text body.
@@ -145,7 +181,6 @@ Included:
 Excluded:
 
 - Scheduling.
-- HTML styling.
 - Attachments.
 - Gmail API/OAuth integration.
 
