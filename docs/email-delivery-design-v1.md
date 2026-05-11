@@ -8,18 +8,18 @@ The pipeline already generates the email-ready revenue report:
 data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
 ```
 
-The next delivery phase should create a reviewable Gmail draft first. It should not send automatically.
+The pipeline now creates a local `.eml` draft file and can optionally send through Gmail SMTP only when explicitly enabled in local config.
 
 ## Recommended Delivery Mode
 
-Use Gmail draft mode first.
+Use draft mode for development.
 
-Draft mode is the safest transition step because it:
+Draft mode is the safest default because it:
 
 - Allows human review before sending.
 - Protects against bad automated wording.
 - Avoids accidental delivery while the report is still being refined.
-- Creates a clear path toward later automation without jumping directly to sending.
+- Keeps local report and `.eml` generation available even when SMTP is not configured.
 
 ## Email Source
 
@@ -45,23 +45,22 @@ Body source:
 
 ## Draft Output Behavior
 
-Future implementation should:
+Current draft behavior:
 
 1. Read `email_revenue_report_<run_date>.md`.
 2. Extract the subject.
-3. Convert the markdown body to either plain text first, or simple HTML later.
-4. Create a Gmail draft addressed to the configured recipient.
-5. Never send automatically in V1.
-6. Print the Gmail draft creation status.
+3. Use the remaining markdown body as plain text.
+4. Write `email_revenue_report_<run_date>.eml`.
+5. Keep the `.eml` file as a local reviewable copy even when SMTP send mode is enabled.
 
 ## Configuration
 
-Future config should include:
+Config should include:
 
 - `recipient_email`
 - Sender account handled by Gmail authentication
 - Optional `cc_email`
-- Optional `email_mode = draft`
+- `mode = "draft"` for development
 
 Config files:
 
@@ -75,10 +74,55 @@ Config files:
 - `[email] cc_email`
 - `[email] subject_prefix`
 - `[email] include_attachments = false`
+- `[smtp] enabled = false`
+- `[smtp] host = "smtp.gmail.com"`
+- `[smtp] port = 587`
+- `[smtp] sender_email`
+- `[smtp] password_env_var = "ALOHA_GMAIL_APP_PASSWORD"`
+- `[smtp] use_tls = true`
 - `[report] source = "email_revenue_report"`
 - `[report] format = "markdown"`
 
 Do not store secrets in either file. Gmail OAuth/token files must stay outside the repo or be ignored later if introduced.
+
+## SMTP Send Mode
+
+The pipeline always generates:
+
+```text
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.eml
+```
+
+SMTP send mode is optional and explicit. Default development mode should be:
+
+```toml
+[email]
+mode = "draft"
+
+[smtp]
+enabled = false
+```
+
+Real send requires both:
+
+```toml
+[email]
+mode = "send"
+
+[smtp]
+enabled = true
+```
+
+The Gmail App Password must be loaded from the environment variable named by `password_env_var`, currently:
+
+```text
+ALOHA_GMAIL_APP_PASSWORD
+```
+
+No password should be committed to Git or stored in `config/email.toml`. A persistent Windows user environment variable can be used for scheduled automation later.
+
+If send mode is enabled and the password environment variable is missing, the pipeline fails clearly at `Email send mode`. For development, switch back to draft mode to avoid sending test emails. Draft/file generation remains the safe fallback.
 
 ## Credential Guardrails
 
@@ -92,18 +136,18 @@ Do not store secrets in either file. Gmail OAuth/token files must stay outside t
 
 Included:
 
-- Create Gmail draft.
+- Create local `.eml` draft file.
+- Optional explicit Gmail SMTP send mode.
 - Subject extraction.
 - Markdown/plain text body.
 - Local manual review before send.
 
 Excluded:
 
-- Automatic send.
 - Scheduling.
 - HTML styling.
 - Attachments.
-- Gmail API setup details beyond design.
+- Gmail API/OAuth integration.
 
 ## Future Steps
 
@@ -113,20 +157,25 @@ Step 18:
 
 Step 19:
 
-- Implement local Gmail draft creation.
+- Implement local `.eml` draft creation.
 
 Step 20:
 
-- Add optional scheduler after draft mode is trusted.
+- Add optional scheduler after send mode is trusted.
 
 Step 21:
 
+- Implement explicit Gmail SMTP send mode.
+
+Later:
+
+- Add scheduled automation.
 - Automate PriceLabs downloads.
 
 ## Guardrails
 
-- Draft mode only until explicitly changed.
-- No automatic email sending.
+- Draft mode is the development default.
+- No automatic email sending unless `[email].mode = "send"` and `[smtp].enabled = true`.
 - Email content comes from generated report, not ad hoc text.
 - Do not include raw CSV attachments in V1.
 - Do not mix Airbnb revenue into email unless already present in the report.

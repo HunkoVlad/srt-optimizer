@@ -14,6 +14,7 @@ def rolling_row(
     open_ask: str = "",
     total_calendar_value: str = "",
     booked_nights: str = "",
+    days_in_scope: str = "",
     revenue_per_cleaning: str = "",
     revenue_status: str = "no_source_data",
     cleaning_status: str = "",
@@ -30,7 +31,7 @@ def rolling_row(
         "month_relative_index": "",
         "month_window_position": position,
         "data_availability": data,
-        "days_in_scope": "",
+        "days_in_scope": days_in_scope,
         "days_in_month": "",
         "month_scope_status": scope,
         "booked_nights": booked_nights,
@@ -87,6 +88,7 @@ def sample_rows() -> list[dict[str, str]]:
             "7425",
             "10259",
             "7",
+            "24",
             "472.33",
             "conversion_risk",
             "inefficient",
@@ -102,6 +104,7 @@ def sample_rows() -> list[dict[str, str]]:
             "14090",
             "14404",
             "1",
+            "30",
             "314",
             "conversion_risk",
             "inefficient",
@@ -117,6 +120,7 @@ def sample_rows() -> list[dict[str, str]]:
             "22614",
             "22614",
             "0",
+            "31",
             "",
             "protect_open_value",
             "no_booked_cleanings",
@@ -132,6 +136,7 @@ def sample_rows() -> list[dict[str, str]]:
             "988",
             "988",
             "0",
+            "3",
             "",
             "partial_horizon",
             "no_booked_cleanings",
@@ -156,10 +161,13 @@ def test_email_revenue_report_content() -> None:
     assert "| 2025-11 |" not in markdown
     assert "| 2026-03 | historical_actuals | $8,888 | - | $8,888 | 74.2% | $351 | - | historical_actuals | monitor |" in markdown
     assert "| 2026-05 | available | $2,834 | $7,425 | $10,259 | - | $405 | $472 | conversion_risk | advisory |" in markdown
-    assert "| 2026-06 | available | $314 | $14,090 | $14,404 | - | $314 | $314 | conversion_risk | advisory |" in markdown
-    assert "| 2026-07 | available | $0 | $22,614 | $22,614 | - | - | - | protect_open_value | protect |" in markdown
+    assert "| 2026-06 | available | $314 | $14,090 | $14,404 | 3.3% | $314 | $314 | conversion_risk | advisory |" in markdown
+    assert "| 2026-07 | available | $0 | $22,614 | $22,614 | 0.0% | - | - | protect_open_value | protect |" in markdown
+    assert "| 2026-11 | available | $0 | $988 | $988 | - | - | - | partial_horizon | monitor |" in markdown
     assert "Partial horizon monitor note: 2026-11 is inside the export horizon only partially." in markdown
     assert "Historical occupancy is calculated from booked nights divided by calendar days." in markdown
+    assert "Future full-month occupancy is calculated from booked nights divided by days in scope." in markdown
+    assert "Current and partial horizon month occupancy is hidden to avoid misleading partial-month interpretation." in markdown
     assert "Airbnb revenue is not mixed into this report." in markdown
 
     prohibited = (

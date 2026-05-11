@@ -16,6 +16,23 @@ subject_prefix = ""
 # Attachments are disabled for V1.
 include_attachments = false
 
+[smtp]
+# SMTP sending is disabled in the example file.
+enabled = false
+
+# Gmail SMTP settings for future explicit send mode.
+host = "smtp.gmail.com"
+port = 587
+
+# Gmail account used for sending. recipient_email can be the same account if sending the report to yourself.
+sender_email = "your-email@gmail.com"
+
+# Store the Gmail App Password in this environment variable.
+# Never store the app password in this TOML file.
+password_env_var = "ALOHA_GMAIL_APP_PASSWORD"
+
+use_tls = true
+
 [report]
 # Points to the generated email_revenue_report_<run_date>.md file.
 source = "email_revenue_report"

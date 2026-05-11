@@ -227,6 +227,8 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
             "## Data Notes",
             "",
             "- Historical occupancy is calculated from booked nights divided by calendar days.",
+            "- Future full-month occupancy is calculated from booked nights divided by days in scope.",
+            "- Current and partial horizon month occupancy is hidden to avoid misleading partial-month interpretation.",
             "- Historical actuals come from PriceLabs KPI On The Books.",
             "- Airbnb revenue is not mixed into this report.",
             "- Market benchmark is context only.",

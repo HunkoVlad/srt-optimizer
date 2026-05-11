@@ -192,6 +192,13 @@ Invoke-PythonStep "Email draft file" @(
     "--output-file", $emailDraftFile
 )
 
+Invoke-PythonStep "Email send mode" @(
+    "-m", "pricelabs.transform.email_sender",
+    "--run-date", $RunDate,
+    "--report-file", $emailRevenueReportFile,
+    "--config-file", "config\email.toml"
+)
+
 Invoke-PythonStep "Future window summary" @(
     "-m", "pricelabs.transform.summarize_future",
     "--run-date", $RunDate,

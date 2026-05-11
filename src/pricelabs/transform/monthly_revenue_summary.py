@@ -15,6 +15,7 @@ REQUIRED_INPUT_COLUMNS = (
     "stay_month",
     "month_window_position",
     "data_availability",
+    "days_in_scope",
     "month_time_bucket",
     "month_scope_status",
     "booked_nights",
@@ -107,6 +108,16 @@ def divide_currency(numerator: str, denominator: str) -> str:
     return f"{sign}${abs(amount):,}"
 
 
+def divide_percent(numerator: str, denominator: str) -> str:
+    denominator_value = parse_decimal(denominator)
+    if denominator_value == 0:
+        return "-"
+    pct = (parse_decimal(numerator) / denominator_value * Decimal("100")).quantize(
+        Decimal("0.1"), rounding=ROUND_HALF_UP
+    )
+    return f"{pct}%"
+
+
 def historical_total_revenue(row: dict[str, str]) -> str:
     return row.get("historical_total_revenue", "")
 
@@ -150,6 +161,12 @@ def table_booked_nights(row: dict[str, str]) -> str:
 def table_occupancy(row: dict[str, str]) -> str:
     if row["data_availability"] == "historical_actuals":
         return format_percent_value(historical_occupancy(row))
+    if (
+        row["data_availability"] == "available"
+        and row["month_window_position"] == "future"
+        and row["month_scope_status"] == "full_month"
+    ):
+        return divide_percent(row.get("booked_nights", ""), row.get("days_in_scope", ""))
     return "-"
 
 
@@ -499,6 +516,8 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
             "- `historical_actuals` means the month was filled from PriceLabs KPI On The Books historical data.",
             "- `suspicious` means the historical KPI row passed through but has a data-quality warning, usually because the PriceLabs denominator looks unusual.",
             "- Historical occupancy is calculated from booked nights divided by calendar days in month for single-listing analysis.",
+            "- Future full-month occupancy is calculated from booked nights divided by days in scope.",
+            "- Current and partial horizon month occupancy is hidden to avoid misleading partial-month interpretation.",
             "- `partial_horizon` means only part of the month is inside the current future export window, so it is not judged against the full monthly target.",
             "- `inefficient` cleaning status means booked revenue per cleaning is below the current efficiency threshold.",
             "",

@@ -475,7 +475,6 @@ Rules:
 
 - This file is email-ready content only.
 - It must not send email.
-- It must not include SMTP, Gmail, or delivery logic.
 - It must not include manual date-level recommendations.
 - It must not include exact price recommendations.
 - It must keep Airbnb revenue separate unless a dedicated Airbnb field is added later.
@@ -486,9 +485,65 @@ Rules:
 
 Limits:
 
-- Step 16 is the final report content layer before future email delivery implementation.
-- It does not create email delivery automation.
+- Step 16 is the final report content layer before optional email delivery.
 - It does not modify metric calculations, recommendation logic, or window signals.
+
+## Email Draft And SMTP Send Step 19/21 Contract
+
+Generated outputs:
+
+```text
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.eml
+```
+
+Source:
+
+```text
+data/runs/<run_date>/analysis/email_revenue_report_<run_date>.md
+```
+
+Behavior:
+
+- The email report `.md` is always generated.
+- The local `.eml` draft file is always generated.
+- SMTP send mode is optional and explicit.
+- SMTP send mode must not change revenue calculations, recommendation logic, or window signals.
+
+Default development config:
+
+```toml
+[email]
+mode = "draft"
+
+[smtp]
+enabled = false
+```
+
+Real send requires both:
+
+```toml
+[email]
+mode = "send"
+
+[smtp]
+enabled = true
+```
+
+Credential rules:
+
+- Gmail App Password must be stored in environment variable `ALOHA_GMAIL_APP_PASSWORD`.
+- The environment variable name is configured by `[smtp].password_env_var`.
+- Passwords must not be stored in `config/email.toml`.
+- Passwords and real credentials must not be committed.
+- A persistent Windows user environment variable can be used for scheduled automation later.
+
+Failure behavior:
+
+- If `config/email.toml` is missing, send is skipped and `.eml` remains available.
+- If `[email].mode = "draft"`, send is skipped and `.eml` remains available.
+- If send mode is enabled and the password environment variable is missing, the pipeline fails clearly at `Email send mode`.
+- For development, switch back to draft mode to avoid sending test emails.
 
 ## Rolling 13-Month Revenue View Step 5 Contract
 

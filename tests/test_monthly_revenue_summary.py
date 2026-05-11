@@ -14,6 +14,7 @@ def monthly_row(
     open_ask: str = "",
     total_future_value: str = "",
     booked_nights: str = "",
+    days_in_scope: str = "",
     revenue_per_cleaning: str = "",
     booked_pct: str = "",
     total_pct: str = "",
@@ -33,6 +34,7 @@ def monthly_row(
         "stay_month": stay_month,
         "month_window_position": position,
         "data_availability": data,
+        "days_in_scope": days_in_scope,
         "month_time_bucket": bucket,
         "month_scope_status": scope,
         "booked_nights": booked_nights,
@@ -128,6 +130,7 @@ def sample_rows() -> list[dict[str, str]]:
                 "7425",
                 "10259",
                 "7",
+                "24",
                 "472.33",
                 "0.2834",
                 "1.0259",
@@ -145,6 +148,7 @@ def sample_rows() -> list[dict[str, str]]:
                 "14090",
                 "14404",
                 "1",
+                "30",
                 "314",
                 "0.0314",
                 "1.4404",
@@ -162,6 +166,7 @@ def sample_rows() -> list[dict[str, str]]:
                 "22614",
                 "22614",
                 "0",
+                "31",
                 "",
                 "0",
                 "2.2614",
@@ -179,6 +184,7 @@ def sample_rows() -> list[dict[str, str]]:
                 "23669",
                 "23669",
                 "0",
+                "31",
                 "",
                 "0",
                 "2.3669",
@@ -196,6 +202,7 @@ def sample_rows() -> list[dict[str, str]]:
                 "14672",
                 "14672",
                 "0",
+                "30",
                 "",
                 "0",
                 "1.4672",
@@ -213,6 +220,7 @@ def sample_rows() -> list[dict[str, str]]:
                 "12647",
                 "12647",
                 "0",
+                "31",
                 "",
                 "0",
                 "1.2647",
@@ -230,6 +238,7 @@ def sample_rows() -> list[dict[str, str]]:
                 "988",
                 "988",
                 "0",
+                "3",
                 "",
                 "0",
                 "0.0988",
@@ -273,6 +282,9 @@ def test_monthly_revenue_summary_markdown_content() -> None:
     assert "| 2026-02 | historical |  |  | historical_actuals | $9,511 | - | $9,511 | - | - | - | 19 | 38.0% |" not in markdown
     assert "| 2026-03 | historical |  |  | historical_actuals | $8,888 | - | $8,888 | - | - | - | 23 | 74.2% | $351 | - | historical_actuals |" in markdown
     assert "| 2026-05 | current | current_month | partial_month | available | $2,834 | $7,425 | $10,259 | $10,000 | 28.3% | 102.6% | 7 | - | $405 | $472 | conversion_risk |" in markdown
+    assert "| 2026-06 | future | next_month | full_month | available | $314 | $14,090 | $14,404 | $10,000 | 3.1% | 144.0% | 1 | 3.3% | $314 | $314 | conversion_risk |" in markdown
+    assert "| 2026-07 | future | future_month | full_month | available | $0 | $22,614 | $22,614 | $10,000 | 0.0% | 226.1% | 0 | 0.0% | - | - | protect_open_value |" in markdown
+    assert "| 2026-11 | future | far_future_month | partial_month | available | $0 | $988 | $988 | $10,000 | 0.0% | 9.9% | 0 | - | - | - | partial_horizon |" in markdown
     assert "| 2026-05 | current | current_month | partial_month | available |" in markdown
     assert "Current month 2026-05 revenue pace is conversion_risk." in markdown
     assert "Next month 2026-06 revenue pace is conversion_risk." in markdown
@@ -347,6 +359,8 @@ def test_monthly_revenue_summary_markdown_content() -> None:
     assert "`historical_actuals` means the month was filled from PriceLabs KPI On The Books historical data." in markdown
     assert "`suspicious` means the historical KPI row passed through but has a data-quality warning" in markdown
     assert "Historical occupancy is calculated from booked nights divided by calendar days in month" in markdown
+    assert "Future full-month occupancy is calculated from booked nights divided by days in scope." in markdown
+    assert "Current and partial horizon month occupancy is hidden to avoid misleading partial-month interpretation." in markdown
     assert "lower prices" not in markdown.lower()
     assert "match the 75th percentile" not in markdown.lower()
     assert "discount all open dates" not in markdown.lower()
