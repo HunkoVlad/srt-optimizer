@@ -3,6 +3,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from pricelabs.download import pricelabs_downloader
+
 
 def test_pricelabs_downloader_skeleton_creates_staging_and_log_only() -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -70,5 +74,88 @@ def test_pricelabs_downloader_skeleton_rejects_invalid_run_date() -> None:
         assert result.returncode != 0
         assert "Invalid run date. Expected YYYY-MM-DD." in result.stderr
         assert not run_dir.exists()
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_future_export_validation_passes_for_expected_columns(tmp_path: Path) -> None:
+    csv_path = tmp_path / "priceLabs_future_export.csv"
+    csv_path.write_text(
+        "Listing ID,Date,Recommended Price,Min Stay,Status\n"
+        "650255___717243,2026-05-14,425,2,Available\n",
+        encoding="utf-8",
+    )
+
+    pricelabs_downloader.validate_future_export_csv(csv_path)
+
+
+def test_future_export_validation_fails_for_empty_file(tmp_path: Path) -> None:
+    csv_path = tmp_path / "priceLabs_future_export.csv"
+    csv_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="empty"):
+        pricelabs_downloader.validate_future_export_csv(csv_path)
+
+
+def test_future_export_validation_fails_for_html_file(tmp_path: Path) -> None:
+    csv_path = tmp_path / "priceLabs_future_export.csv"
+    csv_path.write_text("<html><body>login</body></html>", encoding="utf-8")
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="HTML"):
+        pricelabs_downloader.validate_future_export_csv(csv_path)
+
+
+def test_future_export_validation_fails_when_key_columns_are_missing(tmp_path: Path) -> None:
+    csv_path = tmp_path / "priceLabs_future_export.csv"
+    csv_path.write_text(
+        "Listing ID,Date,Some Other Price\n"
+        "650255___717243,2026-05-14,425\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="missing expected columns"):
+        pricelabs_downloader.validate_future_export_csv(csv_path)
+
+
+def test_future_export_real_mode_uses_staging_only_with_mocked_download(monkeypatch) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-02"
+    run_dir = repo_root / "data" / "runs" / run_date
+    staging_file = run_dir / "downloads_staging" / "priceLabs_future_export.csv"
+    raw_dir = run_dir / "raw"
+    log_file = run_dir / "logs" / f"pricelabs_download_{run_date}.log"
+
+    shutil.rmtree(run_dir, ignore_errors=True)
+
+    def fake_download(staging_path: Path, *, headless: bool) -> None:
+        assert staging_path == staging_file
+        assert headless is True
+        staging_path.write_text(
+            "Listing ID,Date,Your Price,Min Stay,Available\n"
+            "650255___717243,2026-05-14,425,2,True\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        pricelabs_downloader,
+        "download_future_export_with_playwright",
+        fake_download,
+    )
+
+    try:
+        result_log = pricelabs_downloader.run(
+            run_date,
+            target="future-export",
+            headless=True,
+        )
+
+        assert result_log == log_file
+        assert staging_file.exists()
+        assert log_file.exists()
+        assert not raw_dir.exists()
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "target=future-export" in log_text
+        assert "validation_status=passed" in log_text
+        assert "Raw folder was not touched." in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
