@@ -282,7 +282,7 @@ Step 29 - Download one PriceLabs file safely.
 
 Step 29c update: the future export download should use the PriceLabs UI flow, not a direct download URL. The expected path is:
 
-1. Open `https://app.pricelabs.co/customizations`.
+1. Open `https://app.pricelabs.co/customization`.
 2. Let the user complete headed/manual login or MFA if needed.
 3. Find the Lodgify account row or card.
 4. Open its three-dot menu.

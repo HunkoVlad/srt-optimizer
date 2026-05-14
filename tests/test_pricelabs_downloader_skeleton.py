@@ -136,6 +136,7 @@ def test_future_export_real_mode_uses_staging_only_with_mocked_download(monkeypa
             "650255___717243,2026-05-14,425,2,True\n",
             encoding="utf-8",
         )
+        return "mocked-menu-strategy"
 
     monkeypatch.setattr(
         pricelabs_downloader,
@@ -158,6 +159,7 @@ def test_future_export_real_mode_uses_staging_only_with_mocked_download(monkeypa
         log_text = log_file.read_text(encoding="utf-8")
         assert "target=future-export" in log_text
         assert "validation_status=passed" in log_text
+        assert "menu_strategy=mocked-menu-strategy" in log_text
         assert "Raw folder was not touched." in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

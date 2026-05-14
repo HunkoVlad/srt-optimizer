@@ -28,7 +28,7 @@ PLACEHOLDER_STEPS = [
 
 FUTURE_EXPORT_FILENAME = "priceLabs_future_export.csv"
 FUTURE_EXPORT_TARGET = "future-export"
-PRICELABS_CUSTOMIZATIONS_URL = "https://app.pricelabs.co/customizations"
+PRICELABS_CUSTOMIZATION_URL = "https://app.pricelabs.co/customization"
 PRICELABS_ACCOUNT_LABEL = "Lodgify"
 FUTURE_EXPORT_MENU_ITEM = "Download CSV Prices"
 LOGIN_CHECKPOINT_MESSAGE = (
@@ -189,7 +189,7 @@ def download_future_export_with_playwright(
     *,
     headless: bool,
     skip_login_pause: bool = False,
-) -> None:
+) -> str:
     if headless and not skip_login_pause:
         raise DownloadError("Headless mode requires --skip-login-pause for future-export downloads.")
 
@@ -208,11 +208,20 @@ def download_future_export_with_playwright(
         context = browser.new_context(accept_downloads=True)
         page = context.new_page()
         try:
-            page.goto(PRICELABS_CUSTOMIZATIONS_URL, wait_until="domcontentloaded", timeout=120_000)
+            page.goto(PRICELABS_CUSTOMIZATION_URL, wait_until="domcontentloaded", timeout=120_000)
             wait_for_manual_login_checkpoint(skip_login_pause=skip_login_pause)
-            page.goto(PRICELABS_CUSTOMIZATIONS_URL, wait_until="domcontentloaded", timeout=120_000)
             page.wait_for_load_state("networkidle", timeout=120_000)
-            trigger_future_export_download(page)
+            validate_visible_customization_page(page)
+            if not headless:
+                debug_dom_path = dump_page_dom(page, staging_path.parent, "before_menu_lookup")
+                print(f"PriceLabs DOM debug dump written to: {debug_dom_path}")
+                print("Playwright paused before Lodgify menu lookup. Inspect the page, then resume.")
+                page.pause()
+            try:
+                menu_strategy = trigger_future_export_download(page)
+            except DownloadError as exc:
+                failure_dom_path = dump_page_dom(page, staging_path.parent, "menu_lookup_failed")
+                raise DownloadError(f"{exc} DOM dumped to {failure_dom_path}") from exc
             with page.expect_download(timeout=120_000) as download_info:
                 click_download_csv_prices(page)
             download = download_info.value
@@ -222,9 +231,43 @@ def download_future_export_with_playwright(
             browser.close()
 
     shutil.move(str(temp_download_path), staging_path)
+    return menu_strategy
 
 
-def trigger_future_export_download(page) -> None:
+def dump_page_dom(page, staging_dir: Path, label: str) -> Path:
+    """Write the current page DOM to staging for selector debugging."""
+
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    debug_path = staging_dir / f"pricelabs_customization_dom_{label}.html"
+    debug_path.write_text(page.content(), encoding="utf-8")
+    return debug_path
+
+
+def visible_body_text(page) -> str:
+    try:
+        return page.locator("body").inner_text(timeout=10_000)
+    except Exception:
+        return ""
+
+
+def validate_visible_customization_page(page) -> None:
+    body_text = visible_body_text(page)
+    normalized = " ".join(body_text.split()).lower()
+    current_url = getattr(page, "url", "")
+    if "404" in normalized and "this page could not be found" in normalized:
+        raise DownloadError(
+            "PriceLabs customization page is showing a 404. "
+            f"Current URL: {current_url}. Navigate manually to the working Customizations page, "
+            "then rerun or resume after the login checkpoint."
+        )
+    if "log in" in normalized and PRICELABS_ACCOUNT_LABEL.lower() not in normalized:
+        raise DownloadError(
+            "PriceLabs still appears to be on a login page after the manual checkpoint. "
+            "Complete login/MFA before pressing Enter."
+        )
+
+
+def trigger_future_export_download(page) -> str:
     """Open the Lodgify account menu that contains Download CSV Prices.
 
     PriceLabs UI details may change. This function keeps the assumptions in one
@@ -236,21 +279,30 @@ def trigger_future_export_download(page) -> None:
         account_label.wait_for(timeout=120_000)
     except Exception as exc:
         raise DownloadError(
-            "Could not find the Lodgify account on the PriceLabs customizations page. "
+            "Could not find the Lodgify account on the PriceLabs customization page. "
             "Complete manual login/MFA if prompted, then rerun; selector may also need review."
         ) from exc
 
-    menu_button = find_account_menu_button(account_label)
+    menu_button, strategy_name = find_account_menu_button(page, account_label)
     try:
         menu_button.click(timeout=30_000)
     except Exception as exc:
         raise DownloadError(
-            "Could not open the Lodgify three-dot menu. PriceLabs page layout may have changed."
+            "Could not open the Lodgify three-dot menu using "
+            f"strategy '{strategy_name}'. PriceLabs page layout may have changed."
         ) from exc
+    return strategy_name
 
 
-def find_account_menu_button(account_label):
+def find_account_menu_button(page, account_label):
     """Find a likely menu button near the account label."""
+
+    direct_account_menu = first_existing_locator(
+        page,
+        'button[qa-id="cust-account-list-context-menu-lodgify"]',
+    )
+    if direct_account_menu is not None:
+        return direct_account_menu, "account-context-menu-qa-id"
 
     container_selectors = [
         "xpath=ancestor::tr[1]",
@@ -258,30 +310,89 @@ def find_account_menu_button(account_label):
         "xpath=ancestor::*[contains(@class, 'row')][1]",
         "xpath=ancestor::div[1]",
     ]
-    button_selectors = [
-        "button[aria-label*='More' i]",
-        "button[aria-label*='Menu' i]",
-        "button[aria-label*='Options' i]",
-        "[role='button'][aria-label*='More' i]",
-        "[role='button'][aria-label*='Menu' i]",
-        "button:has-text('⋮')",
-        "button:has-text('...')",
-    ]
 
+    containers = []
     for container_selector in container_selectors:
         container = account_label.locator(container_selector)
-        for button_selector in button_selectors:
-            candidate = container.locator(button_selector).first
-            try:
-                if candidate.count() > 0:
-                    return candidate
-            except Exception:
-                continue
+        try:
+            if container.count() > 0:
+                containers.append(container)
+        except Exception:
+            continue
+
+    for container in containers:
+        candidate = first_existing_locator(container, "button.chakra-menu__menu-button")
+        if candidate is not None:
+            return candidate, "chakra-menu-button"
+
+    for container in containers:
+        candidate = first_existing_locator(container, 'button[id^="menu-button-"]')
+        if candidate is not None:
+            return candidate, "menu-button-id-prefix"
+
+    aria_or_title_selectors = [
+        "button[aria-label*='menu' i]",
+        "button[aria-label*='more' i]",
+        "button[aria-label*='options' i]",
+        "button[title*='menu' i]",
+        "button[title*='more' i]",
+        "button[title*='options' i]",
+        "[role='button'][aria-label*='menu' i]",
+        "[role='button'][aria-label*='more' i]",
+        "[role='button'][aria-label*='options' i]",
+        "[role='button'][title*='menu' i]",
+        "[role='button'][title*='more' i]",
+        "[role='button'][title*='options' i]",
+    ]
+    for container in containers:
+        for selector in aria_or_title_selectors:
+            candidate = first_existing_locator(container, selector)
+            if candidate is not None:
+                return candidate, f"aria-title-{selector}"
+
+    for container in containers:
+        candidate = last_visible_button(container)
+        if candidate is not None:
+            return candidate, "last-visible-button"
+
+    debug_candidate = page.locator('xpath=//*[@id="menu-button-:r2g:"]').first
+    try:
+        if debug_candidate.count() > 0:
+            return debug_candidate, "debug-menu-button-r2g"
+    except Exception:
+        pass
 
     raise DownloadError(
         "Could not locate a three-dot/menu button near the Lodgify account. "
         "Selector review is required."
     )
+
+
+def first_existing_locator(container, selector: str):
+    candidate = container.locator(selector).first
+    try:
+        if candidate.count() > 0:
+            return candidate
+    except Exception:
+        return None
+    return None
+
+
+def last_visible_button(container):
+    buttons = container.locator("button")
+    try:
+        count = buttons.count()
+    except Exception:
+        return None
+
+    for index in range(count - 1, -1, -1):
+        candidate = buttons.nth(index)
+        try:
+            if candidate.is_visible():
+                return candidate
+        except Exception:
+            continue
+    return None
 
 
 def click_download_csv_prices(page) -> None:
@@ -301,6 +412,7 @@ def real_download_log_lines(
     target: str,
     staging_path: Path,
     status: str,
+    menu_strategy: str | None = None,
     reason: str | None = None,
 ) -> list[str]:
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -314,6 +426,8 @@ def real_download_log_lines(
         "raw_touched=false",
         f"validation_status={status}",
     ]
+    if menu_strategy:
+        lines.append(f"menu_strategy={menu_strategy}")
     if reason:
         lines.append(f"failure_reason={reason}")
     return lines
@@ -329,7 +443,7 @@ def run_future_export_download(
     staging_path = staging_dir / FUTURE_EXPORT_FILENAME
 
     try:
-        download_future_export_with_playwright(
+        menu_strategy = download_future_export_with_playwright(
             staging_path,
             headless=headless,
             skip_login_pause=skip_login_pause,
@@ -355,6 +469,7 @@ def run_future_export_download(
             target=FUTURE_EXPORT_TARGET,
             staging_path=staging_path,
             status="passed",
+            menu_strategy=menu_strategy,
         )
         + ["Future export downloaded and validated in staging.", "Raw folder was not touched."],
     )
