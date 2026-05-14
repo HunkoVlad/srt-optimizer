@@ -127,9 +127,10 @@ def test_future_export_real_mode_uses_staging_only_with_mocked_download(monkeypa
 
     shutil.rmtree(run_dir, ignore_errors=True)
 
-    def fake_download(staging_path: Path, *, headless: bool) -> None:
+    def fake_download(staging_path: Path, *, headless: bool, skip_login_pause: bool = False) -> None:
         assert staging_path == staging_file
         assert headless is True
+        assert skip_login_pause is True
         staging_path.write_text(
             "Listing ID,Date,Your Price,Min Stay,Available\n"
             "650255___717243,2026-05-14,425,2,True\n",
@@ -147,6 +148,7 @@ def test_future_export_real_mode_uses_staging_only_with_mocked_download(monkeypa
             run_date,
             target="future-export",
             headless=True,
+            skip_login_pause=True,
         )
 
         assert result_log == log_file
@@ -159,3 +161,22 @@ def test_future_export_real_mode_uses_staging_only_with_mocked_download(monkeypa
         assert "Raw folder was not touched." in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_manual_login_checkpoint_prints_instruction_and_waits_for_enter(monkeypatch, capsys) -> None:
+    entered = False
+
+    def fake_input() -> str:
+        nonlocal entered
+        entered = True
+        return ""
+
+    monkeypatch.setattr("builtins.input", fake_input)
+
+    pricelabs_downloader.wait_for_manual_login_checkpoint(skip_login_pause=False)
+
+    captured = capsys.readouterr()
+    assert entered is True
+    assert "Please log in to PriceLabs manually" in captured.out
+    assert "Complete MFA if required" in captured.out
+    assert "press Enter" in captured.out

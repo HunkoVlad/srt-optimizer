@@ -280,6 +280,18 @@ Step 28 - Playwright downloader skeleton.
 
 Step 29 - Download one PriceLabs file safely.
 
+Step 29c update: the future export download should use the PriceLabs UI flow, not a direct download URL. The expected path is:
+
+1. Open `https://app.pricelabs.co/customizations`.
+2. Let the user complete headed/manual login or MFA if needed.
+3. Find the Lodgify account row or card.
+4. Open its three-dot menu.
+5. Click `Download CSV Prices`.
+6. Capture the browser download into staging as `priceLabs_future_export.csv`.
+7. Validate the staged CSV.
+
+Do not depend on a direct `PRICELABS_FUTURE_EXPORT_URL` for the normal workflow.
+
 Step 30 - Add all required downloads.
 
 Step 31 - Add staging validation and promote-to-raw.

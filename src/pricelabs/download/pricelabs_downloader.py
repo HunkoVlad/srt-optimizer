@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import os
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -29,7 +28,13 @@ PLACEHOLDER_STEPS = [
 
 FUTURE_EXPORT_FILENAME = "priceLabs_future_export.csv"
 FUTURE_EXPORT_TARGET = "future-export"
-PRICELABS_FUTURE_EXPORT_URL_ENV = "PRICELABS_FUTURE_EXPORT_URL"
+PRICELABS_CUSTOMIZATIONS_URL = "https://app.pricelabs.co/customizations"
+PRICELABS_ACCOUNT_LABEL = "Lodgify"
+FUTURE_EXPORT_MENU_ITEM = "Download CSV Prices"
+LOGIN_CHECKPOINT_MESSAGE = (
+    "Please log in to PriceLabs manually in the opened browser. Complete MFA if required. "
+    "When you see the Customizations page, return to this terminal and press Enter."
+)
 
 
 class DownloadError(RuntimeError):
@@ -59,6 +64,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--headless",
         action="store_true",
         help="Run browser headless in real download mode. Default is headed for manual login/MFA.",
+    )
+    parser.add_argument(
+        "--skip-login-pause",
+        action="store_true",
+        help="Developer-only option to skip the manual login checkpoint.",
     )
     args = parser.parse_args(argv)
     validate_run_date(args.run_date, parser)
@@ -167,12 +177,21 @@ def validate_future_export_csv(csv_path: Path) -> None:
         raise DownloadError(f"Future export missing expected columns: {missing}")
 
 
-def download_future_export_with_playwright(staging_path: Path, *, headless: bool) -> None:
-    download_url = os.environ.get(PRICELABS_FUTURE_EXPORT_URL_ENV)
-    if not download_url:
-        raise DownloadError(
-            f"{PRICELABS_FUTURE_EXPORT_URL_ENV} is required for future-export download mode."
-        )
+def wait_for_manual_login_checkpoint(*, skip_login_pause: bool) -> None:
+    if skip_login_pause:
+        return
+    print(LOGIN_CHECKPOINT_MESSAGE)
+    input()
+
+
+def download_future_export_with_playwright(
+    staging_path: Path,
+    *,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> None:
+    if headless and not skip_login_pause:
+        raise DownloadError("Headless mode requires --skip-login-pause for future-export downloads.")
 
     try:
         from playwright.sync_api import sync_playwright
@@ -189,8 +208,13 @@ def download_future_export_with_playwright(staging_path: Path, *, headless: bool
         context = browser.new_context(accept_downloads=True)
         page = context.new_page()
         try:
+            page.goto(PRICELABS_CUSTOMIZATIONS_URL, wait_until="domcontentloaded", timeout=120_000)
+            wait_for_manual_login_checkpoint(skip_login_pause=skip_login_pause)
+            page.goto(PRICELABS_CUSTOMIZATIONS_URL, wait_until="domcontentloaded", timeout=120_000)
+            page.wait_for_load_state("networkidle", timeout=120_000)
+            trigger_future_export_download(page)
             with page.expect_download(timeout=120_000) as download_info:
-                page.goto(download_url, wait_until="domcontentloaded", timeout=120_000)
+                click_download_csv_prices(page)
             download = download_info.value
             download.save_as(temp_download_path)
         finally:
@@ -198,6 +222,77 @@ def download_future_export_with_playwright(staging_path: Path, *, headless: bool
             browser.close()
 
     shutil.move(str(temp_download_path), staging_path)
+
+
+def trigger_future_export_download(page) -> None:
+    """Open the Lodgify account menu that contains Download CSV Prices.
+
+    PriceLabs UI details may change. This function keeps the assumptions in one
+    place so future selector fixes do not affect validation or staging behavior.
+    """
+
+    account_label = page.get_by_text(PRICELABS_ACCOUNT_LABEL, exact=False).first
+    try:
+        account_label.wait_for(timeout=120_000)
+    except Exception as exc:
+        raise DownloadError(
+            "Could not find the Lodgify account on the PriceLabs customizations page. "
+            "Complete manual login/MFA if prompted, then rerun; selector may also need review."
+        ) from exc
+
+    menu_button = find_account_menu_button(account_label)
+    try:
+        menu_button.click(timeout=30_000)
+    except Exception as exc:
+        raise DownloadError(
+            "Could not open the Lodgify three-dot menu. PriceLabs page layout may have changed."
+        ) from exc
+
+
+def find_account_menu_button(account_label):
+    """Find a likely menu button near the account label."""
+
+    container_selectors = [
+        "xpath=ancestor::tr[1]",
+        "xpath=ancestor::*[contains(@class, 'card')][1]",
+        "xpath=ancestor::*[contains(@class, 'row')][1]",
+        "xpath=ancestor::div[1]",
+    ]
+    button_selectors = [
+        "button[aria-label*='More' i]",
+        "button[aria-label*='Menu' i]",
+        "button[aria-label*='Options' i]",
+        "[role='button'][aria-label*='More' i]",
+        "[role='button'][aria-label*='Menu' i]",
+        "button:has-text('⋮')",
+        "button:has-text('...')",
+    ]
+
+    for container_selector in container_selectors:
+        container = account_label.locator(container_selector)
+        for button_selector in button_selectors:
+            candidate = container.locator(button_selector).first
+            try:
+                if candidate.count() > 0:
+                    return candidate
+            except Exception:
+                continue
+
+    raise DownloadError(
+        "Could not locate a three-dot/menu button near the Lodgify account. "
+        "Selector review is required."
+    )
+
+
+def click_download_csv_prices(page) -> None:
+    menu_item = page.get_by_text(FUTURE_EXPORT_MENU_ITEM, exact=True).first
+    try:
+        menu_item.wait_for(timeout=30_000)
+        menu_item.click(timeout=30_000)
+    except Exception as exc:
+        raise DownloadError(
+            "Could not click 'Download CSV Prices'. PriceLabs menu text or layout may have changed."
+        ) from exc
 
 
 def real_download_log_lines(
@@ -215,6 +310,7 @@ def real_download_log_lines(
         f"target={target}",
         "mode=real download",
         f"staging_path={staging_path}",
+        "auth_checkpoint=manual login/MFA checkpoint before download",
         "raw_touched=false",
         f"validation_status={status}",
     ]
@@ -223,12 +319,21 @@ def real_download_log_lines(
     return lines
 
 
-def run_future_export_download(run_date: str, *, headless: bool) -> Path:
+def run_future_export_download(
+    run_date: str,
+    *,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> Path:
     _, staging_dir, _, log_file = get_run_paths(run_date)
     staging_path = staging_dir / FUTURE_EXPORT_FILENAME
 
     try:
-        download_future_export_with_playwright(staging_path, headless=headless)
+        download_future_export_with_playwright(
+            staging_path,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
         validate_future_export_csv(staging_path)
     except DownloadError as exc:
         write_log(
@@ -256,11 +361,22 @@ def run_future_export_download(run_date: str, *, headless: bool) -> Path:
     return log_file
 
 
-def run(run_date: str, *, target: str | None = None, dry_run: bool = False, headless: bool = False) -> Path:
+def run(
+    run_date: str,
+    *,
+    target: str | None = None,
+    dry_run: bool = False,
+    headless: bool = False,
+    skip_login_pause: bool = False,
+) -> Path:
     if dry_run or target is None:
         return run_skeleton(run_date)
     if target == FUTURE_EXPORT_TARGET:
-        return run_future_export_download(run_date, headless=headless)
+        return run_future_export_download(
+            run_date,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
     raise DownloadError(f"Unsupported download target: {target}")
 
 
@@ -272,6 +388,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             target=args.target,
             dry_run=args.dry_run,
             headless=args.headless,
+            skip_login_pause=args.skip_login_pause,
         )
     except DownloadError as exc:
         print(f"PriceLabs downloader failed: {exc}", file=sys.stderr)
