@@ -43,6 +43,26 @@ OUTPUT_COLUMNS = (
     "revenue_per_cleaning_proxy",
     "booked_revenue_pct_of_target",
     "total_future_revenue_pct_of_target",
+    "monthly_trends_revenue",
+    "monthly_trends_occupancy_pct",
+    "monthly_trends_booked_occupancy_pct",
+    "monthly_trends_blocked_occupancy_pct",
+    "monthly_trends_adr",
+    "monthly_trends_source",
+    "bookings_report_bookings",
+    "bookings_report_cleanings_proxy",
+    "bookings_report_booked_nights",
+    "bookings_report_avg_los",
+    "bookings_report_rental_revenue",
+    "bookings_report_total_revenue",
+    "bookings_report_adr",
+    "bookings_report_avg_booking_window",
+    "airbnb_stays",
+    "vrbo_stays",
+    "direct_stays",
+    "other_unknown_stays",
+    "main_booking_source",
+    "booking_source_mix_summary",
     "revenue_pace_status",
     "cleaning_efficiency_status",
     "month_action_level",
@@ -62,6 +82,8 @@ def parse_args() -> argparse.Namespace:
         "--output-file",
         help="Monthly revenue pace CSV. Defaults to analysis/monthly_revenue_pace_<run-date>.csv.",
     )
+    parser.add_argument("--monthly-trends-file", help="Optional normalized Monthly Trends CSV.")
+    parser.add_argument("--booking-metrics-file", help="Optional monthly booking metrics CSV.")
     return parser.parse_args()
 
 
@@ -79,6 +101,14 @@ def read_enriched_rows(path: Path) -> list[dict[str, str]]:
     with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
         reader = csv.DictReader(csv_file)
         require_columns(reader.fieldnames)
+        return [{key: value or "" for key, value in row.items()} for row in reader]
+
+
+def read_optional_rows(path: Path | None) -> list[dict[str, str]]:
+    if path is None or not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        reader = csv.DictReader(csv_file)
         return [{key: value or "" for key, value in row.items()} for row in reader]
 
 
@@ -178,7 +208,11 @@ def month_action_level(revenue_status: str, cleaning_status: str) -> str:
     return "monitor"
 
 
-def summarize_monthly(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+def summarize_monthly(
+    rows: list[dict[str, str]],
+    monthly_trends_rows: list[dict[str, str]] | None = None,
+    booking_metric_rows: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
     groups: dict[tuple[str, str, str], dict[str, Decimal | int | str]] = defaultdict(
         lambda: {
             "days_in_scope": 0,
@@ -215,23 +249,54 @@ def summarize_monthly(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             parse_decimal(row["booked_stay_start_proxy"])
         )
 
+    trends_by_month = {row.get("month", "").strip(): row for row in monthly_trends_rows or []}
+    bookings_by_month = {row.get("month", "").strip(): row for row in booking_metric_rows or []}
+    keys = set(groups)
+    listing_ids = {key[1] for key in keys if key[1]}
+    listing_id_fallback = next(iter(listing_ids)) if len(listing_ids) == 1 else ""
+    run_dates = {key[0] for key in keys if key[0]}
+    run_date_fallback = next(iter(run_dates)) if len(run_dates) == 1 else ""
+    for trend in monthly_trends_rows or []:
+        month = trend.get("month", "").strip()
+        if month:
+            keys.add((trend.get("run_date", run_date_fallback).strip(), listing_id_fallback, month))
+
     output_rows: list[dict[str, str]] = []
-    for run_date, listing_id, stay_month in sorted(groups):
-        group = groups[(run_date, listing_id, stay_month)]
+    for run_date, listing_id, stay_month in sorted(keys):
+        group = groups.get(
+            (run_date, listing_id, stay_month),
+            {
+                "days_in_scope": 0,
+                "booked_nights": 0,
+                "available_nights": 0,
+                "unavailable_nights": 0,
+                "booked_revenue_proxy": ZERO,
+                "open_revenue_ask": ZERO,
+                "booked_cleanings_proxy": 0,
+            },
+        )
         stay_year, stay_month_number = (int(part) for part in stay_month.split("-"))
         days_in_scope = int(group["days_in_scope"])
         days_in_month = calendar.monthrange(stay_year, stay_month_number)[1]
         month_scope_status = "full_month" if days_in_scope == days_in_month else "partial_month"
         booked_nights = int(group["booked_nights"])
-        booked_revenue = Decimal(group["booked_revenue_proxy"])
+        future_booked_revenue = Decimal(group["booked_revenue_proxy"])
         open_revenue = Decimal(group["open_revenue_ask"])
+        trend = trends_by_month.get(stay_month, {})
+        booking_metrics = bookings_by_month.get(stay_month, {})
+        monthly_trends_revenue = parse_decimal(trend.get("monthly_trends_revenue", ""))
+        has_monthly_trends_revenue = trend.get("monthly_trends_revenue", "").strip() != ""
+        booked_revenue = monthly_trends_revenue if has_monthly_trends_revenue else future_booked_revenue
         total_future_revenue = booked_revenue + open_revenue
-        booked_cleanings = int(group["booked_cleanings_proxy"])
+        booking_cleanings_value = booking_metrics.get("bookings_report_cleanings_proxy", "").strip()
+        booked_cleanings = int(parse_decimal(booking_cleanings_value)) if booking_cleanings_value else int(group["booked_cleanings_proxy"])
+        if booking_metrics.get("bookings_report_booked_nights", "").strip():
+            booked_nights = int(parse_decimal(booking_metrics["bookings_report_booked_nights"]))
 
         avg_stay_length = None
         revenue_per_cleaning = None
         if booked_cleanings > 0:
-            avg_stay_length = Decimal(booked_nights) / Decimal(booked_cleanings)
+            avg_stay_length = parse_decimal(booking_metrics.get("bookings_report_avg_los", "")) or Decimal(booked_nights) / Decimal(booked_cleanings)
             revenue_per_cleaning = booked_revenue / Decimal(booked_cleanings)
 
         booked_pct = booked_revenue / MONTHLY_TARGET
@@ -268,6 +333,26 @@ def summarize_monthly(rows: list[dict[str, str]]) -> list[dict[str, str]]:
                 "revenue_per_cleaning_proxy": decimal_for_output(revenue_per_cleaning),
                 "booked_revenue_pct_of_target": ratio_for_output(booked_revenue, MONTHLY_TARGET),
                 "total_future_revenue_pct_of_target": ratio_for_output(total_future_revenue, MONTHLY_TARGET),
+                "monthly_trends_revenue": trend.get("monthly_trends_revenue", ""),
+                "monthly_trends_occupancy_pct": trend.get("monthly_trends_occupancy_pct", ""),
+                "monthly_trends_booked_occupancy_pct": trend.get("monthly_trends_booked_occupancy_pct", ""),
+                "monthly_trends_blocked_occupancy_pct": trend.get("monthly_trends_blocked_occupancy_pct", ""),
+                "monthly_trends_adr": trend.get("monthly_trends_adr", ""),
+                "monthly_trends_source": trend.get("monthly_trends_source", ""),
+                "bookings_report_bookings": booking_metrics.get("bookings_report_bookings", ""),
+                "bookings_report_cleanings_proxy": booking_metrics.get("bookings_report_cleanings_proxy", ""),
+                "bookings_report_booked_nights": booking_metrics.get("bookings_report_booked_nights", ""),
+                "bookings_report_avg_los": booking_metrics.get("bookings_report_avg_los", ""),
+                "bookings_report_rental_revenue": booking_metrics.get("bookings_report_rental_revenue", ""),
+                "bookings_report_total_revenue": booking_metrics.get("bookings_report_total_revenue", ""),
+                "bookings_report_adr": booking_metrics.get("bookings_report_adr", ""),
+                "bookings_report_avg_booking_window": booking_metrics.get("bookings_report_avg_booking_window", ""),
+                "airbnb_stays": booking_metrics.get("airbnb_stays", ""),
+                "vrbo_stays": booking_metrics.get("vrbo_stays", ""),
+                "direct_stays": booking_metrics.get("direct_stays", ""),
+                "other_unknown_stays": booking_metrics.get("other_unknown_stays", ""),
+                "main_booking_source": booking_metrics.get("main_booking_source", ""),
+                "booking_source_mix_summary": booking_metrics.get("booking_source_mix_summary", ""),
                 "revenue_pace_status": pace_status,
                 "cleaning_efficiency_status": cleaning_status,
                 "month_action_level": action_level,
@@ -291,7 +376,9 @@ def run() -> int:
     output_path = Path(args.output_file or f"analysis/monthly_revenue_pace_{args.run_date}.csv")
 
     rows = read_enriched_rows(enriched_path)
-    summary_rows = summarize_monthly(rows)
+    monthly_trends_rows = read_optional_rows(Path(args.monthly_trends_file)) if args.monthly_trends_file else []
+    booking_metric_rows = read_optional_rows(Path(args.booking_metrics_file)) if args.booking_metrics_file else []
+    summary_rows = summarize_monthly(rows, monthly_trends_rows, booking_metric_rows)
     write_summary(output_path, summary_rows)
     print(f"Wrote {output_path}")
     return 0

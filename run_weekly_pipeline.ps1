@@ -28,10 +28,12 @@ foreach ($dir in @($rawDir, $standardizedDir, $analysisDir, $settingsDir)) {
 $futureExport = Join-Path $rawDir "priceLabs_future_export.csv"
 $priceOcc = Join-Path $rawDir "price_occ.csv"
 $settingsInput = Join-Path $rawDir "pricelabs_settings_manual_input.json"
+$monthlyTrends = Join-Path $rawDir "monthly_trends.csv"
+$bookingsReport = Join-Path $rawDir "bookings_report.xlsx"
 $kpisOnTheBooks = Join-Path $rawDir "kpis_on_the_books.xlsx"
 
 $missingInputs = @()
-foreach ($path in @($futureExport, $priceOcc, $settingsInput)) {
+foreach ($path in @($futureExport, $priceOcc, $settingsInput, $monthlyTrends, $bookingsReport)) {
     if (-not (Test-Path $path)) {
         $missingInputs += $path
     }
@@ -97,6 +99,9 @@ $listingId = [string]$settings.listing_id
 $standardizedFile = Join-Path $standardizedDir "future_daily_pricing_$RunDate.csv"
 $manifestFile = Join-Path $runRoot "manifest.json"
 $enrichedFile = Join-Path $analysisDir "future_daily_pricing_enriched_$RunDate.csv"
+$monthlyTrendsNormalizedFile = Join-Path $analysisDir "monthly_trends_normalized_$RunDate.csv"
+$bookingsReportNormalizedFile = Join-Path $analysisDir "bookings_report_normalized_$RunDate.csv"
+$monthlyBookingMetricsFile = Join-Path $analysisDir "monthly_booking_metrics_$RunDate.csv"
 $monthlyRevenuePaceFile = Join-Path $analysisDir "monthly_revenue_pace_$RunDate.csv"
 $historicalMonthlyActualsFile = Join-Path $analysisDir "historical_monthly_actuals_$RunDate.csv"
 $rollingRevenueViewFile = Join-Path $analysisDir "rolling_13_month_revenue_view_$RunDate.csv"
@@ -134,10 +139,27 @@ Invoke-PythonStep "Future enrichment" @(
     "--output-file", $enrichedFile
 )
 
+Invoke-PythonStep "Monthly Trends normalization" @(
+    "-m", "pricelabs.transform.monthly_trends",
+    "--run-date", $RunDate,
+    "--input-file", $monthlyTrends,
+    "--output-file", $monthlyTrendsNormalizedFile
+)
+
+Invoke-PythonStep "Bookings Report normalization" @(
+    "-m", "pricelabs.transform.bookings_report",
+    "--run-date", $RunDate,
+    "--input-file", $bookingsReport,
+    "--normalized-output-file", $bookingsReportNormalizedFile,
+    "--metrics-output-file", $monthlyBookingMetricsFile
+)
+
 Invoke-PythonStep "Monthly revenue pace" @(
     "-m", "pricelabs.transform.monthly_revenue_pace",
     "--run-date", $RunDate,
     "--enriched-file", $enrichedFile,
+    "--monthly-trends-file", $monthlyTrendsNormalizedFile,
+    "--booking-metrics-file", $monthlyBookingMetricsFile,
     "--output-file", $monthlyRevenuePaceFile
 )
 

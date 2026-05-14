@@ -29,6 +29,26 @@ METRIC_COLUMNS = (
     "revenue_per_cleaning_proxy",
     "booked_revenue_pct_of_target",
     "total_future_revenue_pct_of_target",
+    "monthly_trends_revenue",
+    "monthly_trends_occupancy_pct",
+    "monthly_trends_booked_occupancy_pct",
+    "monthly_trends_blocked_occupancy_pct",
+    "monthly_trends_adr",
+    "monthly_trends_source",
+    "bookings_report_bookings",
+    "bookings_report_cleanings_proxy",
+    "bookings_report_booked_nights",
+    "bookings_report_avg_los",
+    "bookings_report_rental_revenue",
+    "bookings_report_total_revenue",
+    "bookings_report_adr",
+    "bookings_report_avg_booking_window",
+    "airbnb_stays",
+    "vrbo_stays",
+    "direct_stays",
+    "other_unknown_stays",
+    "main_booking_source",
+    "booking_source_mix_summary",
     "month_time_bucket",
     "revenue_pace_status",
     "cleaning_efficiency_status",
@@ -37,6 +57,9 @@ METRIC_COLUMNS = (
 HISTORICAL_COLUMNS = (
     "historical_bookable_nights",
     "historical_booked_nights",
+    "historical_booked_nights_source",
+    "historical_cleanings_proxy",
+    "historical_cleanings_source",
     "historical_paid_occupancy_pct",
     "historical_occupancy_pct",
     "historical_calendar_occupancy_pct",
@@ -128,6 +151,40 @@ def month_window_position(offset: int) -> str:
     return "future"
 
 
+def monthly_trends_values_are_valid(source_row: dict[str, str] | None) -> bool:
+    if source_row is None:
+        return False
+    revenue = parse_decimal(source_row.get("monthly_trends_revenue", ""))
+    occupancy = parse_decimal(source_row.get("monthly_trends_occupancy_pct", ""))
+    adr = parse_decimal(source_row.get("monthly_trends_adr", ""))
+    exact_cleanings = parse_decimal(source_row.get("bookings_report_cleanings_proxy", ""))
+    if revenue is None or occupancy is None or adr is None:
+        return False
+    if revenue <= 0 or occupancy <= 0 or adr <= 0:
+        return False
+    if revenue < Decimal("1000") and (exact_cleanings is None or exact_cleanings <= 0):
+        return False
+    return True
+
+
+def source_label(source_row: dict[str, str] | None, offset: int) -> str:
+    if source_row is None:
+        return "data_not_available" if offset < 0 else "no_source_data"
+    if source_row.get("monthly_trends_revenue", "").strip():
+        if offset < 0 and not monthly_trends_values_are_valid(source_row):
+            return "data_not_available"
+        if offset < 0:
+            return "monthly_trends_actuals"
+        if offset == 0:
+            return "monthly_trends_current"
+        return "monthly_trends_future_on_books"
+    if offset < 0:
+        return "data_not_available"
+    if source_row.get("revenue_pace_status", "").strip() == "partial_horizon":
+        return "partial_horizon"
+    return "future_calendar"
+
+
 def parse_decimal(value: str) -> Decimal | None:
     stripped = value.strip()
     if not stripped:
@@ -174,6 +231,88 @@ def calendar_days_for_stay_month(stay_month: str) -> str:
     return str(calendar.monthrange(year, month)[1])
 
 
+def decimal_for_output(value: Decimal | None) -> str:
+    if value is None:
+        return ""
+    rounded = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if rounded == rounded.to_integral():
+        return str(rounded.to_integral())
+    return str(rounded)
+
+
+def observed_avg_los(rows: list[dict[str, str]], run_date: str) -> Decimal | None:
+    total_nights = Decimal("0")
+    total_bookings = Decimal("0")
+    for row in rows:
+        if month_window_position_for_stay_month(row.get("stay_month", ""), run_date) == "historical":
+            continue
+        nights = parse_decimal(row.get("bookings_report_booked_nights", ""))
+        bookings = parse_decimal(row.get("bookings_report_cleanings_proxy", ""))
+        if nights is not None and bookings is not None and bookings > 0:
+            total_nights += nights
+            total_bookings += bookings
+    if total_bookings == 0:
+        return None
+    return total_nights / total_bookings
+
+
+def month_window_position_for_stay_month(stay_month: str, run_date: str) -> str:
+    if not stay_month:
+        return ""
+    run_month = date.fromisoformat(run_date).replace(day=1)
+    stay_year, stay_month_number = (int(part) for part in stay_month.split("-"))
+    month_delta = (stay_year - run_month.year) * 12 + (stay_month_number - run_month.month)
+    return month_window_position(month_delta)
+
+
+def apply_data_not_available(row: dict[str, str]) -> None:
+    row["data_availability"] = "data_not_available"
+    row["revenue_pace_status"] = "data_not_available"
+    row["cleaning_efficiency_status"] = "data_not_available"
+    row["month_action_level"] = "monitor"
+    row["historical_data_quality_flag"] = "data_not_available"
+    row["historical_booked_nights"] = ""
+    row["historical_booked_nights_source"] = "data_not_available"
+    row["historical_cleanings_proxy"] = ""
+    row["historical_cleanings_source"] = "data_not_available"
+    row["historical_calendar_occupancy_pct"] = ""
+    row["historical_rental_adr"] = ""
+    row["historical_total_revenue"] = ""
+    row["historical_source"] = ""
+
+
+def apply_monthly_trends_actuals(row: dict[str, str], avg_los: Decimal | None) -> None:
+    revenue = parse_decimal(row.get("monthly_trends_revenue", ""))
+    adr = parse_decimal(row.get("monthly_trends_adr", ""))
+
+    row["historical_total_revenue"] = row.get("monthly_trends_revenue", "")
+    row["historical_calendar_occupancy_pct"] = row.get("monthly_trends_occupancy_pct", "")
+    row["historical_rental_adr"] = row.get("monthly_trends_adr", "")
+    row["historical_source"] = row.get("monthly_trends_source", "")
+    row["historical_data_quality_flag"] = "ok"
+    row["cleaning_efficiency_status"] = "historical_actuals"
+
+    if revenue is not None and adr is not None and adr > 0:
+        booked_nights = (revenue / adr).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        row["historical_booked_nights_source"] = "estimated_from_monthly_trends"
+    else:
+        booked_nights = None
+        row["historical_booked_nights_source"] = "data_not_available"
+
+    row["historical_booked_nights"] = decimal_for_output(booked_nights)
+
+    if booked_nights is not None and avg_los is not None and avg_los > 0:
+        cleanings = (booked_nights / avg_los).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        row["historical_cleanings_source"] = "estimated_from_monthly_trends"
+    else:
+        cleanings = None
+        row["historical_cleanings_source"] = "data_not_available"
+
+    row["historical_cleanings_proxy"] = decimal_for_output(cleanings)
+    if cleanings is not None and cleanings > 0 and revenue is not None:
+        row["revenue_per_cleaning_proxy"] = decimal_for_output(revenue / cleanings)
+
+
 def merge_historical_actuals(
     rolling_rows: list[dict[str, str]],
     historical_rows: list[dict[str, str]],
@@ -185,6 +324,8 @@ def merge_historical_actuals(
 
         if row["month_window_position"] != "historical" and int(row["month_relative_index"]) >= 0:
             row["historical_data_quality_flag"] = ""
+            continue
+        if row["data_availability"] in {"monthly_trends_actuals", "data_not_available"}:
             continue
 
         historical_row = historical_by_month.get(row["stay_month"])
@@ -224,18 +365,39 @@ def build_rolling_rows(
             "stay_month": stay_month,
             "month_relative_index": str(offset),
             "month_window_position": month_window_position(offset),
-            "data_availability": "available" if source_row else "no_source_data",
+            "data_availability": source_label(source_row, offset),
         }
         for column in METRIC_COLUMNS:
             output_row[column] = source_row.get(column, "") if source_row else ""
         if source_row is None:
-            output_row["revenue_pace_status"] = "no_source_data"
+            if offset < 0:
+                output_row["month_time_bucket"] = "historical_month"
+                output_row["days_in_month"] = calendar_days_for_stay_month(stay_month)
+                output_row["revenue_pace_status"] = "data_not_available"
+                output_row["cleaning_efficiency_status"] = "data_not_available"
+            else:
+                output_row["revenue_pace_status"] = "no_source_data"
             output_row["month_action_level"] = "monitor"
+        elif offset < 0:
+            output_row["month_time_bucket"] = "historical_month"
+            if output_row["data_availability"] == "monthly_trends_actuals":
+                output_row["revenue_pace_status"] = "historical_actuals"
+                output_row["month_action_level"] = "monitor"
+            elif output_row["data_availability"] == "data_not_available":
+                output_row["revenue_pace_status"] = "data_not_available"
+                output_row["cleaning_efficiency_status"] = "data_not_available"
+                output_row["month_action_level"] = "monitor"
         rolling_rows.append(output_row)
 
     if len(rolling_rows) != 13:
         raise ValueError("Rolling revenue view must contain exactly 13 rows")
     merge_historical_actuals(rolling_rows, historical_rows or [])
+    avg_los = observed_avg_los(rows, run_date)
+    for row in rolling_rows:
+        if row["data_availability"] == "monthly_trends_actuals" and row.get("monthly_trends_revenue", "").strip():
+            apply_monthly_trends_actuals(row, avg_los)
+        elif row["data_availability"] == "data_not_available":
+            apply_data_not_available(row)
     return rolling_rows
 
 

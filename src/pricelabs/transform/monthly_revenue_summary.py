@@ -30,6 +30,22 @@ REQUIRED_INPUT_COLUMNS = (
     "cleaning_efficiency_status",
     "month_action_level",
 )
+ACTION_DATA_LABELS = {
+    "monthly_trends_current",
+    "monthly_trends_future_on_books",
+    "future_calendar",
+    "partial_horizon",
+}
+HISTORICAL_DATA_LABELS = {"monthly_trends_actuals", "historical_actuals"}
+NO_DATA_LABELS = {"no_source_data", "data_not_available"}
+
+
+def is_actionable_row(row: dict[str, str]) -> bool:
+    return row["data_availability"] in ACTION_DATA_LABELS
+
+
+def is_historical_actual_row(row: dict[str, str]) -> bool:
+    return row["data_availability"] in HISTORICAL_DATA_LABELS
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,34 +151,52 @@ def historical_occupancy(row: dict[str, str]) -> str:
 
 
 def table_booked_revenue(row: dict[str, str]) -> str:
-    if row["data_availability"] == "historical_actuals":
+    if row["data_availability"] in NO_DATA_LABELS:
+        return "-"
+    if is_historical_actual_row(row):
         return format_currency(historical_total_revenue(row))
     return format_currency(row["booked_revenue_proxy"])
 
 
 def table_open_ask(row: dict[str, str]) -> str:
-    if row["data_availability"] == "historical_actuals":
+    if row["data_availability"] in NO_DATA_LABELS or is_historical_actual_row(row):
         return "-"
     return format_currency(row["open_revenue_ask"])
 
 
 def table_total_future_value(row: dict[str, str]) -> str:
-    if row["data_availability"] == "historical_actuals":
+    if row["data_availability"] in NO_DATA_LABELS:
+        return "-"
+    if is_historical_actual_row(row):
         return format_currency(historical_total_revenue(row))
     return format_currency(row["total_future_revenue_proxy"])
 
 
 def table_booked_nights(row: dict[str, str]) -> str:
-    if row["data_availability"] == "historical_actuals":
+    if row["data_availability"] in NO_DATA_LABELS:
+        return "-"
+    if is_historical_actual_row(row):
         return historical_booked_nights(row) or "-"
     return row.get("booked_nights", "") or "-"
 
 
+def table_cleanings(row: dict[str, str]) -> str:
+    if row["data_availability"] in NO_DATA_LABELS:
+        return "-"
+    if is_historical_actual_row(row):
+        return row.get("historical_cleanings_proxy", "") or "-"
+    return row.get("bookings_report_cleanings_proxy", "") or "-"
+
+
 def table_occupancy(row: dict[str, str]) -> str:
-    if row["data_availability"] == "historical_actuals":
+    if row["data_availability"] in NO_DATA_LABELS:
+        return "-"
+    if is_historical_actual_row(row):
         return format_percent_value(historical_occupancy(row))
+    if row.get("monthly_trends_occupancy_pct", "").strip():
+        return format_percent_value(row["monthly_trends_occupancy_pct"])
     if (
-        row["data_availability"] == "available"
+        row["data_availability"] in {"future_calendar", "monthly_trends_future_on_books"}
         and row["month_window_position"] == "future"
         and row["month_scope_status"] == "full_month"
     ):
@@ -171,15 +205,37 @@ def table_occupancy(row: dict[str, str]) -> str:
 
 
 def table_adr(row: dict[str, str]) -> str:
-    if row["data_availability"] == "historical_actuals":
+    if row["data_availability"] in NO_DATA_LABELS:
+        return "-"
+    if is_historical_actual_row(row):
         return format_currency(historical_rental_adr(row))
+    if row.get("monthly_trends_adr", "").strip():
+        return format_currency(row["monthly_trends_adr"])
     return divide_currency(row.get("booked_revenue_proxy", ""), row.get("booked_nights", ""))
 
 
 def table_revenue_per_cleaning(row: dict[str, str]) -> str:
-    if row["data_availability"] == "historical_actuals":
+    if row["data_availability"] in NO_DATA_LABELS:
         return "-"
     return format_currency(row.get("revenue_per_cleaning_proxy", ""))
+
+
+def table_target(row: dict[str, str]) -> str:
+    if row["data_availability"] in NO_DATA_LABELS:
+        return "-"
+    return format_currency(row["monthly_target"])
+
+
+def table_captured_pct(row: dict[str, str]) -> str:
+    if row["data_availability"] in NO_DATA_LABELS:
+        return "-"
+    return format_percent(row["booked_revenue_pct_of_target"])
+
+
+def table_calendar_value_pct(row: dict[str, str]) -> str:
+    if row["data_availability"] in NO_DATA_LABELS:
+        return "-"
+    return format_percent(row["total_future_revenue_pct_of_target"])
 
 
 def find_row(rows: list[dict[str, str]], bucket: str) -> dict[str, str] | None:
@@ -187,7 +243,7 @@ def find_row(rows: list[dict[str, str]], bucket: str) -> dict[str, str] | None:
         (
             row
             for row in rows
-            if row["data_availability"] == "available" and row["month_time_bucket"] == bucket
+            if is_actionable_row(row) and row["month_time_bucket"] == bucket
         ),
         None,
     )
@@ -195,18 +251,18 @@ def find_row(rows: list[dict[str, str]], bucket: str) -> dict[str, str] | None:
 
 def build_executive_summary(rows: list[dict[str, str]]) -> list[str]:
     bullets: list[str] = []
-    available_rows = [row for row in rows if row["data_availability"] == "available"]
+    available_rows = [row for row in rows if is_actionable_row(row)]
     historical_no_source = [
         row
         for row in rows
         if row["month_window_position"] == "historical"
-        and row["data_availability"] == "no_source_data"
+        and row["data_availability"] in NO_DATA_LABELS
     ]
     historical_actuals = [
         row
         for row in rows
         if row["month_window_position"] == "historical"
-        and row["data_availability"] == "historical_actuals"
+        and is_historical_actual_row(row)
     ]
     current = find_row(available_rows, "current_month")
     next_month = find_row(available_rows, "next_month")
@@ -227,12 +283,12 @@ def build_executive_summary(rows: list[dict[str, str]]) -> list[str]:
         months = ", ".join(row["stay_month"] for row in historical_actuals)
         if historical_no_source:
             bullets.append(
-                f"Historical actuals are available for {months}; missing historical months remain no_source_data."
+                f"Historical actuals are available for {months}; missing historical months remain data_not_available."
             )
         else:
             bullets.append(f"Historical actuals are available for {months}.")
     elif historical_no_source:
-        bullets.append("Historical months without source data are shown for context.")
+        bullets.append("Historical months without usable source data are shown for context.")
     if current:
         bullets.append(
             f"Current month {current['stay_month']} revenue pace is {current['revenue_pace_status']}."
@@ -253,7 +309,7 @@ def available_rows_for_action(rows: list[dict[str, str]], action_level: str) -> 
     return [
         row
         for row in rows
-        if row["data_availability"] == "available"
+        if is_actionable_row(row)
         and row["month_action_level"] == action_level
     ]
 
@@ -318,10 +374,10 @@ def build_interpretation(rows: list[dict[str, str]]) -> list[str]:
     lines = ["## Interpretation", ""]
     bullets: list[str] = []
     for row in rows:
-        if row["data_availability"] == "historical_actuals":
+        if is_historical_actual_row(row):
             bullet = (
                 "- "
-                f"{row['stay_month']}: Historical actuals are available from PriceLabs KPI data: "
+                f"{row['stay_month']}: Historical actuals are available from PriceLabs monthly data: "
                 f"total revenue {format_currency(historical_total_revenue(row))}, "
                 f"booked nights {historical_booked_nights(row) or '-'}, "
                 f"ADR {format_currency(historical_rental_adr(row))}."
@@ -334,7 +390,7 @@ def build_interpretation(rows: list[dict[str, str]]) -> list[str]:
             bullets.append(bullet)
             continue
 
-        if row["data_availability"] != "available":
+        if not is_actionable_row(row):
             continue
 
         if row["revenue_pace_status"] == "conversion_risk":
@@ -422,7 +478,7 @@ def recommendation_rows(rows: list[dict[str, str]], action_level: str) -> list[d
     return [
         row
         for row in rows
-        if row["data_availability"] == "available"
+        if is_actionable_row(row)
         and row["month_action_level"] == action_level
     ]
 
@@ -457,6 +513,44 @@ def build_recommendation_review(rows: list[dict[str, str]]) -> list[str]:
     ]
 
 
+def rows_with_booking_source_mix(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [
+        row
+        for row in rows
+        if any((row.get("airbnb_stays", ""), row.get("vrbo_stays", ""), row.get("direct_stays", ""), row.get("other_unknown_stays", "")))
+        and parse_decimal(row.get("bookings_report_bookings", "")) > 0
+    ]
+
+
+def build_booking_source_mix(rows: list[dict[str, str]]) -> list[str]:
+    mix_rows = rows_with_booking_source_mix(rows)
+    lines = [
+        "## Booking Source Mix",
+        "",
+        "| Month | Airbnb Stays | Vrbo Stays | Direct Stays | Other / Unknown | Main Source |",
+        "| --- | ---: | ---: | ---: | ---: | --- |",
+    ]
+    if not mix_rows:
+        lines.append("| - | - | - | - | - | - |")
+    for row in mix_rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    row["stay_month"],
+                    row.get("airbnb_stays", "") or "0",
+                    row.get("vrbo_stays", "") or "0",
+                    row.get("direct_stays", "") or "0",
+                    row.get("other_unknown_stays", "") or "0",
+                    row.get("main_booking_source", "") or "-",
+                )
+            )
+            + " |"
+        )
+    lines.append("")
+    return lines
+
+
 def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
@@ -469,12 +563,13 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
     lines.extend(["", *build_executive_decision_view(sorted_rows)])
     lines.extend(build_interpretation(sorted_rows))
     lines.extend(build_recommendation_review(sorted_rows))
+    lines.extend(build_booking_source_mix(sorted_rows))
     lines.extend(
         [
             "## Monthly Revenue Pace",
             "",
-            "| Month | Position | Bucket | Scope | Data | Revenue Captured | Open Ask | Total Calendar Value | Target | Booked % | Total % | Booked Nights | Occupancy | ADR | Revenue / Cleaning | Revenue Status | Cleaning Status | Action Level |",
-            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
+            "| Month | Position | Bucket | Data | Revenue Captured | Open Ask | Total Calendar Value | Target | Captured % of Target | Calendar Value % of Target | Booked Nights | Cleanings / Stays | Occupancy | ADR | Revenue / Cleaning | Revenue Status | Cleaning Status | Action Level |",
+            "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
         ]
     )
 
@@ -486,15 +581,15 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
                     row["stay_month"],
                     row["month_window_position"],
                     row["month_time_bucket"],
-                    row["month_scope_status"],
                     row["data_availability"],
                     table_booked_revenue(row),
                     table_open_ask(row),
                     table_total_future_value(row),
-                    format_currency(row["monthly_target"]),
-                    format_percent(row["booked_revenue_pct_of_target"]),
-                    format_percent(row["total_future_revenue_pct_of_target"]),
+                    table_target(row),
+                    table_captured_pct(row),
+                    table_calendar_value_pct(row),
                     table_booked_nights(row),
+                    table_cleanings(row),
                     table_occupancy(row),
                     table_adr(row),
                     table_revenue_per_cleaning(row),
@@ -513,11 +608,23 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
             "",
             "- `conversion_risk` means enough total calendar value exists, but booked revenue is still low.",
             "- `protect_open_value` means far-out calendar value is healthy and should not be pushed too early.",
-            "- `historical_actuals` means the month was filled from PriceLabs KPI On The Books historical data.",
+            "- `monthly_trends_actuals` means the month was filled from PriceLabs Monthly Trends data.",
+            "- `historical_actuals` means the month was filled from optional legacy KPI data.",
             "- `suspicious` means the historical KPI row passed through but has a data-quality warning, usually because the PriceLabs denominator looks unusual.",
             "- Historical occupancy is calculated from booked nights divided by calendar days in month for single-listing analysis.",
+            "- Historical occupancy uses Monthly Trends when the month passes data-quality checks.",
+            "- Historical booked nights are estimated from Monthly Trends revenue divided by ADR.",
+            "- Historical cleanings are estimated from Monthly Trends booked-night estimates and observed current/future Bookings Report LOS.",
+            "- Bookings Report is not treated as exact historical truth unless a future enhancement validates coverage.",
+            "- Booked Nights and Cleanings / Stays are separate metrics.",
+            "- Revenue / Cleaning is calculated using Cleanings / Stays, not Booked Nights.",
+            "- Months with missing or suspicious monthly data are marked `data_not_available` and excluded from decision signals.",
             "- Future full-month occupancy is calculated from booked nights divided by days in scope.",
-            "- Current and partial horizon month occupancy is hidden to avoid misleading partial-month interpretation.",
+            "- Current and partial horizon month occupancy is hidden unless Monthly Trends provides monthly occupancy.",
+            "- Revenue Captured uses Monthly Trends when available; future export booked revenue proxy is used only when Monthly Trends does not provide monthly revenue.",
+            "- Open Ask uses the future calendar export.",
+            "- Cleaning and length-of-stay metrics use Bookings Report when available.",
+            "- Monthly revenue, ADR, and occupancy use PriceLabs Monthly Trends when available. Legacy KPI On The Books is optional/deprecated.",
             "- `partial_horizon` means only part of the month is inside the current future export window, so it is not judged against the full monthly target.",
             "- `inefficient` cleaning status means booked revenue per cleaning is below the current efficiency threshold.",
             "",

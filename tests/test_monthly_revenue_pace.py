@@ -28,6 +28,50 @@ def by_month(rows: list[dict[str, str]], month: str) -> dict[str, str]:
     return next(row for row in rows if row["stay_month"] == month)
 
 
+def monthly_trends_row(
+    month: str,
+    revenue: str,
+    occupancy: str = "45",
+    adr: str = "425",
+) -> dict[str, str]:
+    return {
+        "run_date": "2026-05-08",
+        "month": month,
+        "monthly_trends_revenue": revenue,
+        "monthly_trends_occupancy_pct": occupancy,
+        "monthly_trends_booked_occupancy_pct": occupancy,
+        "monthly_trends_blocked_occupancy_pct": "0",
+        "monthly_trends_adr": adr,
+        "monthly_trends_source": "pricelabs_monthly_trends",
+    }
+
+
+def booking_metrics_row(
+    month: str,
+    bookings: str,
+    nights: str,
+    avg_los: str,
+) -> dict[str, str]:
+    return {
+        "run_date": "2026-05-08",
+        "month": month,
+        "bookings_report_bookings": bookings,
+        "bookings_report_cleanings_proxy": bookings,
+        "bookings_report_booked_nights": nights,
+        "bookings_report_avg_los": avg_los,
+        "bookings_report_rental_revenue": "0",
+        "bookings_report_total_revenue": "0",
+        "bookings_report_adr": "0",
+        "bookings_report_avg_booking_window": "10",
+        "airbnb_stays": bookings,
+        "vrbo_stays": "0",
+        "direct_stays": "0",
+        "other_unknown_stays": "0",
+        "main_booking_source": "airbnb",
+        "booking_source_mix_summary": f"Airbnb {bookings}",
+    }
+
+
 def full_month_rows(year: int, month: int, special_rows: dict[int, dict[str, str]]) -> list[dict[str, str]]:
     rows = []
     for day in range(1, calendar.monthrange(year, month)[1] + 1):
@@ -149,6 +193,26 @@ def test_monthly_revenue_pace_cli_writes_output(tmp_path, monkeypatch) -> None:
                 "revenue_per_cleaning_proxy",
                 "booked_revenue_pct_of_target",
                 "total_future_revenue_pct_of_target",
+                "monthly_trends_revenue",
+                "monthly_trends_occupancy_pct",
+                "monthly_trends_booked_occupancy_pct",
+                "monthly_trends_blocked_occupancy_pct",
+                "monthly_trends_adr",
+                "monthly_trends_source",
+                "bookings_report_bookings",
+                "bookings_report_cleanings_proxy",
+                "bookings_report_booked_nights",
+                "bookings_report_avg_los",
+                "bookings_report_rental_revenue",
+                "bookings_report_total_revenue",
+                "bookings_report_adr",
+                "bookings_report_avg_booking_window",
+                "airbnb_stays",
+                "vrbo_stays",
+                "direct_stays",
+                "other_unknown_stays",
+                "main_booking_source",
+                "booking_source_mix_summary",
                 "revenue_pace_status",
                 "cleaning_efficiency_status",
                 "month_action_level",
@@ -306,3 +370,30 @@ def test_far_future_partial_month_gets_partial_horizon_status() -> None:
     assert november["month_scope_status"] == "partial_month"
     assert november["revenue_pace_status"] == "partial_horizon"
     assert november["month_action_level"] == "monitor"
+
+
+def test_monthly_trends_revenue_replaces_future_booked_proxy_without_double_counting() -> None:
+    rows = summarize_monthly(
+        [
+            enriched_row("2026-05-10", "booked", "1200", "0", "1"),
+            enriched_row("2026-05-11", "available", "0", "475", "0"),
+        ],
+        monthly_trends_rows=[monthly_trends_row("2026-05", "5000", "62.5", "455")],
+        booking_metric_rows=[booking_metrics_row("2026-05", "2", "5", "2.5")],
+    )
+
+    may = by_month(rows, "2026-05")
+
+    assert may["booked_revenue_proxy"] == "5000"
+    assert may["open_revenue_ask"] == "475"
+    assert may["total_future_revenue_proxy"] == "5475"
+    assert may["monthly_trends_revenue"] == "5000"
+    assert may["monthly_trends_occupancy_pct"] == "62.5"
+    assert may["monthly_trends_adr"] == "455"
+    assert may["booked_cleanings_proxy"] == "2"
+    assert may["airbnb_stays"] == "2"
+    assert may["main_booking_source"] == "airbnb"
+    assert may["booking_source_mix_summary"] == "Airbnb 2"
+    assert may["booked_nights"] == "5"
+    assert may["avg_stay_length_proxy"] == "2.50"
+    assert may["revenue_per_cleaning_proxy"] == "2500"

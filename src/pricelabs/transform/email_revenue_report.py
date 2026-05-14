@@ -9,9 +9,12 @@ import sys
 from pricelabs.transform.monthly_revenue_summary import (
     build_recommendation_lines,
     format_currency,
+    is_actionable_row,
+    is_historical_actual_row,
     read_monthly_rows,
     table_adr,
     table_booked_revenue,
+    table_cleanings,
     table_occupancy,
     table_open_ask,
     table_revenue_per_cleaning,
@@ -38,11 +41,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def available_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    return [row for row in rows if row["data_availability"] == "available"]
+    return [row for row in rows if is_actionable_row(row)]
 
 
 def historical_actual_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    return [row for row in rows if row["data_availability"] == "historical_actuals"]
+    return [row for row in rows if is_historical_actual_row(row)]
 
 
 def find_available_bucket(rows: list[dict[str, str]], bucket: str) -> dict[str, str] | None:
@@ -151,6 +154,22 @@ def recommendation_section(rows: list[dict[str, str]]) -> list[str]:
     return lines
 
 
+def booking_source_notes(rows: list[dict[str, str]]) -> list[str]:
+    lines = ["## Booking Source Notes", ""]
+    source_rows = [
+        row
+        for row in sorted(rows, key=lambda row: row["stay_month"])
+        if row.get("booking_source_mix_summary", "").strip()
+    ]
+    if not source_rows:
+        lines.append("- None.")
+    for row in source_rows:
+        main_source = row.get("main_booking_source", "") or "unknown"
+        lines.append(f"- {row['stay_month']}: {row['booking_source_mix_summary']}. Main source: {main_source}.")
+    lines.append("")
+    return lines
+
+
 def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
@@ -182,12 +201,13 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
         ]
     )
     lines.extend(recommendation_section(sorted_rows))
+    lines.extend(booking_source_notes(sorted_rows))
     lines.extend(
         [
             "## Key Monthly Snapshot",
             "",
-            "| Month | Data | Revenue Captured | Open Ask | Total Calendar Value | Occupancy | ADR | Revenue / Cleaning | Status | Action |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+            "| Month | Data | Revenue Captured | Open Ask | Total Calendar Value | Booked Nights | Cleanings / Stays | Occupancy | ADR | Revenue / Cleaning | Status | Action |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
         ]
     )
     for row in key_snapshot_rows(sorted_rows):
@@ -200,6 +220,8 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
                     table_booked_revenue(row),
                     table_open_ask(row),
                     table_total_future_value(row),
+                    row.get("historical_booked_nights", "") if row["data_availability"] in {"monthly_trends_actuals", "historical_actuals"} else row.get("booked_nights", "") or "-",
+                    table_cleanings(row),
                     table_occupancy(row),
                     table_adr(row),
                     table_revenue_per_cleaning(row),
@@ -227,9 +249,19 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
             "## Data Notes",
             "",
             "- Historical occupancy is calculated from booked nights divided by calendar days.",
+            "- Historical occupancy uses Monthly Trends when the month passes data-quality checks.",
+            "- Historical booked nights are estimated from Monthly Trends revenue divided by ADR.",
+            "- Historical cleanings are estimated from Monthly Trends booked-night estimates and observed current/future Bookings Report LOS.",
+            "- Bookings Report is not treated as exact historical truth unless a future enhancement validates coverage.",
+            "- Booked Nights and Cleanings / Stays are separate metrics.",
+            "- Revenue / Cleaning is calculated using Cleanings / Stays, not Booked Nights.",
+            "- Months with missing or suspicious monthly data are marked data_not_available and excluded from decision signals.",
             "- Future full-month occupancy is calculated from booked nights divided by days in scope.",
-            "- Current and partial horizon month occupancy is hidden to avoid misleading partial-month interpretation.",
-            "- Historical actuals come from PriceLabs KPI On The Books.",
+            "- Current and partial horizon month occupancy is hidden unless Monthly Trends provides monthly occupancy.",
+            "- Revenue Captured uses Monthly Trends when available; future export booked revenue proxy is used only when Monthly Trends does not provide monthly revenue.",
+            "- Open Ask uses the future calendar export.",
+            "- Cleaning and length-of-stay metrics use Bookings Report when available.",
+            "- Monthly revenue, ADR, and occupancy use PriceLabs Monthly Trends when available. Legacy KPI On The Books is optional/deprecated.",
             "- Airbnb revenue is not mixed into this report.",
             "- Market benchmark is context only.",
             "- This report reviews PriceLabs rule areas; it does not recommend manual date overrides.",
