@@ -1,8 +1,9 @@
 """PriceLabs downloader entry point.
 
 Default behavior is still skeleton/dry-run mode: create staging/log folders only.
-Real download mode is deliberately explicit and currently supports only the
-future export target.
+Real download mode is deliberately explicit. The future export target has a
+known UI path; the price/occupancy target has staging validation in place and a
+clear UI placeholder until its PriceLabs navigation path is confirmed.
 """
 
 from __future__ import annotations
@@ -27,7 +28,10 @@ PLACEHOLDER_STEPS = [
 ]
 
 FUTURE_EXPORT_FILENAME = "priceLabs_future_export.csv"
+PRICE_OCC_FILENAME = "price_occ.csv"
 FUTURE_EXPORT_TARGET = "future-export"
+PRICE_OCC_TARGET = "price-occ"
+SUPPORTED_TARGETS = [FUTURE_EXPORT_TARGET, PRICE_OCC_TARGET]
 PRICELABS_CUSTOMIZATION_URL = "https://app.pricelabs.co/customization"
 PRICELABS_ACCOUNT_LABEL = "Lodgify"
 FUTURE_EXPORT_MENU_ITEM = "Download CSV Prices"
@@ -57,8 +61,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--target",
-        choices=[FUTURE_EXPORT_TARGET],
-        help="Explicit real download target. Currently only future-export is supported.",
+        choices=SUPPORTED_TARGETS,
+        help="Explicit real download target. Currently supports future-export and price-occ.",
     )
     parser.add_argument(
         "--headless",
@@ -144,6 +148,21 @@ def read_csv_header(csv_path: Path) -> list[str]:
     raise DownloadError("Could not find a recognizable future export CSV header.")
 
 
+def read_csv_header_with_columns(csv_path: Path, required_any: set[str], file_label: str) -> list[str]:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        sample = handle.read(2048)
+        if looks_like_html(sample):
+            raise DownloadError(f"Downloaded {file_label} file looks like an HTML login/error page.")
+        handle.seek(0)
+        reader = csv.reader(handle)
+        for row in reader:
+            normalized = [cell.strip() for cell in row]
+            lower_cells = {cell.lower() for cell in normalized}
+            if lower_cells.intersection(required_any):
+                return normalized
+    raise DownloadError(f"Could not find a recognizable {file_label} CSV header.")
+
+
 def validate_future_export_csv(csv_path: Path) -> None:
     if not csv_path.exists():
         raise DownloadError(f"Missing staged file: {csv_path}")
@@ -175,6 +194,42 @@ def validate_future_export_csv(csv_path: Path) -> None:
     if missing_groups:
         missing = ", ".join(missing_groups)
         raise DownloadError(f"Future export missing expected columns: {missing}")
+
+
+def validate_price_occ_csv(csv_path: Path) -> None:
+    if not csv_path.exists():
+        raise DownloadError(f"Missing staged file: {csv_path}")
+    if csv_path.stat().st_size <= 0:
+        raise DownloadError("Downloaded price_occ export is empty.")
+
+    header = read_csv_header_with_columns(csv_path, {"date", "market occupancy"}, "price_occ")
+    normalized = {column.strip().lower() for column in header}
+
+    market_percentile_columns = {
+        "market 25th percentile price",
+        "market 50th percentile price",
+        "market 75th percentile price",
+        "market 90th percentile price",
+    }
+    booked_occupancy_columns = {
+        "your booked occupancy",
+        "booked_occupancy",
+        "booked occupancy",
+    }
+
+    missing_groups = []
+    if "date" not in normalized:
+        missing_groups.append("Date")
+    if "market occupancy" not in normalized:
+        missing_groups.append("Market Occupancy")
+    if not normalized.intersection(market_percentile_columns):
+        missing_groups.append("market percentile price field")
+    if not normalized.intersection(booked_occupancy_columns):
+        missing_groups.append("booked occupancy context field")
+
+    if missing_groups:
+        missing = ", ".join(missing_groups)
+        raise DownloadError(f"Price Occ export missing expected columns: {missing}")
 
 
 def wait_for_manual_login_checkpoint(*, skip_login_pause: bool) -> None:
@@ -232,6 +287,49 @@ def download_future_export_with_playwright(
 
     shutil.move(str(temp_download_path), staging_path)
     return menu_strategy
+
+
+def download_price_occ_with_playwright(
+    staging_path: Path,
+    *,
+    logs_dir: Path,
+    run_date: str,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> str:
+    """Placeholder for the PriceLabs price/occupancy UI flow.
+
+    The staging filename and validator are ready, but the exact UI navigation
+    path for this export has not been verified. Fail clearly instead of
+    creating a fake staged file or guessing at selectors.
+    """
+
+    if headless and not skip_login_pause:
+        raise DownloadError("Headless mode requires --skip-login-pause for price-occ downloads.")
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise DownloadError("Playwright is not installed in this environment.") from exc
+
+    staging_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=headless)
+        context = browser.new_context(accept_downloads=True)
+        page = context.new_page()
+        try:
+            page.goto(PRICELABS_CUSTOMIZATION_URL, wait_until="domcontentloaded", timeout=120_000)
+            wait_for_manual_login_checkpoint(skip_login_pause=skip_login_pause)
+            page.wait_for_load_state("networkidle", timeout=120_000)
+            validate_visible_customization_page(page)
+            raise DownloadError(
+                "Price Occ UI download path is not implemented yet. "
+                "Selector review is required before downloading price_occ.csv."
+            )
+        finally:
+            context.close()
+            browser.close()
 
 
 def save_debug_screenshot(page, logs_dir: Path, run_date: str) -> Path:
@@ -478,6 +576,51 @@ def run_future_export_download(
     return log_file
 
 
+def run_price_occ_download(
+    run_date: str,
+    *,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> Path:
+    _, staging_dir, logs_dir, log_file = get_run_paths(run_date)
+    staging_path = staging_dir / PRICE_OCC_FILENAME
+
+    try:
+        menu_strategy = download_price_occ_with_playwright(
+            staging_path,
+            logs_dir=logs_dir,
+            run_date=run_date,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
+        validate_price_occ_csv(staging_path)
+    except DownloadError as exc:
+        write_log(
+            log_file,
+            real_download_log_lines(
+                run_date=run_date,
+                target=PRICE_OCC_TARGET,
+                staging_path=staging_path,
+                status="failed",
+                reason=str(exc),
+            ),
+        )
+        raise
+
+    write_log(
+        log_file,
+        real_download_log_lines(
+            run_date=run_date,
+            target=PRICE_OCC_TARGET,
+            staging_path=staging_path,
+            status="passed",
+            menu_strategy=menu_strategy,
+        )
+        + ["Price Occ export downloaded and validated in staging.", "Raw folder was not touched."],
+    )
+    return log_file
+
+
 def run(
     run_date: str,
     *,
@@ -490,6 +633,12 @@ def run(
         return run_skeleton(run_date)
     if target == FUTURE_EXPORT_TARGET:
         return run_future_export_download(
+            run_date,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
+    if target == PRICE_OCC_TARGET:
+        return run_price_occ_download(
             run_date,
             headless=headless,
             skip_login_pause=skip_login_pause,
