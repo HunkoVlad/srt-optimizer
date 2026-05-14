@@ -127,8 +127,17 @@ def test_future_export_real_mode_uses_staging_only_with_mocked_download(monkeypa
 
     shutil.rmtree(run_dir, ignore_errors=True)
 
-    def fake_download(staging_path: Path, *, headless: bool, skip_login_pause: bool = False) -> None:
+    def fake_download(
+        staging_path: Path,
+        *,
+        logs_dir: Path,
+        run_date: str,
+        headless: bool,
+        skip_login_pause: bool = False,
+    ) -> str:
         assert staging_path == staging_file
+        assert logs_dir == run_dir / "logs"
+        assert run_date == "2099-02-02"
         assert headless is True
         assert skip_login_pause is True
         staging_path.write_text(
@@ -156,6 +165,7 @@ def test_future_export_real_mode_uses_staging_only_with_mocked_download(monkeypa
         assert staging_file.exists()
         assert log_file.exists()
         assert not raw_dir.exists()
+        assert list((run_dir / "downloads_staging").glob("*.html")) == []
         log_text = log_file.read_text(encoding="utf-8")
         assert "target=future-export" in log_text
         assert "validation_status=passed" in log_text

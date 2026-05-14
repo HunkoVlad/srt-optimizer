@@ -187,6 +187,8 @@ def wait_for_manual_login_checkpoint(*, skip_login_pause: bool) -> None:
 def download_future_export_with_playwright(
     staging_path: Path,
     *,
+    logs_dir: Path,
+    run_date: str,
     headless: bool,
     skip_login_pause: bool = False,
 ) -> str:
@@ -213,15 +215,13 @@ def download_future_export_with_playwright(
             page.wait_for_load_state("networkidle", timeout=120_000)
             validate_visible_customization_page(page)
             if not headless:
-                debug_dom_path = dump_page_dom(page, staging_path.parent, "before_menu_lookup")
-                print(f"PriceLabs DOM debug dump written to: {debug_dom_path}")
                 print("Playwright paused before Lodgify menu lookup. Inspect the page, then resume.")
                 page.pause()
             try:
                 menu_strategy = trigger_future_export_download(page)
             except DownloadError as exc:
-                failure_dom_path = dump_page_dom(page, staging_path.parent, "menu_lookup_failed")
-                raise DownloadError(f"{exc} DOM dumped to {failure_dom_path}") from exc
+                screenshot_path = save_debug_screenshot(page, logs_dir, run_date)
+                raise DownloadError(f"{exc} Debug screenshot saved to {screenshot_path}") from exc
             with page.expect_download(timeout=120_000) as download_info:
                 click_download_csv_prices(page)
             download = download_info.value
@@ -234,12 +234,12 @@ def download_future_export_with_playwright(
     return menu_strategy
 
 
-def dump_page_dom(page, staging_dir: Path, label: str) -> Path:
-    """Write the current page DOM to staging for selector debugging."""
+def save_debug_screenshot(page, logs_dir: Path, run_date: str) -> Path:
+    """Write a screenshot to logs for selector debugging without saving DOM."""
 
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    debug_path = staging_dir / f"pricelabs_customization_dom_{label}.html"
-    debug_path.write_text(page.content(), encoding="utf-8")
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    debug_path = logs_dir / f"pricelabs_download_debug_{run_date}.png"
+    page.screenshot(path=debug_path, full_page=True)
     return debug_path
 
 
@@ -439,12 +439,14 @@ def run_future_export_download(
     headless: bool,
     skip_login_pause: bool = False,
 ) -> Path:
-    _, staging_dir, _, log_file = get_run_paths(run_date)
+    _, staging_dir, logs_dir, log_file = get_run_paths(run_date)
     staging_path = staging_dir / FUTURE_EXPORT_FILENAME
 
     try:
         menu_strategy = download_future_export_with_playwright(
             staging_path,
+            logs_dir=logs_dir,
+            run_date=run_date,
             headless=headless,
             skip_login_pause=skip_login_pause,
         )
