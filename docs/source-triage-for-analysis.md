@@ -1,5 +1,8 @@
 # Source Triage For Analysis
 
+Status: Deprecated / historical reference.
+This document may describe an earlier pipeline version. Current source strategy is defined in `docs/data-source-strategy-v1.md` and `docs/project-artifact-audit-v1.md`.
+
 This document summarizes the three PriceLabs source roles for analysis and design. It does not define new automation or change the current V1 transform.
 
 ## 1. Operational Future Source

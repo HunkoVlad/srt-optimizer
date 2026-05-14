@@ -128,7 +128,7 @@ Therefore:
 | `open_revenue_ask` | `priceLabs_future_export.csv` | none | Derived from available-date asking price. |
 | `total_future_revenue_proxy` | monthly revenue pace output | none | Monthly Trends revenue when available plus future export open ask; avoids double counting future booked proxy. |
 | `historical_total_revenue` | `monthly_trends.csv` | `KPIs On The Books (current year).xlsx` | Historical actual, separate from future proxy. |
-| `historical_booked_nights` | `bookings_report.xlsx` | `KPIs On The Books (current year).xlsx` | Use Bookings Report for reservation-level stay/cleaning context when available. |
+| `historical_booked_nights` | `monthly_trends.csv` | `bookings_report.xlsx` for future coverage validation later | Historical booked nights are estimated from Monthly Trends revenue / ADR because historical Bookings Report coverage can be partial. |
 | `historical_occupancy_pct` | `monthly_trends.csv` | none | Monthly Trends is the main occupancy display source. |
 | `historical_adr` | `monthly_trends.csv` | Airbnb report if separately labeled | Keep Airbnb ADR separate if definitions differ. |
 | `market_occupancy` | `price_occ.csv` | none | Market context only; aggregate before comparing to listing occupancy. |
@@ -181,6 +181,7 @@ Required weekly now:
 Optional weekly/monthly later:
 
 - PriceLabs KPIs On The Books, optional/deprecated for now
+- Revenue On The Books, optional/deprecated reconciliation source only
 - Airbnb monthly/listing performance report
 
 ## One-Time / Occasional Historical Backfill
@@ -193,25 +194,22 @@ Do not fake historical data. If no source exists for a historical month, keep:
 
 ## Implementation Roadmap
 
-Step 12:
+Current Step 26 source model:
 
 Normalize Monthly Trends and Bookings Report into monthly truth and booking metrics.
 
-Step 13:
+Next documentation/cleanup steps:
 
-Merge monthly actuals into `rolling_13_month_revenue_view`.
+- Keep contracts/runbooks aligned to Monthly Trends + Bookings Report.
+- Archive or retire KPI-only artifacts only after review.
 
-Step 14:
-
-Update monthly revenue summary to show historical actuals instead of `no_source_data` where available.
-
-Step 15:
+Later data-source expansion:
 
 Add Airbnb listing/conversion context.
 
-Step 16:
+Later reporting expansion:
 
-Create email-ready report.
+Create email delivery automation only after the raw-file workflow and scheduler wrapper are stable.
 
 ## Guardrails
 

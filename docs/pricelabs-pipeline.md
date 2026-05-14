@@ -1,5 +1,8 @@
 # Weekly PriceLabs-to-CSV Pipeline
 
+Status: Deprecated / historical reference.
+This document may describe an earlier pipeline version. Current source strategy is defined in `docs/data-source-strategy-v1.md` and `docs/project-artifact-audit-v1.md`.
+
 This repository is being prepared for a weekly pipeline that converts PriceLabs data into a contract-compliant CSV export. The initial repository structure is documentation-first and intentionally does not implement PriceLabs extraction.
 
 ## Current Scope

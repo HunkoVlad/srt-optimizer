@@ -1,11 +1,11 @@
 # srt-optimizer
 
-Python-only V1 pipeline for a weekly PriceLabs-to-CSV workflow.
+Python-only V1 pipeline for a weekly PriceLabs revenue workflow.
 
 Current flow:
 
 ```text
-manual PriceLabs CSV -> Python transform -> standardized CSV -> manifest.json
+manual PriceLabs raw files -> standardized daily CSV -> enriched daily CSV -> monthly revenue reports -> email-ready reports
 ```
 
 V1 scope is intentionally narrow:
@@ -15,23 +15,30 @@ V1 scope is intentionally narrow:
 - Manual CSV input only
 - Next 180 days only
 - No browser automation
-- No scheduling
+- Scheduler wrapper is local/manual safe mode only
 - No dashboards
 - No Airbnb
 
 ## Inputs
 
-The user manually downloads a PriceLabs CSV and points the config to that file.
+Real weekly runs use dated run folders under `data/runs/<run_date>/`. Raw files are the source of truth and generated outputs are reproducible.
 
-Required PriceLabs source columns:
+Required raw files for the current pipeline:
 
-- `Listing ID`
-- `Date`
-- `Your Price`
-- `Min Stay`
-- `Status`
+- `data/runs/<run_date>/raw/priceLabs_future_export.csv`
+- `data/runs/<run_date>/raw/price_occ.csv`
+- `data/runs/<run_date>/raw/monthly_trends.csv`
+- `data/runs/<run_date>/raw/bookings_report.xlsx`
+- `data/runs/<run_date>/raw/pricelabs_settings_manual_input.json`
 
-The reader also supports PriceLabs exports with leading `#` note/comment lines before the real header.
+Current source roles:
+
+- Monthly Trends is the primary monthly truth source for revenue, ADR, and occupancy.
+- Bookings Report supplies current/future cleanings/stays, length of stay, booking source, and booking window.
+- Future export supplies future calendar status, open ask, availability, min stay, and future booked proxy fallback.
+- `price_occ.csv` supplies market context only.
+- Settings JSON supplies the PriceLabs rule snapshot.
+- KPI On The Books and Revenue On The Books are optional/deprecated for now.
 
 ## Real Weekly Run Folders
 
@@ -47,8 +54,10 @@ data/runs/<run_date>/
 
 For each real run, place these raw input files in `data/runs/<run_date>/raw/`:
 
-- `pricelabs_future_export.csv`
+- `priceLabs_future_export.csv`
 - `price_occ.csv`
+- `monthly_trends.csv`
+- `bookings_report.xlsx`
 - `pricelabs_settings_manual_input.json` with structured settings sections for orphan pricing, min-stay rules, occupancy adjustments, and length-of-stay pricing.
 
 Raw files should be retained with the run. Analysis outputs are snapshot-based and should not overwrite prior run folders.
@@ -65,6 +74,8 @@ The runner writes outputs under `data/runs/<run_date>/standardized/`, `data/runs
 
 ## Config
 
+Status: Legacy transform-only reference. The current weekly workflow should use `run_weekly_pipeline.ps1` and dated `data/runs/<run_date>/` folders.
+
 Use [config/pricelabs.single-listing.example.toml](config/pricelabs.single-listing.example.toml):
 
 ```toml
@@ -76,6 +87,8 @@ output_path = "standardized/future_daily_pricing_<run_date>.csv"
 Set `listing_id` and `input_path` before running the transform.
 
 ## Run
+
+Status: Legacy transform-only reference. Use the weekly runner for current reports.
 
 Run from the repo root:
 
@@ -92,10 +105,12 @@ $env:PYTHONPATH = "src"
 
 Outputs:
 
-- `standardized/future_daily_pricing_<run_date>.csv`
-- `manifest.json`
+- `data/runs/<run_date>/standardized/future_daily_pricing_<run_date>.csv`
+- `data/runs/<run_date>/manifest.json`
 
 ## Run Future Enrichment
+
+Status: Legacy manual-step reference. The weekly runner now orchestrates enrichment and downstream reports.
 
 After the standardized CSV exists, run the manual enrichment step:
 
@@ -106,7 +121,7 @@ $env:PYTHONPATH = "src"
 
 Output:
 
-- `analysis/future_daily_pricing_enriched_<run_date>.csv`
+- `data/runs/<run_date>/analysis/future_daily_pricing_enriched_<run_date>.csv`
 
 ## Run Future Window Summary
 
@@ -123,7 +138,7 @@ Output:
 
 ## Run Settings Snapshot
 
-Update `sample_data/pricelabs_settings_manual_input.json` with manually copied PriceLabs settings, then run:
+Use `data/runs/<run_date>/raw/pricelabs_settings_manual_input.json` for operational runs. `sample_data/` is for debug fixtures only.
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -132,7 +147,7 @@ $env:PYTHONPATH = "src"
 
 Output:
 
-- `analysis/pricelabs_settings_snapshot_<run_date>.json`
+- `data/runs/<run_date>/settings/pricelabs_settings_snapshot_<run_date>.json`
 
 ## Run Settings Changes
 
@@ -145,7 +160,7 @@ $env:PYTHONPATH = "src"
 
 Output:
 
-- `analysis/pricelabs_settings_changes_<run_date>.csv`
+- `data/runs/<run_date>/settings/pricelabs_settings_changes_<run_date>.csv`
 
 ## Run Signal Change Review
 
@@ -184,7 +199,7 @@ Note: synthetic prior signal files may be created for pipeline debugging only. D
 Required output columns, in order:
 
 ```text
-run_date,listing_id,stay_date,nightly_price,min_stay,status,analysis_status,status_confidence,status_reason
+run_date,listing_id,stay_date,nightly_price,min_stay,status,upcoming_adr,analysis_status,status_confidence,status_reason
 ```
 
 Field mapping:
@@ -195,6 +210,7 @@ Field mapping:
 - `nightly_price` <- PriceLabs `Your Price`
 - `min_stay` <- PriceLabs `Min Stay`
 - `status` <- raw/source-driven normalized PriceLabs `Status` with `Available` fallback
+- `upcoming_adr` <- PriceLabs future export `ADR`
 - `analysis_status` <- analysis-aware status from `Status` plus `Available`
 - `status_confidence` <- `high`, `medium`, or `low`
 - `status_reason` <- stable reason code for the analysis status
@@ -217,8 +233,6 @@ srt-optimizer/
 |-- src/
 |   `-- pricelabs/
 |       `-- transform/
-|-- standardized/
-|   `-- .gitkeep
 |-- AGENTS.md
 |-- README.md
 `-- pyproject.toml

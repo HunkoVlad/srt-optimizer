@@ -10,7 +10,7 @@ This contract defines the current Python-only V1 pipeline shape:
 manual raw PriceLabs files -> standardized daily CSV -> enriched daily CSV -> monthly revenue pace -> analysis/settings outputs
 ```
 
-V1 is manual and local. It does not include browser automation, scheduling, Airbnb data, dashboards, or recommendation logic.
+V1 is local and raw-file driven. It does not include browser download automation, Airbnb data, dashboards, or automatic pricing-rule changes. The scheduler wrapper is a safe local runner around the same raw-file pipeline.
 
 ## Run Folder Contract
 
@@ -25,6 +25,8 @@ Required raw input files:
 ```text
 data/runs/<run_date>/raw/priceLabs_future_export.csv
 data/runs/<run_date>/raw/price_occ.csv
+data/runs/<run_date>/raw/monthly_trends.csv
+data/runs/<run_date>/raw/bookings_report.xlsx
 data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
 ```
 
@@ -43,6 +45,8 @@ data/runs/<run_date>/settings/
 ```
 
 `sample_data/` is debug/test fixture data only. It is not operational input for real weekly runs.
+
+Raw files are the source of truth. Generated outputs are reproducible and should not be treated as primary input.
 
 ## Source Roles
 
@@ -103,6 +107,76 @@ Rules:
 - Do not use `price_occ.csv` for `upcoming_adr`.
 - Do not use `price_occ.csv` as the sole operational source.
 - Do not compare daily market occupancy directly to single-listing daily occupancy.
+
+### Monthly Trends Source
+
+File:
+
+```text
+data/runs/<run_date>/raw/monthly_trends.csv
+```
+
+Role: required monthly truth source for captured revenue, occupancy, and ADR.
+
+Required source fields:
+
+- `month_year`
+- `Revenue`
+- `Occupancy`
+- `Booked Occupancy`
+- `Blocked Occupancy`
+- `ADR`
+
+Rules:
+
+- `month_year` normalizes to `month` as `YYYY-MM`.
+- Revenue and ADR are numeric.
+- Occupancy values are numeric percentage values.
+- Monthly Trends is primary for current-month captured revenue, occupancy, and ADR.
+- Monthly Trends historical rows are the primary historical actuals source when they pass quality checks.
+- Monthly Trends future rows may represent known on-the-books revenue and must not be double-counted with future export booked proxy.
+
+### Bookings Report Source
+
+File:
+
+```text
+data/runs/<run_date>/raw/bookings_report.xlsx
+```
+
+Role: required reservation-level source for current/future cleanings, stays, length of stay, booking window, and booking source mix.
+
+Useful source fields:
+
+- `Listing ID`
+- `Reservation ID`
+- `Check-in Date`
+- `Check-out Date`
+- `Booked Date`
+- `Booking Status`
+- `Booking Source`
+- `Length of Stay (Days)`
+- `Booking Window (Days)`
+- `Average Daily Rate`
+- `Rental Revenue`
+- `Total Revenue`
+
+Rules:
+
+- Count only booked reservations for booking metrics.
+- `stay_month` is based on `Check-in Date` month for this contract.
+- Booking source mix is informational only and does not adjust revenue.
+- Bookings Report is not treated as exact historical truth unless a future enhancement validates historical coverage.
+
+### Settings Source
+
+File:
+
+```text
+data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
+```
+
+Role: required manual PriceLabs rule snapshot input.
 
 ## Standardized Daily Contract
 
@@ -213,6 +287,104 @@ Limits:
 - `upcoming_adr` comes from the raw future export `ADR` field.
 - `price_occ.csv` must not provide `upcoming_adr`.
 
+## Monthly Trends Normalization Step 26 Contract
+
+Output:
+
+```text
+data/runs/<run_date>/analysis/monthly_trends_normalized_<run_date>.csv
+```
+
+Generated from:
+
+```text
+data/runs/<run_date>/raw/monthly_trends.csv
+```
+
+Role: normalize PriceLabs Monthly Trends into monthly truth fields for revenue, occupancy, and ADR.
+
+Required output columns:
+
+- `run_date`
+- `month`
+- `monthly_trends_revenue`
+- `monthly_trends_occupancy_pct`
+- `monthly_trends_booked_occupancy_pct`
+- `monthly_trends_blocked_occupancy_pct`
+- `monthly_trends_adr`
+- `monthly_trends_source`
+
+Rules:
+
+- `month_year` values such as `May 2026` normalize to `YYYY-MM`.
+- Revenue and ADR are numeric.
+- Occupancy fields are numeric percentage values, for example `45` means `45%`.
+- `monthly_trends_source = pricelabs_monthly_trends`.
+
+## Bookings Report Normalization Step 26 Contract
+
+Outputs:
+
+```text
+data/runs/<run_date>/analysis/bookings_report_normalized_<run_date>.csv
+data/runs/<run_date>/analysis/monthly_booking_metrics_<run_date>.csv
+```
+
+Generated from:
+
+```text
+data/runs/<run_date>/raw/bookings_report.xlsx
+```
+
+Role: normalize reservation rows and aggregate monthly booking, cleaning, LOS, booking-window, and booking-source metrics.
+
+Required normalized reservation columns:
+
+- `run_date`
+- `listing_id`
+- `reservation_id`
+- `check_in_date`
+- `check_out_date`
+- `booked_date`
+- `stay_month`
+- `booking_status`
+- `booking_source`
+- `length_of_stay_days`
+- `booking_window_days`
+- `average_daily_rate`
+- `rental_revenue`
+- `total_revenue`
+
+Required monthly booking metrics columns:
+
+- `run_date`
+- `month`
+- `bookings_report_bookings`
+- `bookings_report_cleanings_proxy`
+- `bookings_report_booked_nights`
+- `bookings_report_avg_los`
+- `bookings_report_rental_revenue`
+- `bookings_report_total_revenue`
+- `bookings_report_adr`
+- `bookings_report_avg_booking_window`
+- `airbnb_stays`
+- `vrbo_stays`
+- `direct_stays`
+- `other_unknown_stays`
+- `main_booking_source`
+- `booking_source_mix_summary`
+
+Rules:
+
+- Count booked reservations for monthly booking metrics.
+- `bookings_report_cleanings_proxy` equals booked reservation count for now.
+- `bookings_report_booked_nights` sums `Length of Stay (Days)`.
+- `bookings_report_avg_los = bookings_report_booked_nights / bookings_report_bookings`.
+- `bookings_report_adr = bookings_report_rental_revenue / bookings_report_booked_nights`.
+- Booking source mix counts reservations/stays, not nights.
+- Airbnb, Vrbo, direct, and other/unknown source labels are normalized for analysis context only.
+- Booking source does not change revenue values in this contract.
+
 ## Monthly Revenue Pace Step 2-3 Contract
 
 Output:
@@ -225,9 +397,11 @@ Generated from:
 
 ```text
 data/runs/<run_date>/analysis/future_daily_pricing_enriched_<run_date>.csv
+data/runs/<run_date>/analysis/monthly_trends_normalized_<run_date>.csv
+data/runs/<run_date>/analysis/monthly_booking_metrics_<run_date>.csv
 ```
 
-Role: aggregation and diagnostic-only monthly revenue pace view from the enriched daily file. It does not implement PriceLabs recommendation logic.
+Role: aggregation and diagnostic-only monthly revenue pace view from the enriched daily file, Monthly Trends, and Bookings Report metrics. It does not implement PriceLabs recommendation logic.
 
 Grain:
 
@@ -257,6 +431,26 @@ Required output columns:
 - `revenue_per_cleaning_proxy`
 - `booked_revenue_pct_of_target`
 - `total_future_revenue_pct_of_target`
+- `monthly_trends_revenue`
+- `monthly_trends_occupancy_pct`
+- `monthly_trends_booked_occupancy_pct`
+- `monthly_trends_blocked_occupancy_pct`
+- `monthly_trends_adr`
+- `monthly_trends_source`
+- `bookings_report_bookings`
+- `bookings_report_cleanings_proxy`
+- `bookings_report_booked_nights`
+- `bookings_report_avg_los`
+- `bookings_report_rental_revenue`
+- `bookings_report_total_revenue`
+- `bookings_report_adr`
+- `bookings_report_avg_booking_window`
+- `airbnb_stays`
+- `vrbo_stays`
+- `direct_stays`
+- `other_unknown_stays`
+- `main_booking_source`
+- `booking_source_mix_summary`
 - `revenue_pace_status`
 - `cleaning_efficiency_status`
 - `month_action_level`
@@ -275,6 +469,17 @@ Step 2 business rules:
 - `booked_cleanings_proxy` = sum `booked_stay_start_proxy`.
 - `avg_stay_length_proxy` = `booked_nights / booked_cleanings_proxy`, blank/null if no cleanings.
 - `revenue_per_cleaning_proxy` = `booked_revenue_proxy / booked_cleanings_proxy`, blank/null if no cleanings.
+
+Step 26 source precedence rules:
+
+- Current month captured revenue, occupancy, and ADR use Monthly Trends when available.
+- Current month open ask continues to come from the future export.
+- Current month total calendar value is Monthly Trends revenue plus future export open ask when Monthly Trends revenue exists.
+- Do not add future export booked proxy on top of Monthly Trends revenue for a month that has Monthly Trends revenue.
+- Current/future cleanings and LOS use Bookings Report metrics when available.
+- Future months use future export proxy/open ask unless Monthly Trends provides known on-the-books monthly revenue.
+- Historical months use Monthly Trends as the primary actuals source when the row passes quality checks.
+- KPI On The Books and Revenue On The Books are not primary sources for this contract.
 
 Step 3 diagnostic rules:
 
@@ -308,7 +513,7 @@ Step 3 diagnostic rules:
 
 Time-aware revenue pace interpretation:
 
-- Current month can be `conversion_risk` when booked revenue is low but total future value is at or above target.
+- Current month can be `conversion_risk` when captured/booked revenue is low but total calendar value is at or above target.
 - Current month can be `partial_month` but must still use normal current-month revenue diagnostics.
 - Next month can also be `conversion_risk`, with lower booked-revenue thresholds than current month.
 - Future and far-future months with strong total future revenue value should be `protect_open_value`, not `conversion_risk`.
@@ -371,47 +576,49 @@ Required behavior:
 
 - The summary table must include all 13 months from the rolling view.
 - The table must include six historical months, the current month, and six future months.
-- Historical `no_source_data` months must appear in the table.
-- Historical `historical_actuals` months must appear in the table when available.
+- Historical `no_source_data` and `data_not_available` months must appear in the table.
+- Historical Monthly Trends actual months must appear in the table when available.
 - `no_source_data` rows use `revenue_pace_status = no_source_data`.
 - `no_source_data` rows use `month_action_level = monitor`.
 - `no_source_data` rows must not create advisory or concern bullets.
-- `historical_actuals` rows must not create Critical Now, Advisory, or Protect recommendations.
+- Historical actual rows must not create Critical Now, Advisory, or Protect recommendations.
 - `partial_horizon` rows must not create advisory or concern bullets.
-- If historical actuals are available, Executive Summary should state which months have historical actuals and that missing historical months remain `no_source_data`.
+- If historical actuals are available, Executive Summary should state which months have historical actuals and that missing historical months remain `no_source_data` or `data_not_available`.
 - If no historical actuals are available, Executive Summary must include: `Historical months without source data are shown for context.`
 - Executive Summary must always include: `Market benchmark is context only.`
 
 Executive Decision View:
 
 - Appears after Executive Summary and before Monthly Revenue Pace.
-- Groups available months by `month_action_level`.
+- Groups actionable current/future months by `month_action_level`.
 - Summarizes existing diagnostic statuses only.
 - Must not include PriceLabs rule recommendations.
 - Market benchmark remains context only.
 
+For Executive Decision View, actionable rows are current/future rows with `data_availability` in `monthly_trends_current`, `monthly_trends_future_on_books`, `future_calendar`, or `partial_horizon`.
+
 `Critical Now` group:
 
-- Includes months where `data_availability = available` and `month_action_level = critical_now`.
+- Includes actionable months where `month_action_level = critical_now`.
 - If there are no matching months, show `None.`
 
 `Advisory` group:
 
-- Includes months where `data_availability = available` and `month_action_level = advisory`.
-- Each row should include `stay_month`, `revenue_pace_status`, booked revenue, total future value, and `cleaning_efficiency_status`.
+- Includes actionable months where `month_action_level = advisory`.
+- Each row should include `stay_month`, `revenue_pace_status`, revenue captured, total calendar value, and `cleaning_efficiency_status`.
 
 `Protect` group:
 
-- Includes months where `data_availability = available` and `month_action_level = protect`.
-- Each row should include `stay_month`, `revenue_pace_status`, and total future value.
+- Includes actionable months where `month_action_level = protect`.
+- Each row should include `stay_month`, `revenue_pace_status`, and total calendar value.
 
 `Monitor` group:
 
-- Includes months where `data_availability = available` and `month_action_level = monitor`.
+- Includes actionable months where `month_action_level = monitor`.
 
 Executive Decision View rules:
 
-- `no_source_data` rows must not be listed as action items.
+- `no_source_data`, `data_not_available`, and historical actual rows must not be listed as action items.
 - `partial_horizon` rows must not be listed as advisory.
 - This section does not create pricing recommendations.
 
@@ -419,19 +626,21 @@ Interpretation:
 
 - Appears after Executive Decision View and before Monthly Revenue Pace.
 - Explains existing diagnostic statuses in plain English.
-- Uses rows where `data_availability = available` or `data_availability = historical_actuals`.
+- Uses rows where `data_availability` has current/future Monthly Trends, future calendar, partial horizon, or valid historical Monthly Trends actuals.
 - Keeps wording concise.
 - Does not create PriceLabs setting recommendations.
 
 Interpretation rules:
 
-- `conversion_risk`: explain that booked revenue is low while total future value is at or above target. This means the issue is conversion risk, not weak open calendar value.
+- `conversion_risk`: explain that captured/booked revenue is low while total calendar value is at or above target. This means the issue is conversion risk, not weak open calendar value.
 - `protect_open_value`: explain that far-out open calendar value is healthy and supports protecting premium positioning.
 - `inefficient`: explain that revenue per cleaning is below the current efficiency threshold and should be monitored as a booking-quality concern.
 - `partial_horizon`: explain that only part of the month is inside the current export horizon, so it should not be judged against the full monthly target.
-- `historical_actuals`: explain that historical actuals are available from PriceLabs KPI data, including total revenue, booked nights, and ADR.
-- `suspicious`: append a caution note that the PriceLabs historical denominator should be reviewed before using occupancy as final truth.
-- Historical occupancy in the summary is calculated from booked nights divided by calendar days in the month.
+- `historical_actuals` or `monthly_trends_actuals`: explain that historical actuals are available from PriceLabs Monthly Trends, including captured revenue, occupancy, and ADR.
+- `data_not_available`: explain that missing, zero, or suspicious historical monthly rows are excluded from decision signals.
+- Historical occupancy in the summary uses Monthly Trends when the month passes quality checks.
+- Historical booked nights are estimated from Monthly Trends revenue divided by Monthly Trends ADR.
+- Historical cleanings are estimated from Monthly Trends booked-night estimates and observed current/future Bookings Report LOS when available.
 - `no_source_data`: historical `no_source_data` rows should not create month-level interpretation bullets because they are already covered in the Executive Summary.
 
 Interpretation text must not mention changing base price, min price, LOS, discounts, orphan rules, or other PriceLabs settings.
@@ -600,12 +809,6 @@ Generated from:
 data/runs/<run_date>/analysis/monthly_revenue_pace_<run_date>.csv
 ```
 
-May also be enriched by Step 13 from:
-
-```text
-data/runs/<run_date>/analysis/historical_monthly_actuals_<run_date>.csv
-```
-
 Purpose: stable monthly reporting window covering six months before the `run_date` month, the `run_date` month, and six months after the `run_date` month.
 
 Required behavior:
@@ -618,6 +821,7 @@ Required behavior:
 - Missing months must use `revenue_pace_status = no_source_data`.
 - Missing months must use `month_action_level = monitor`.
 - Historical revenue values must not be faked.
+- Historical months with missing, zero, or suspicious Monthly Trends values must use `data_availability = data_not_available`, `revenue_pace_status = data_not_available`, and `month_action_level = monitor`.
 
 Required output columns:
 
@@ -644,12 +848,35 @@ Required output columns:
 - `revenue_per_cleaning_proxy`
 - `booked_revenue_pct_of_target`
 - `total_future_revenue_pct_of_target`
+- `monthly_trends_revenue`
+- `monthly_trends_occupancy_pct`
+- `monthly_trends_booked_occupancy_pct`
+- `monthly_trends_blocked_occupancy_pct`
+- `monthly_trends_adr`
+- `monthly_trends_source`
+- `bookings_report_bookings`
+- `bookings_report_cleanings_proxy`
+- `bookings_report_booked_nights`
+- `bookings_report_avg_los`
+- `bookings_report_rental_revenue`
+- `bookings_report_total_revenue`
+- `bookings_report_adr`
+- `bookings_report_avg_booking_window`
+- `airbnb_stays`
+- `vrbo_stays`
+- `direct_stays`
+- `other_unknown_stays`
+- `main_booking_source`
+- `booking_source_mix_summary`
 - `month_time_bucket`
 - `revenue_pace_status`
 - `cleaning_efficiency_status`
 - `month_action_level`
 - `historical_bookable_nights`
 - `historical_booked_nights`
+- `historical_booked_nights_source`
+- `historical_cleanings_proxy`
+- `historical_cleanings_source`
 - `historical_paid_occupancy_pct`
 - `historical_occupancy_pct`
 - `historical_calendar_occupancy_pct`
@@ -667,37 +894,43 @@ Required output columns:
 
 `data_availability` values:
 
-- `available`
+- `monthly_trends_current`
+- `monthly_trends_actuals`
+- `monthly_trends_future_on_books`
+- `future_calendar`
+- `partial_horizon`
 - `no_source_data`
-- `historical_actuals`
+- `data_not_available`
+- `historical_actuals` only for deprecated KPI-era artifacts
 
 `revenue_pace_status` additionally allows:
 
 - `historical_actuals`
+- `data_not_available`
 
-Step 13 historical merge rules:
+Current Monthly Trends historical rules:
 
-- Historical actuals may merge only into historical rows.
-- Current and future PriceLabs pace rows must not be overwritten by historical actuals.
-- If historical actuals exist for a historical month:
-  - `data_availability = historical_actuals`
+- Historical actuals come from Monthly Trends when revenue, occupancy, and ADR are present and greater than zero.
+- Historical revenue below `$1,000` is treated as `data_not_available` unless a future validation rule changes that decision.
+- If Monthly Trends actuals pass quality checks:
+  - `data_availability = monthly_trends_actuals`
   - `revenue_pace_status = historical_actuals`
   - `month_action_level = monitor`
-- If no historical actuals exist:
-  - keep `data_availability = no_source_data`
-  - keep `revenue_pace_status = no_source_data`
+- If no valid monthly source exists:
+  - `data_availability = data_not_available` or `no_source_data`
+  - `revenue_pace_status = data_not_available` or `no_source_data`
   - keep `month_action_level = monitor`
 - Do not fake historical values.
 
-Step 15 calculated historical occupancy:
+Historical booked nights and cleanings:
 
-- `historical_calendar_occupancy_pct = historical_booked_nights / days_in_month * 100`.
-- Use `historical_calendar_occupancy_pct` as the main displayed historical occupancy for single-listing analysis.
-- `historical_occupancy_pct` remains the raw PriceLabs KPI reported occupancy.
-- Preserve `historical_occupancy_pct` for debugging and source comparison.
-- `monthly_revenue_summary_<run_date>.md` should display `historical_calendar_occupancy_pct` for `historical_actuals` rows.
-- Do not use `historical_bookable_nights` as the main occupancy denominator in the summary.
-- This avoids portfolio-style or PriceLabs-specific denominators when analyzing one listing.
+- `historical_booked_nights = round(monthly_trends_revenue / monthly_trends_adr)` for valid historical Monthly Trends rows.
+- `historical_booked_nights_source = estimated_from_monthly_trends`.
+- `historical_cleanings_proxy = round(historical_booked_nights / observed_avg_los)` when observed average LOS can be calculated from current/future Bookings Report rows.
+- `historical_cleanings_source = estimated_from_monthly_trends` when that estimate is available.
+- Monthly Trends occupancy is the main displayed historical occupancy for valid historical months.
+- `historical_calendar_occupancy_pct` is retained only for compatibility with older outputs and should not replace Monthly Trends occupancy in the current summary.
+- Do not use historical Bookings Report rows as exact historical truth unless a future enhancement validates historical coverage.
 
 `historical_data_quality_flag` values:
 
@@ -723,7 +956,7 @@ Limits:
 - PriceLabs KPI denominators may differ from calendar-day assumptions.
 - Market benchmark remains context only.
 
-## Historical Monthly Actuals Step 12 Contract
+## Deprecated Optional KPI Historical Actuals Contract
 
 Output:
 
@@ -743,6 +976,9 @@ Important:
 
 - This file is optional.
 - If `kpis_on_the_books.xlsx` is missing, the pipeline should continue without failing.
+- This path is deprecated for the current monthly reporting flow.
+- Monthly Trends is the primary monthly truth source for captured revenue, occupancy, and ADR.
+- Revenue On The Books is not the primary source and should only be used for future reconciliation if explicitly designed.
 
 Required output columns:
 
@@ -828,7 +1064,8 @@ Settings files are analysis context. They do not change the operational transfor
 ## Non-Goals
 
 - No browser automation.
-- No scheduler.
+- No Playwright download automation.
+- No Windows Task Scheduler configuration in the pipeline contract.
 - No Airbnb data.
 - No dashboard.
 - No recommendation logic.

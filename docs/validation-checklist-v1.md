@@ -1,5 +1,8 @@
 # Validation Checklist V1
 
+Status: Deprecated / historical reference.
+This document may describe an earlier pipeline version. Current source strategy is defined in `docs/data-source-strategy-v1.md` and `docs/project-artifact-audit-v1.md`.
+
 Implementation-oriented checklist for the current Python V1 PriceLabs transform.
 
 ## Happy Path

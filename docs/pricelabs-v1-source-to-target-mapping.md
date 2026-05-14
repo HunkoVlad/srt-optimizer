@@ -1,5 +1,8 @@
 # PriceLabs V1 Source-to-Target Mapping
 
+Status: Deprecated / historical reference.
+This document may describe an earlier pipeline version. Current source strategy is defined in `docs/data-source-strategy-v1.md` and `docs/project-artifact-audit-v1.md`.
+
 This document records the exact V1 mapping from the current PriceLabs export into the standardized daily pricing dataset.
 
 Target file:

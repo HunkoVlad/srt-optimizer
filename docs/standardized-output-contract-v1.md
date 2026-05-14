@@ -1,5 +1,8 @@
 # Standardized Output Contract V1
 
+Status: Deprecated / historical reference.
+This document may describe an earlier pipeline version. Current source strategy is defined in `docs/data-source-strategy-v1.md` and `docs/project-artifact-audit-v1.md`.
+
 This document defines the V1 standardized CSV output for the weekly PriceLabs transform. It documents the output artifact only; it does not implement extraction, transformation, validation code, Playwright tests, dashboards, or multi-listing support.
 
 ## Output File

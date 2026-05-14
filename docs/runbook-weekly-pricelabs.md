@@ -9,13 +9,15 @@ Operator checklist for the current V1 pipeline.
 - Manual CSV input only
 - Next 180 days only
 - No browser automation
-- No scheduling
+- Local scheduler wrapper supported separately; no browser/download automation
 - No dashboards
 
 ## Run Checklist
 
 - [ ] Download the PriceLabs future pricing CSV manually.
 - [ ] Download or export the Price Occ benchmark CSV manually.
+- [ ] Download or export Monthly Trends manually.
+- [ ] Download or export Bookings Report manually.
 - [ ] Prepare the manual PriceLabs settings JSON.
 - [ ] For development runs, keep email delivery in draft mode:
 
@@ -39,6 +41,8 @@ data/runs/<run_date>/settings/
 - [ ] Place the real raw input files in `data/runs/<run_date>/raw/`:
   - `priceLabs_future_export.csv`
   - `price_occ.csv`
+  - `monthly_trends.csv`
+  - `bookings_report.xlsx`
   - `pricelabs_settings_manual_input.json`
 - [ ] Treat `sample_data/` as debug fixtures only, not real weekly input storage.
 - [ ] Do not use legacy top-level `analysis/` or `standardized/` folders for real outputs.
@@ -55,12 +59,16 @@ The runner expects these exact filenames for each real run:
 ```text
 data/runs/<run_date>/raw/priceLabs_future_export.csv
 data/runs/<run_date>/raw/price_occ.csv
+data/runs/<run_date>/raw/monthly_trends.csv
+data/runs/<run_date>/raw/bookings_report.xlsx
 data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
 ```
 
 `priceLabs_future_export.csv` is the canonical Windows filename. Avoid creating a duplicate lowercase variant.
 
 `priceLabs_future_export.csv` column `ADR` maps to `upcoming_adr`. `price_occ.csv` is market/context input only and must not provide `upcoming_adr`.
+
+`monthly_trends.csv` is the primary monthly truth source for captured revenue, occupancy, and ADR. `bookings_report.xlsx` supplies current/future cleanings/stays, length of stay, booking source mix, and booking window. `kpis_on_the_books.xlsx` and Revenue On The Books exports are optional/deprecated for now and are not required for the current weekly report.
 
 ## After The Run
 
@@ -69,6 +77,19 @@ data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
 - [ ] Confirm `data/runs/<run_date>/manifest.json` has `status = "success"`.
 - [ ] Confirm analysis outputs are under `data/runs/<run_date>/analysis/`.
 - [ ] Confirm settings outputs are under `data/runs/<run_date>/settings/`.
+- [ ] Confirm Monthly Trends was normalized:
+
+```text
+data/runs/<run_date>/analysis/monthly_trends_normalized_<run_date>.csv
+```
+
+- [ ] Confirm Bookings Report was normalized:
+
+```text
+data/runs/<run_date>/analysis/bookings_report_normalized_<run_date>.csv
+data/runs/<run_date>/analysis/monthly_booking_metrics_<run_date>.csv
+```
+
 - [ ] Confirm the email-ready report was written:
 
 ```text
