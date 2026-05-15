@@ -1,9 +1,7 @@
 """PriceLabs downloader entry point.
 
 Default behavior is still skeleton/dry-run mode: create staging/log folders only.
-Real download mode is deliberately explicit. The future export target has a
-known UI path; the price/occupancy target has staging validation in place and a
-clear UI placeholder until its PriceLabs navigation path is confirmed.
+Real download mode is deliberately explicit and downloads only into staging.
 """
 
 from __future__ import annotations
@@ -33,12 +31,24 @@ FUTURE_EXPORT_TARGET = "future-export"
 PRICE_OCC_TARGET = "price-occ"
 SUPPORTED_TARGETS = [FUTURE_EXPORT_TARGET, PRICE_OCC_TARGET]
 PRICELABS_CUSTOMIZATION_URL = "https://app.pricelabs.co/customization"
+PRICELABS_PRICING_URL = (
+    "https://app.pricelabs.co/pricing?"
+    "listings=650255___717243&pms_name=lodgify&open_calendar=true"
+)
 PRICELABS_ACCOUNT_LABEL = "Lodgify"
 FUTURE_EXPORT_MENU_ITEM = "Download CSV Prices"
-LOGIN_CHECKPOINT_MESSAGE = (
+CUSTOMIZATION_LOGIN_CHECKPOINT_MESSAGE = (
     "Please log in to PriceLabs manually in the opened browser. Complete MFA if required. "
     "When you see the Customizations page, return to this terminal and press Enter."
 )
+PRICING_LOGIN_CHECKPOINT_MESSAGE = (
+    "Please log in to PriceLabs manually in the opened browser. Complete MFA if required. "
+    "When you see the pricing page, return to this terminal and press Enter."
+)
+NEIGHBOURHOOD_DATA_TAB_SELECTOR = 'button[qa-id="neighbourhood-data-tab"]'
+NEIGHBOURHOOD_DATA_TAB_FALLBACK_TEXT = "Neighborhood Data"
+PRICE_OCC_DOWNLOAD_BUTTON_SELECTOR = 'button[qa-id="fp-csv-download"]'
+PRICE_OCC_DOWNLOAD_BUTTON_ARIA_SELECTOR = 'button[aria-label="CSV Download"]'
 
 
 class DownloadError(RuntimeError):
@@ -232,10 +242,14 @@ def validate_price_occ_csv(csv_path: Path) -> None:
         raise DownloadError(f"Price Occ export missing expected columns: {missing}")
 
 
-def wait_for_manual_login_checkpoint(*, skip_login_pause: bool) -> None:
+def wait_for_manual_login_checkpoint(
+    *,
+    skip_login_pause: bool,
+    message: str = CUSTOMIZATION_LOGIN_CHECKPOINT_MESSAGE,
+) -> None:
     if skip_login_pause:
         return
-    print(LOGIN_CHECKPOINT_MESSAGE)
+    print(message)
     input()
 
 
@@ -296,13 +310,8 @@ def download_price_occ_with_playwright(
     run_date: str,
     headless: bool,
     skip_login_pause: bool = False,
-) -> str:
-    """Placeholder for the PriceLabs price/occupancy UI flow.
-
-    The staging filename and validator are ready, but the exact UI navigation
-    path for this export has not been verified. Fail clearly instead of
-    creating a fake staged file or guessing at selectors.
-    """
+) -> tuple[str, str]:
+    """Download PriceLabs neighborhood price/occupancy CSV into staging."""
 
     if headless and not skip_login_pause:
         raise DownloadError("Headless mode requires --skip-login-pause for price-occ downloads.")
@@ -313,23 +322,40 @@ def download_price_occ_with_playwright(
         raise DownloadError("Playwright is not installed in this environment.") from exc
 
     staging_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_download_path = staging_path.with_suffix(".download")
+    if temp_download_path.exists():
+        temp_download_path.unlink()
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=headless)
         context = browser.new_context(accept_downloads=True)
         page = context.new_page()
         try:
-            page.goto(PRICELABS_CUSTOMIZATION_URL, wait_until="domcontentloaded", timeout=120_000)
-            wait_for_manual_login_checkpoint(skip_login_pause=skip_login_pause)
-            page.wait_for_load_state("networkidle", timeout=120_000)
-            validate_visible_customization_page(page)
-            raise DownloadError(
-                "Price Occ UI download path is not implemented yet. "
-                "Selector review is required before downloading price_occ.csv."
+            page.goto(PRICELABS_PRICING_URL, wait_until="domcontentloaded", timeout=120_000)
+            wait_for_manual_login_checkpoint(
+                skip_login_pause=skip_login_pause,
+                message=PRICING_LOGIN_CHECKPOINT_MESSAGE,
             )
+            page.goto(PRICELABS_PRICING_URL, wait_until="domcontentloaded", timeout=120_000)
+            page.wait_for_load_state("networkidle", timeout=120_000)
+            validate_visible_pricing_page(page)
+            try:
+                tab_strategy = click_neighbourhood_data_tab(page)
+                wait_for_price_occ_panel(page)
+                download_button_strategy = find_price_occ_download_button_strategy(page)
+                with page.expect_download(timeout=120_000) as download_info:
+                    click_price_occ_download_button(page, download_button_strategy)
+                download = download_info.value
+                download.save_as(temp_download_path)
+            except DownloadError as exc:
+                screenshot_path = save_debug_screenshot(page, logs_dir, run_date)
+                raise DownloadError(f"{exc} Debug screenshot saved to {screenshot_path}") from exc
         finally:
             context.close()
             browser.close()
+
+    shutil.move(str(temp_download_path), staging_path)
+    return tab_strategy, download_button_strategy
 
 
 def save_debug_screenshot(page, logs_dir: Path, run_date: str) -> Path:
@@ -363,6 +389,95 @@ def validate_visible_customization_page(page) -> None:
             "PriceLabs still appears to be on a login page after the manual checkpoint. "
             "Complete login/MFA before pressing Enter."
         )
+
+
+def validate_visible_pricing_page(page) -> None:
+    body_text = visible_body_text(page)
+    normalized = " ".join(body_text.split()).lower()
+    current_url = getattr(page, "url", "")
+    if "404" in normalized and "this page could not be found" in normalized:
+        raise DownloadError(
+            "PriceLabs pricing page is showing a 404. "
+            f"Current URL: {current_url}. Confirm the listing pricing URL, then rerun."
+        )
+    if "log in" in normalized and "pricing" not in normalized and PRICELABS_ACCOUNT_LABEL.lower() not in normalized:
+        raise DownloadError(
+            "PriceLabs still appears to be on a login page after the manual checkpoint. "
+            "Complete login/MFA before pressing Enter."
+        )
+
+
+def click_neighbourhood_data_tab(page) -> str:
+    tab = first_existing_locator(page, NEIGHBOURHOOD_DATA_TAB_SELECTOR)
+    if tab is not None:
+        try:
+            tab.click(timeout=30_000)
+            return "qa-id-neighbourhood-data-tab"
+        except Exception as exc:
+            raise DownloadError("Could not click Neighborhood Data tab using qa-id selector.") from exc
+
+    fallback = page.get_by_text(NEIGHBOURHOOD_DATA_TAB_FALLBACK_TEXT, exact=True).first
+    try:
+        fallback.wait_for(timeout=30_000)
+        fallback.click(timeout=30_000)
+    except Exception as exc:
+        raise DownloadError("Could not click Neighborhood Data tab. PriceLabs layout may have changed.") from exc
+    return "text-neighborhood-data"
+
+
+def wait_for_price_occ_panel(page) -> None:
+    try:
+        page.wait_for_load_state("networkidle", timeout=60_000)
+    except Exception:
+        pass
+
+    selectors = [
+        PRICE_OCC_DOWNLOAD_BUTTON_SELECTOR,
+        PRICE_OCC_DOWNLOAD_BUTTON_ARIA_SELECTOR,
+    ]
+    last_error: Exception | None = None
+    for selector in selectors:
+        button = page.locator(selector).first
+        try:
+            button.wait_for(state="visible", timeout=60_000)
+            button.wait_for(state="attached", timeout=10_000)
+            return
+        except Exception as exc:
+            last_error = exc
+
+    raise DownloadError(
+        "Price Occ panel did not finish loading a visible CSV Download button after clicking "
+        "Neighborhood Data."
+    ) from last_error
+
+
+def find_price_occ_download_button_strategy(page) -> str:
+    button = first_existing_locator(page, PRICE_OCC_DOWNLOAD_BUTTON_SELECTOR)
+    if button is not None:
+        return "qa-id-fp-csv-download"
+
+    button = first_existing_locator(page, PRICE_OCC_DOWNLOAD_BUTTON_ARIA_SELECTOR)
+    if button is not None:
+        return "aria-label-csv-download"
+
+    raise DownloadError("Could not find Price Occ CSV Download button. PriceLabs layout may have changed.")
+
+
+def click_price_occ_download_button(page, strategy: str) -> None:
+    if strategy == "qa-id-fp-csv-download":
+        button = page.locator(PRICE_OCC_DOWNLOAD_BUTTON_SELECTOR).first
+    elif strategy == "aria-label-csv-download":
+        button = page.locator(PRICE_OCC_DOWNLOAD_BUTTON_ARIA_SELECTOR).first
+    else:
+        raise DownloadError(f"Unsupported Price Occ download button strategy: {strategy}")
+
+    try:
+        button.wait_for(timeout=30_000)
+        button.click(timeout=30_000)
+    except Exception as exc:
+        raise DownloadError(
+            f"Could not click Price Occ CSV Download button using strategy '{strategy}'."
+        ) from exc
 
 
 def trigger_future_export_download(page) -> str:
@@ -511,6 +626,9 @@ def real_download_log_lines(
     staging_path: Path,
     status: str,
     menu_strategy: str | None = None,
+    pricing_url: str | None = None,
+    tab_strategy: str | None = None,
+    download_button_strategy: str | None = None,
     reason: str | None = None,
 ) -> list[str]:
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -526,6 +644,12 @@ def real_download_log_lines(
     ]
     if menu_strategy:
         lines.append(f"menu_strategy={menu_strategy}")
+    if pricing_url:
+        lines.append(f"pricing_url={pricing_url}")
+    if tab_strategy:
+        lines.append(f"tab_strategy={tab_strategy}")
+    if download_button_strategy:
+        lines.append(f"download_button_strategy={download_button_strategy}")
     if reason:
         lines.append(f"failure_reason={reason}")
     return lines
@@ -586,7 +710,7 @@ def run_price_occ_download(
     staging_path = staging_dir / PRICE_OCC_FILENAME
 
     try:
-        menu_strategy = download_price_occ_with_playwright(
+        tab_strategy, download_button_strategy = download_price_occ_with_playwright(
             staging_path,
             logs_dir=logs_dir,
             run_date=run_date,
@@ -602,6 +726,7 @@ def run_price_occ_download(
                 target=PRICE_OCC_TARGET,
                 staging_path=staging_path,
                 status="failed",
+                pricing_url=PRICELABS_PRICING_URL,
                 reason=str(exc),
             ),
         )
@@ -614,7 +739,9 @@ def run_price_occ_download(
             target=PRICE_OCC_TARGET,
             staging_path=staging_path,
             status="passed",
-            menu_strategy=menu_strategy,
+            pricing_url=PRICELABS_PRICING_URL,
+            tab_strategy=tab_strategy,
+            download_button_strategy=download_button_strategy,
         )
         + ["Price Occ export downloaded and validated in staging.", "Raw folder was not touched."],
     )

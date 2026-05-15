@@ -190,6 +190,20 @@ def test_price_occ_validation_fails_when_key_columns_are_missing(tmp_path: Path)
         pricelabs_downloader.validate_price_occ_csv(csv_path)
 
 
+def test_price_occ_ui_flow_uses_confirmed_stable_selectors() -> None:
+    assert pricelabs_downloader.PRICELABS_PRICING_URL == (
+        "https://app.pricelabs.co/pricing?"
+        "listings=650255___717243&pms_name=lodgify&open_calendar=true"
+    )
+    assert pricelabs_downloader.NEIGHBOURHOOD_DATA_TAB_SELECTOR == (
+        'button[qa-id="neighbourhood-data-tab"]'
+    )
+    assert pricelabs_downloader.PRICE_OCC_DOWNLOAD_BUTTON_SELECTOR == (
+        'button[qa-id="fp-csv-download"]'
+    )
+    assert not hasattr(pricelabs_downloader, "save_debug_dom")
+
+
 def test_future_export_real_mode_uses_staging_only_with_mocked_download(monkeypatch) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     run_date = "2099-02-02"
@@ -276,7 +290,7 @@ def test_price_occ_real_mode_uses_staging_only_with_mocked_download(monkeypatch)
             "2026-05-14,72,275,12\n",
             encoding="utf-8",
         )
-        return "mocked-price-occ-path"
+        return "mocked-tab-strategy", "mocked-button-strategy"
 
     monkeypatch.setattr(
         pricelabs_downloader,
@@ -299,8 +313,10 @@ def test_price_occ_real_mode_uses_staging_only_with_mocked_download(monkeypatch)
         assert list((run_dir / "downloads_staging").glob("*.html")) == []
         log_text = log_file.read_text(encoding="utf-8")
         assert "target=price-occ" in log_text
+        assert "pricing_url=https://app.pricelabs.co/pricing?listings=650255___717243" in log_text
         assert "validation_status=passed" in log_text
-        assert "menu_strategy=mocked-price-occ-path" in log_text
+        assert "tab_strategy=mocked-tab-strategy" in log_text
+        assert "download_button_strategy=mocked-button-strategy" in log_text
         assert "Raw folder was not touched." in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
