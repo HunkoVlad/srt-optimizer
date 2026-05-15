@@ -496,11 +496,10 @@ def test_bookings_report_ui_flow_uses_confirmed_stable_selectors() -> None:
 def test_bookings_report_date_range_instruction_uses_booking_date() -> None:
     message = pricelabs_downloader.bookings_date_range_checkpoint_message("2026-05-14")
 
-    assert "Booking Date range" in message
-    assert "previous 30 days" in message
-    assert "run date" in message
+    assert "one-month Booking Date range" in message
     assert "Do not use Stay Date as the main filter" in message
-    assert "Suggested Booking Date range: 2026-04-14 to 2026-05-14" in message
+    assert "If the Booking Date range looks correct" in message
+    assert "Only adjust it manually if the default range is wrong" in message
 
 
 def test_dom_debug_helper_is_not_enabled() -> None:

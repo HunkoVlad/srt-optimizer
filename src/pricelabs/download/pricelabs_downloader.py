@@ -12,7 +12,7 @@ import json
 import shutil
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -396,14 +396,12 @@ def wait_for_manual_login_checkpoint(
 
 
 def bookings_date_range_checkpoint_message(run_date: str) -> str:
-    parsed_run_date = datetime.strptime(run_date, "%Y-%m-%d").date()
-    suggested_from = (parsed_run_date - timedelta(days=30)).isoformat()
-    suggested_to = parsed_run_date.isoformat()
+    datetime.strptime(run_date, "%Y-%m-%d")
     return (
-        "Set Booking Date range to the previous 30 days through the run date. "
+        "Confirm the page shows a one-month Booking Date range. "
         "Do not use Stay Date as the main filter. Leave Stay Date broad/default if available. "
-        f"Suggested Booking Date range: {suggested_from} to {suggested_to}. "
-        "When ready to download, return to this terminal and press Enter."
+        "If the Booking Date range looks correct, return to this terminal and press Enter. "
+        "Only adjust it manually if the default range is wrong."
     )
 
 
