@@ -150,6 +150,39 @@ def test_price_occ_target_is_accepted_in_dry_run() -> None:
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_monthly_trends_target_is_accepted_in_dry_run() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-05"
+    run_dir = repo_root / "data" / "runs" / run_date
+    raw_dir = run_dir / "raw"
+
+    shutil.rmtree(run_dir, ignore_errors=True)
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pricelabs.download.pricelabs_downloader",
+                "--run-date",
+                run_date,
+                "--target",
+                "monthly-trends",
+                "--dry-run",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 0
+        assert (run_dir / "downloads_staging").is_dir()
+        assert not raw_dir.exists()
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
 def test_price_occ_validation_passes_for_expected_columns(tmp_path: Path) -> None:
     csv_path = tmp_path / "price_occ.csv"
     csv_path.write_text(
@@ -190,6 +223,67 @@ def test_price_occ_validation_fails_when_key_columns_are_missing(tmp_path: Path)
         pricelabs_downloader.validate_price_occ_csv(csv_path)
 
 
+def test_monthly_trends_validation_passes_for_expected_columns(tmp_path: Path) -> None:
+    csv_path = tmp_path / "monthly_trends.csv"
+    csv_path.write_text(
+        "month_year,Revenue,Occupancy,Booked Occupancy,Blocked Occupancy,ADR\n"
+        "May 2026,5357,45,43,2,383\n",
+        encoding="utf-8",
+    )
+
+    pricelabs_downloader.validate_monthly_trends_csv(csv_path)
+
+
+def test_monthly_trends_validation_fails_for_empty_file(tmp_path: Path) -> None:
+    csv_path = tmp_path / "monthly_trends.csv"
+    csv_path.write_text("", encoding="utf-8")
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="empty"):
+        pricelabs_downloader.validate_monthly_trends_csv(csv_path)
+
+
+def test_monthly_trends_validation_fails_for_html_file(tmp_path: Path) -> None:
+    csv_path = tmp_path / "monthly_trends.csv"
+    csv_path.write_text("<html><body>login</body></html>", encoding="utf-8")
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="HTML"):
+        pricelabs_downloader.validate_monthly_trends_csv(csv_path)
+
+
+def test_monthly_trends_validation_fails_for_json_error_payload(tmp_path: Path) -> None:
+    csv_path = tmp_path / "monthly_trends.csv"
+    csv_path.write_text(
+        '{"error_code":50004,"message":"An unexpected error occurred."}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="PriceLabs API error response"):
+        pricelabs_downloader.validate_monthly_trends_csv(csv_path)
+
+
+def test_monthly_trends_validation_fails_for_style_payload(tmp_path: Path) -> None:
+    csv_path = tmp_path / "monthly_trends.csv"
+    csv_path.write_text(
+        "text-size-adjust: 100%;\n--chakra-colors-black: #000000;\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="page/style content"):
+        pricelabs_downloader.validate_monthly_trends_csv(csv_path)
+
+
+def test_monthly_trends_validation_fails_when_key_columns_are_missing(tmp_path: Path) -> None:
+    csv_path = tmp_path / "monthly_trends.csv"
+    csv_path.write_text(
+        "month_year,Some Value\n"
+        "May 2026,5357\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="missing expected columns"):
+        pricelabs_downloader.validate_monthly_trends_csv(csv_path)
+
+
 def test_price_occ_ui_flow_uses_confirmed_stable_selectors() -> None:
     assert pricelabs_downloader.PRICELABS_PRICING_URL == (
         "https://app.pricelabs.co/pricing?"
@@ -201,7 +295,28 @@ def test_price_occ_ui_flow_uses_confirmed_stable_selectors() -> None:
     assert pricelabs_downloader.PRICE_OCC_DOWNLOAD_BUTTON_SELECTOR == (
         'button[qa-id="fp-csv-download"]'
     )
+
+
+def test_monthly_trends_ui_flow_uses_confirmed_stable_selectors() -> None:
+    assert pricelabs_downloader.PRICELABS_BOOKING_INSIGHTS_URL == (
+        "https://app.pricelabs.co/pricing?"
+        "listings=650255___717243&pms_name=lodgify&open_bi=true"
+    )
+    assert pricelabs_downloader.BOOKING_INSIGHTS_TAB_SELECTOR == (
+        'button[qa-id="rp-booking-insights"]'
+    )
+    assert pricelabs_downloader.MONTHLY_TRENDS_DOWNLOAD_BUTTON_SELECTOR == (
+        'button[qa-id="mpt-csv-download"]'
+    )
+    assert pricelabs_downloader.MONTHLY_TRENDS_DOWNLOAD_BUTTON_ID_SELECTOR == (
+        "button#mpt-csv-download"
+    )
+    assert pricelabs_downloader.BOOKING_INSIGHTS_PANEL_MARKER_TEXT == "Monthly Performance Trends"
+
+
+def test_dom_debug_helper_is_not_enabled() -> None:
     assert not hasattr(pricelabs_downloader, "save_debug_dom")
+
 
 
 def test_future_export_real_mode_uses_staging_only_with_mocked_download(monkeypatch) -> None:
@@ -320,6 +435,139 @@ def test_price_occ_real_mode_uses_staging_only_with_mocked_download(monkeypatch)
         assert "Raw folder was not touched." in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_monthly_trends_real_mode_uses_staging_only_with_mocked_download(monkeypatch) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-06"
+    run_dir = repo_root / "data" / "runs" / run_date
+    staging_file = run_dir / "downloads_staging" / "monthly_trends.csv"
+    raw_dir = run_dir / "raw"
+    log_file = run_dir / "logs" / f"pricelabs_download_{run_date}.log"
+
+    shutil.rmtree(run_dir, ignore_errors=True)
+
+    def fake_download(
+        staging_path: Path,
+        *,
+        logs_dir: Path,
+        run_date: str,
+        headless: bool,
+        skip_login_pause: bool = False,
+    ) -> str:
+        assert staging_path == staging_file
+        assert logs_dir == run_dir / "logs"
+        assert run_date == "2099-02-06"
+        assert headless is True
+        assert skip_login_pause is True
+        staging_path.write_text(
+            "month_year,Revenue,Occupancy,ADR\n"
+            "May 2026,5357,45,383\n",
+            encoding="utf-8",
+        )
+        return "mocked-booking-insights-tab", "mocked-monthly-trends-button"
+
+    monkeypatch.setattr(
+        pricelabs_downloader,
+        "download_monthly_trends_with_playwright",
+        fake_download,
+    )
+
+    try:
+        result_log = pricelabs_downloader.run(
+            run_date,
+            target="monthly-trends",
+            headless=True,
+            skip_login_pause=True,
+        )
+
+        assert result_log == log_file
+        assert staging_file.exists()
+        assert log_file.exists()
+        assert not raw_dir.exists()
+        assert list((run_dir / "downloads_staging").glob("*.html")) == []
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "target=monthly-trends" in log_text
+        assert "pricing_url=https://app.pricelabs.co/pricing?listings=650255___717243" in log_text
+        assert "open_bi=true" in log_text
+        assert "validation_status=passed" in log_text
+        assert "tab_strategy=mocked-booking-insights-tab" in log_text
+        assert "download_button_strategy=mocked-monthly-trends-button" in log_text
+        assert "Raw folder was not touched." in log_text
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_monthly_trends_capture_keeps_first_valid_download_candidate(tmp_path: Path) -> None:
+    class FakeDownload:
+        def __init__(self, suggested_filename: str, content: str) -> None:
+            self.suggested_filename = suggested_filename
+            self.content = content
+
+        def save_as(self, path: Path) -> None:
+            path.write_text(self.content, encoding="utf-8")
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.download_handler = None
+
+        def on(self, event_name: str, handler) -> None:
+            assert event_name == "download"
+            self.download_handler = handler
+
+        def wait_for_timeout(self, _milliseconds: int) -> None:
+            return
+
+    page = FakePage()
+    staging_path = tmp_path / "monthly_trends.csv"
+
+    def click_action() -> None:
+        assert page.download_handler is not None
+        page.download_handler(
+            FakeDownload(
+                "monthly_trends.csv",
+                '{"error_code":50004,"message":"An unexpected error occurred."}',
+            )
+        )
+        page.download_handler(
+            FakeDownload(
+                "monthly_trends.csv",
+                "month_year,Revenue,Occupancy,ADR\nMay 2026,5357,45,383\n",
+            )
+        )
+
+    pricelabs_downloader.capture_validated_download(
+        page,
+        staging_path,
+        click_action,
+        pricelabs_downloader.validate_monthly_trends_csv,
+        file_label="monthly_trends",
+    )
+
+    assert staging_path.read_text(encoding="utf-8").startswith("month_year,Revenue")
+    assert list(tmp_path.glob("*.candidate-*.csv")) == []
+
+
+def test_monthly_trends_ui_table_fallback_writes_required_shape(tmp_path: Path) -> None:
+    class FakePage:
+        def evaluate(self, _script: str):
+            return [
+                {
+                    "month_year": "Feb 2026",
+                    "Revenue": "8.65K",
+                    "Occupancy": "68%",
+                    "ADR": "455.32",
+                }
+            ]
+
+    staging_path = tmp_path / "monthly_trends.csv"
+
+    pricelabs_downloader.export_monthly_trends_table_from_ui(FakePage(), staging_path)
+
+    rows = staging_path.read_text(encoding="utf-8").splitlines()
+    assert rows[0] == "month_year,Revenue,Occupancy,Booked Occupancy,Blocked Occupancy,ADR"
+    assert rows[1] == "Feb 2026,8.65K,68%,,,455.32"
+    pricelabs_downloader.validate_monthly_trends_csv(staging_path)
 
 
 def test_manual_login_checkpoint_prints_instruction_and_waits_for_enter(monkeypatch, capsys) -> None:

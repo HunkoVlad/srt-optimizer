@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import shutil
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -27,13 +29,19 @@ PLACEHOLDER_STEPS = [
 
 FUTURE_EXPORT_FILENAME = "priceLabs_future_export.csv"
 PRICE_OCC_FILENAME = "price_occ.csv"
+MONTHLY_TRENDS_FILENAME = "monthly_trends.csv"
 FUTURE_EXPORT_TARGET = "future-export"
 PRICE_OCC_TARGET = "price-occ"
-SUPPORTED_TARGETS = [FUTURE_EXPORT_TARGET, PRICE_OCC_TARGET]
+MONTHLY_TRENDS_TARGET = "monthly-trends"
+SUPPORTED_TARGETS = [FUTURE_EXPORT_TARGET, PRICE_OCC_TARGET, MONTHLY_TRENDS_TARGET]
 PRICELABS_CUSTOMIZATION_URL = "https://app.pricelabs.co/customization"
 PRICELABS_PRICING_URL = (
     "https://app.pricelabs.co/pricing?"
     "listings=650255___717243&pms_name=lodgify&open_calendar=true"
+)
+PRICELABS_BOOKING_INSIGHTS_URL = (
+    "https://app.pricelabs.co/pricing?"
+    "listings=650255___717243&pms_name=lodgify&open_bi=true"
 )
 PRICELABS_ACCOUNT_LABEL = "Lodgify"
 FUTURE_EXPORT_MENU_ITEM = "Download CSV Prices"
@@ -49,6 +57,12 @@ NEIGHBOURHOOD_DATA_TAB_SELECTOR = 'button[qa-id="neighbourhood-data-tab"]'
 NEIGHBOURHOOD_DATA_TAB_FALLBACK_TEXT = "Neighborhood Data"
 PRICE_OCC_DOWNLOAD_BUTTON_SELECTOR = 'button[qa-id="fp-csv-download"]'
 PRICE_OCC_DOWNLOAD_BUTTON_ARIA_SELECTOR = 'button[aria-label="CSV Download"]'
+BOOKING_INSIGHTS_TAB_SELECTOR = 'button[qa-id="rp-booking-insights"]'
+BOOKING_INSIGHTS_TAB_FALLBACK_TEXT = "Booking Insights"
+BOOKING_INSIGHTS_PANEL_MARKER_TEXT = "Monthly Performance Trends"
+MONTHLY_TRENDS_DOWNLOAD_BUTTON_SELECTOR = 'button[qa-id="mpt-csv-download"]'
+MONTHLY_TRENDS_DOWNLOAD_BUTTON_ID_SELECTOR = 'button#mpt-csv-download'
+MONTHLY_TRENDS_DOWNLOAD_BUTTON_TITLE_SELECTOR = 'button[title="CSV"]'
 
 
 class DownloadError(RuntimeError):
@@ -143,11 +157,42 @@ def looks_like_html(text: str) -> bool:
     return sample.startswith("<!doctype html") or sample.startswith("<html")
 
 
+def looks_like_css_or_style_payload(text: str) -> bool:
+    sample = text.lstrip().lower()
+    return sample.startswith("--chakra-") or "--chakra-colors" in sample or "text-size-adjust:" in sample
+
+
+def maybe_json_error_message(text: str) -> str | None:
+    sample = text.lstrip()
+    if not sample.startswith("{"):
+        return None
+    try:
+        payload = json.loads(sample)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if "error_code" not in payload and "message" not in payload:
+        return None
+    error_code = payload.get("error_code", "")
+    message = payload.get("message", "")
+    return f"PriceLabs API error response: error_code={error_code}, message={message}"
+
+
+def reject_non_csv_payload(sample: str, file_label: str) -> None:
+    if looks_like_html(sample):
+        raise DownloadError(f"Downloaded {file_label} file looks like an HTML login/error page.")
+    json_error = maybe_json_error_message(sample)
+    if json_error:
+        raise DownloadError(f"Downloaded {file_label} file is not CSV. {json_error}")
+    if looks_like_css_or_style_payload(sample):
+        raise DownloadError(f"Downloaded {file_label} file looks like page/style content, not CSV.")
+
+
 def read_csv_header(csv_path: Path) -> list[str]:
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         sample = handle.read(2048)
-        if looks_like_html(sample):
-            raise DownloadError("Downloaded file looks like an HTML login/error page.")
+        reject_non_csv_payload(sample, "future export")
         handle.seek(0)
         reader = csv.reader(handle)
         for row in reader:
@@ -161,8 +206,7 @@ def read_csv_header(csv_path: Path) -> list[str]:
 def read_csv_header_with_columns(csv_path: Path, required_any: set[str], file_label: str) -> list[str]:
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         sample = handle.read(2048)
-        if looks_like_html(sample):
-            raise DownloadError(f"Downloaded {file_label} file looks like an HTML login/error page.")
+        reject_non_csv_payload(sample, file_label)
         handle.seek(0)
         reader = csv.reader(handle)
         for row in reader:
@@ -242,6 +286,35 @@ def validate_price_occ_csv(csv_path: Path) -> None:
         raise DownloadError(f"Price Occ export missing expected columns: {missing}")
 
 
+def validate_monthly_trends_csv(csv_path: Path) -> None:
+    if not csv_path.exists():
+        raise DownloadError(f"Missing staged file: {csv_path}")
+    if csv_path.stat().st_size <= 0:
+        raise DownloadError("Downloaded monthly_trends export is empty.")
+
+    header = read_csv_header_with_columns(csv_path, {"month_year", "month", "revenue"}, "monthly_trends")
+    normalized = {column.strip().lower() for column in header}
+
+    month_columns = {"month_year", "month", "month year", "year & month", "date"}
+    revenue_columns = {"revenue", "total revenue", "rental revenue"}
+    adr_columns = {"adr", "rental adr"}
+    occupancy_columns = {"occupancy", "occupancy %", "booked occupancy", "paid occupancy %"}
+
+    missing_groups = []
+    if not normalized.intersection(month_columns):
+        missing_groups.append("month/date period field")
+    if not normalized.intersection(revenue_columns):
+        missing_groups.append("revenue field")
+    if not normalized.intersection(adr_columns):
+        missing_groups.append("ADR field")
+    if not normalized.intersection(occupancy_columns):
+        missing_groups.append("occupancy field")
+
+    if missing_groups:
+        missing = ", ".join(missing_groups)
+        raise DownloadError(f"Monthly Trends export missing expected columns: {missing}")
+
+
 def wait_for_manual_login_checkpoint(
     *,
     skip_login_pause: bool,
@@ -299,7 +372,7 @@ def download_future_export_with_playwright(
             context.close()
             browser.close()
 
-    shutil.move(str(temp_download_path), staging_path)
+    replace_file(temp_download_path, staging_path)
     return menu_strategy
 
 
@@ -336,6 +409,9 @@ def download_price_occ_with_playwright(
                 skip_login_pause=skip_login_pause,
                 message=PRICING_LOGIN_CHECKPOINT_MESSAGE,
             )
+            if not headless:
+                print("Playwright paused immediately after manual login checkpoint. Step through, then resume.")
+                page.pause()
             page.goto(PRICELABS_PRICING_URL, wait_until="domcontentloaded", timeout=120_000)
             page.wait_for_load_state("networkidle", timeout=120_000)
             validate_visible_pricing_page(page)
@@ -354,8 +430,222 @@ def download_price_occ_with_playwright(
             context.close()
             browser.close()
 
-    shutil.move(str(temp_download_path), staging_path)
+    replace_file(temp_download_path, staging_path)
     return tab_strategy, download_button_strategy
+
+
+def download_monthly_trends_with_playwright(
+    staging_path: Path,
+    *,
+    logs_dir: Path,
+    run_date: str,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> tuple[str, str]:
+    """Download PriceLabs monthly trends CSV into staging."""
+
+    if headless and not skip_login_pause:
+        raise DownloadError("Headless mode requires --skip-login-pause for monthly-trends downloads.")
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise DownloadError("Playwright is not installed in this environment.") from exc
+
+    staging_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_download_path = staging_path.with_suffix(".download")
+    if temp_download_path.exists():
+        temp_download_path.unlink()
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=headless)
+        context = browser.new_context(accept_downloads=True)
+        page = context.new_page()
+        try:
+            page.goto(PRICELABS_PRICING_URL, wait_until="domcontentloaded", timeout=120_000)
+            wait_for_manual_login_checkpoint(
+                skip_login_pause=skip_login_pause,
+                message=PRICING_LOGIN_CHECKPOINT_MESSAGE,
+            )
+            page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
+            page.wait_for_load_state("networkidle", timeout=120_000)
+            validate_visible_pricing_page(page)
+            tab_strategy = "url-open-bi"
+            wait_for_booking_insights_panel_marker(page)
+            try:
+                wait_for_monthly_trends_panel(page)
+                download_button_strategy = find_monthly_trends_download_button_strategy(page)
+                try:
+                    capture_validated_download(
+                        page,
+                        staging_path,
+                        lambda: click_monthly_trends_download_button(page, download_button_strategy),
+                        validate_monthly_trends_csv,
+                        file_label="monthly_trends",
+                    )
+                except DownloadError as exc:
+                    if "PriceLabs API error response" not in str(exc):
+                        raise
+                    export_monthly_trends_table_from_ui(page, staging_path)
+                    validate_monthly_trends_csv(staging_path)
+                    download_button_strategy = f"{download_button_strategy}+ui-table-fallback"
+            except DownloadError as exc:
+                screenshot_path = save_debug_screenshot(page, logs_dir, run_date)
+                raise DownloadError(f"{exc} Debug screenshot saved to {screenshot_path}") from exc
+        finally:
+            context.close()
+            browser.close()
+
+    return tab_strategy, download_button_strategy
+
+
+def replace_file(source_path: Path, destination_path: Path) -> None:
+    if destination_path.exists():
+        destination_path.unlink()
+    shutil.move(str(source_path), destination_path)
+
+
+def capture_validated_download(
+    page,
+    staging_path: Path,
+    click_action,
+    validator,
+    *,
+    file_label: str,
+) -> None:
+    """Capture download candidates and keep the first one that validates.
+
+    Some PriceLabs export buttons can produce an initial API-error payload and
+    then a usable browser download. We collect candidates briefly instead of
+    assuming the first download-like response is the final export.
+    """
+
+    downloads = []
+    page.on("download", lambda download: downloads.append(download))
+    click_action()
+
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline and not downloads:
+        page.wait_for_timeout(250)
+
+    if not downloads:
+        raise DownloadError(f"No {file_label} download was captured.")
+
+    settle_deadline = time.monotonic() + 5
+    while time.monotonic() < settle_deadline:
+        page.wait_for_timeout(250)
+
+    validation_errors = []
+    candidate_paths = []
+    valid_candidate: Path | None = None
+
+    for index, download in enumerate(downloads, start=1):
+        candidate_path = staging_path.with_name(f"{staging_path.stem}.candidate-{index}{staging_path.suffix}")
+        candidate_paths.append(candidate_path)
+        if candidate_path.exists():
+            candidate_path.unlink()
+        download.save_as(candidate_path)
+        try:
+            validator(candidate_path)
+            valid_candidate = candidate_path
+            break
+        except DownloadError as exc:
+            suggested_name = getattr(download, "suggested_filename", "")
+            validation_errors.append(f"candidate {index} ({suggested_name}): {exc}")
+
+    if valid_candidate is not None:
+        replace_file(valid_candidate, staging_path)
+        for candidate_path in candidate_paths:
+            if candidate_path.exists() and candidate_path != staging_path:
+                candidate_path.unlink()
+        return
+
+    if candidate_paths:
+        replace_file(candidate_paths[0], staging_path)
+        for candidate_path in candidate_paths[1:]:
+            if candidate_path.exists():
+                candidate_path.unlink()
+    joined_errors = " | ".join(validation_errors)
+    raise DownloadError(f"No captured {file_label} download validated as CSV. {joined_errors}")
+
+
+def export_monthly_trends_table_from_ui(page, staging_path: Path) -> None:
+    rows = extract_monthly_trends_rows_from_ui(page)
+    if not rows:
+        raise DownloadError("Monthly Trends UI table fallback found no usable month rows.")
+
+    staging_path.parent.mkdir(parents=True, exist_ok=True)
+    with staging_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=("month_year", "Revenue", "Occupancy", "Booked Occupancy", "Blocked Occupancy", "ADR"),
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def extract_monthly_trends_rows_from_ui(page) -> list[dict[str, str]]:
+    script = """
+    () => {
+      const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+      const marker = Array.from(document.querySelectorAll('p'))
+        .find((node) => normalize(node.innerText).includes('Monthly Performance Trends'));
+      if (!marker) return [];
+      const container = marker.closest('div.chakra-card, div') || document.body;
+      const rows = [];
+      const rowNodes = Array.from(container.querySelectorAll('tr'));
+      for (const rowNode of rowNodes) {
+        const cells = Array.from(rowNode.querySelectorAll('td, th')).map((cell) => normalize(cell.innerText));
+        if (cells.length >= 4 && /^[A-Za-z]{3,9}\\s+\\d{4}$/.test(cells[0])) {
+          rows.push({
+            month_year: cells[0],
+            Revenue: cells[1] || '',
+            Occupancy: cells[2] || '',
+            'Booked Occupancy': '',
+            'Blocked Occupancy': '',
+            ADR: cells[3] || '',
+          });
+        }
+      }
+      if (rows.length > 0) return rows;
+
+      const textRows = Array.from(container.querySelectorAll('[role="row"], .chakra-table__tr, div'))
+        .map((node) => normalize(node.innerText))
+        .filter((text) => /^[A-Za-z]{3,9}\\s+\\d{4}\\b/.test(text));
+      for (const text of textRows) {
+        const match = text.match(/^([A-Za-z]{3,9}\\s+\\d{4})\\s+(.+?)\\s+([0-9.]+%?)\\s+(.+)$/);
+        if (match) {
+          rows.push({
+            month_year: match[1],
+            Revenue: match[2],
+            Occupancy: match[3],
+            'Booked Occupancy': '',
+            'Blocked Occupancy': '',
+            ADR: match[4],
+          });
+        }
+      }
+      return rows;
+    }
+    """
+    rows = page.evaluate(script)
+    if not isinstance(rows, list):
+        return []
+    cleaned_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cleaned_rows.append(
+            {
+                "month_year": str(row.get("month_year", "")).strip(),
+                "Revenue": str(row.get("Revenue", "")).strip(),
+                "Occupancy": str(row.get("Occupancy", "")).strip(),
+                "Booked Occupancy": str(row.get("Booked Occupancy", "")).strip(),
+                "Blocked Occupancy": str(row.get("Blocked Occupancy", "")).strip(),
+                "ADR": str(row.get("ADR", "")).strip(),
+            }
+        )
+    return cleaned_rows
 
 
 def save_debug_screenshot(page, logs_dir: Path, run_date: str) -> Path:
@@ -441,6 +731,7 @@ def wait_for_price_occ_panel(page) -> None:
         try:
             button.wait_for(state="visible", timeout=60_000)
             button.wait_for(state="attached", timeout=10_000)
+            wait_for_enabled(button, selector)
             return
         except Exception as exc:
             last_error = exc
@@ -461,6 +752,135 @@ def find_price_occ_download_button_strategy(page) -> str:
         return "aria-label-csv-download"
 
     raise DownloadError("Could not find Price Occ CSV Download button. PriceLabs layout may have changed.")
+
+
+def click_booking_insights_tab(page) -> str:
+    tab = first_existing_locator(page, BOOKING_INSIGHTS_TAB_SELECTOR)
+    if tab is not None:
+        try:
+            tab.click(timeout=30_000)
+            return "qa-id-rp-booking-insights"
+        except Exception as exc:
+            raise DownloadError("Could not click Booking Insights tab using qa-id selector.") from exc
+
+    fallback = page.get_by_text(BOOKING_INSIGHTS_TAB_FALLBACK_TEXT, exact=True).first
+    try:
+        fallback.wait_for(timeout=30_000)
+        fallback.click(timeout=30_000)
+    except Exception as exc:
+        raise DownloadError("Could not click Booking Insights tab. PriceLabs layout may have changed.") from exc
+    return "text-booking-insights"
+
+
+def wait_for_booking_insights_ready(page) -> None:
+    try:
+        page.wait_for_load_state("networkidle", timeout=60_000)
+    except Exception:
+        pass
+
+    tab = page.locator(BOOKING_INSIGHTS_TAB_SELECTOR).first
+    try:
+        tab.wait_for(state="visible", timeout=60_000)
+        tab.wait_for(state="attached", timeout=10_000)
+        wait_for_enabled(tab, BOOKING_INSIGHTS_TAB_SELECTOR)
+        return
+    except Exception:
+        pass
+
+    fallback = page.get_by_text(BOOKING_INSIGHTS_TAB_FALLBACK_TEXT, exact=True).first
+    try:
+        fallback.wait_for(timeout=60_000)
+    except Exception as exc:
+        raise DownloadError(
+            "Booking Insights tab did not become ready after the pricing page loaded."
+        ) from exc
+
+
+def wait_for_booking_insights_panel_marker(page) -> None:
+    marker = page.get_by_text(BOOKING_INSIGHTS_PANEL_MARKER_TEXT, exact=False).first
+    try:
+        marker.wait_for(state="visible", timeout=60_000)
+    except Exception as exc:
+        current_url = getattr(page, "url", "")
+        raise DownloadError(
+            "Booking Insights panel marker did not become visible after clicking the tab. "
+            f"Current URL: {current_url}"
+        ) from exc
+
+
+def wait_for_monthly_trends_panel(page) -> None:
+    try:
+        page.wait_for_load_state("networkidle", timeout=60_000)
+    except Exception:
+        pass
+
+    selectors = [
+        MONTHLY_TRENDS_DOWNLOAD_BUTTON_SELECTOR,
+        MONTHLY_TRENDS_DOWNLOAD_BUTTON_ID_SELECTOR,
+        MONTHLY_TRENDS_DOWNLOAD_BUTTON_TITLE_SELECTOR,
+    ]
+    last_error: Exception | None = None
+    for selector in selectors:
+        button = page.locator(selector).first
+        try:
+            button.wait_for(state="visible", timeout=60_000)
+            button.wait_for(state="attached", timeout=10_000)
+            return
+        except Exception as exc:
+            last_error = exc
+
+    raise DownloadError(
+        "Monthly Trends panel did not finish loading a visible CSV Download button after clicking "
+        "Booking Insights."
+    ) from last_error
+
+
+def find_monthly_trends_download_button_strategy(page) -> str:
+    button = first_existing_locator(page, MONTHLY_TRENDS_DOWNLOAD_BUTTON_SELECTOR)
+    if button is not None:
+        return "qa-id-mpt-csv-download"
+
+    button = first_existing_locator(page, MONTHLY_TRENDS_DOWNLOAD_BUTTON_ID_SELECTOR)
+    if button is not None:
+        return "id-mpt-csv-download"
+
+    button = first_existing_locator(page, MONTHLY_TRENDS_DOWNLOAD_BUTTON_TITLE_SELECTOR)
+    if button is not None:
+        return "title-csv"
+
+    raise DownloadError("Could not find Monthly Trends CSV Download button. PriceLabs layout may have changed.")
+
+
+def wait_for_enabled(locator, selector: str, *, timeout_ms: int = 60_000) -> None:
+    deadline = datetime.now(timezone.utc).timestamp() + (timeout_ms / 1000)
+    last_error: Exception | None = None
+    while datetime.now(timezone.utc).timestamp() < deadline:
+        try:
+            if locator.is_enabled(timeout=1_000):
+                return
+        except Exception as exc:
+            last_error = exc
+        time.sleep(0.25)
+    raise DownloadError(f"Element did not become enabled: {selector}") from last_error
+
+
+def click_monthly_trends_download_button(page, strategy: str) -> None:
+    if strategy == "qa-id-mpt-csv-download":
+        button = page.locator(MONTHLY_TRENDS_DOWNLOAD_BUTTON_SELECTOR).first
+    elif strategy == "id-mpt-csv-download":
+        button = page.locator(MONTHLY_TRENDS_DOWNLOAD_BUTTON_ID_SELECTOR).first
+    elif strategy == "title-csv":
+        button = page.locator(MONTHLY_TRENDS_DOWNLOAD_BUTTON_TITLE_SELECTOR).first
+    else:
+        raise DownloadError(f"Unsupported Monthly Trends download button strategy: {strategy}")
+
+    try:
+        button.wait_for(timeout=30_000)
+        button.click(timeout=30_000)
+    except Exception as exc:
+        raise DownloadError(
+            f"Could not click Monthly Trends CSV Download button using strategy '{strategy}'."
+        ) from exc
 
 
 def click_price_occ_download_button(page, strategy: str) -> None:
@@ -748,6 +1168,54 @@ def run_price_occ_download(
     return log_file
 
 
+def run_monthly_trends_download(
+    run_date: str,
+    *,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> Path:
+    _, staging_dir, logs_dir, log_file = get_run_paths(run_date)
+    staging_path = staging_dir / MONTHLY_TRENDS_FILENAME
+
+    try:
+        tab_strategy, download_button_strategy = download_monthly_trends_with_playwright(
+            staging_path,
+            logs_dir=logs_dir,
+            run_date=run_date,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
+        validate_monthly_trends_csv(staging_path)
+    except DownloadError as exc:
+        write_log(
+            log_file,
+            real_download_log_lines(
+                run_date=run_date,
+                target=MONTHLY_TRENDS_TARGET,
+                staging_path=staging_path,
+                status="failed",
+                pricing_url=PRICELABS_BOOKING_INSIGHTS_URL,
+                reason=str(exc),
+            ),
+        )
+        raise
+
+    write_log(
+        log_file,
+        real_download_log_lines(
+            run_date=run_date,
+            target=MONTHLY_TRENDS_TARGET,
+            staging_path=staging_path,
+            status="passed",
+            pricing_url=PRICELABS_BOOKING_INSIGHTS_URL,
+            tab_strategy=tab_strategy,
+            download_button_strategy=download_button_strategy,
+        )
+        + ["Monthly Trends export downloaded and validated in staging.", "Raw folder was not touched."],
+    )
+    return log_file
+
+
 def run(
     run_date: str,
     *,
@@ -766,6 +1234,12 @@ def run(
         )
     if target == PRICE_OCC_TARGET:
         return run_price_occ_download(
+            run_date,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
+    if target == MONTHLY_TRENDS_TARGET:
+        return run_monthly_trends_download(
             run_date,
             headless=headless,
             skip_login_pause=skip_login_pause,
