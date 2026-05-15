@@ -12,9 +12,11 @@ import json
 import shutil
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
+
+from pricelabs.transform.historical_monthly_actuals import read_xlsx_rows
 
 
 PLACEHOLDER_STEPS = [
@@ -30,10 +32,12 @@ PLACEHOLDER_STEPS = [
 FUTURE_EXPORT_FILENAME = "priceLabs_future_export.csv"
 PRICE_OCC_FILENAME = "price_occ.csv"
 MONTHLY_TRENDS_FILENAME = "monthly_trends.csv"
+BOOKINGS_REPORT_FILENAME = "bookings_report.xlsx"
 FUTURE_EXPORT_TARGET = "future-export"
 PRICE_OCC_TARGET = "price-occ"
 MONTHLY_TRENDS_TARGET = "monthly-trends"
-SUPPORTED_TARGETS = [FUTURE_EXPORT_TARGET, PRICE_OCC_TARGET, MONTHLY_TRENDS_TARGET]
+BOOKINGS_REPORT_TARGET = "bookings-report"
+SUPPORTED_TARGETS = [FUTURE_EXPORT_TARGET, PRICE_OCC_TARGET, MONTHLY_TRENDS_TARGET, BOOKINGS_REPORT_TARGET]
 PRICELABS_CUSTOMIZATION_URL = "https://app.pricelabs.co/customization"
 PRICELABS_PRICING_URL = (
     "https://app.pricelabs.co/pricing?"
@@ -53,6 +57,10 @@ PRICING_LOGIN_CHECKPOINT_MESSAGE = (
     "Please log in to PriceLabs manually in the opened browser. Complete MFA if required. "
     "When you see the pricing page, return to this terminal and press Enter."
 )
+BOOKING_INSIGHTS_LOGIN_CHECKPOINT_MESSAGE = (
+    "Please log in to PriceLabs manually in the opened browser. Complete MFA if required. "
+    "When you see the Booking Insights page, return to this terminal and press Enter."
+)
 NEIGHBOURHOOD_DATA_TAB_SELECTOR = 'button[qa-id="neighbourhood-data-tab"]'
 NEIGHBOURHOOD_DATA_TAB_FALLBACK_TEXT = "Neighborhood Data"
 PRICE_OCC_DOWNLOAD_BUTTON_SELECTOR = 'button[qa-id="fp-csv-download"]'
@@ -60,6 +68,10 @@ PRICE_OCC_DOWNLOAD_BUTTON_ARIA_SELECTOR = 'button[aria-label="CSV Download"]'
 BOOKING_INSIGHTS_TAB_SELECTOR = 'button[qa-id="rp-booking-insights"]'
 BOOKING_INSIGHTS_TAB_FALLBACK_TEXT = "Booking Insights"
 BOOKING_INSIGHTS_PANEL_MARKER_TEXT = "Monthly Performance Trends"
+VIEW_ALL_BOOKINGS_BUTTON_SELECTOR = 'button[qa-id="booking-insights-bookings-cta"]'
+VIEW_ALL_BOOKINGS_BUTTON_ID_SELECTOR = "button#booking-insights-bookings-cta"
+VIEW_ALL_BOOKINGS_BUTTON_TEXT = "View All Bookings"
+BOOKINGS_DOWNLOAD_BUTTON_TEXT = "Download"
 MONTHLY_TRENDS_DOWNLOAD_BUTTON_SELECTOR = 'button[qa-id="mpt-csv-download"]'
 MONTHLY_TRENDS_DOWNLOAD_BUTTON_ID_SELECTOR = 'button#mpt-csv-download'
 MONTHLY_TRENDS_DOWNLOAD_BUTTON_TITLE_SELECTOR = 'button[title="CSV"]'
@@ -315,6 +327,63 @@ def validate_monthly_trends_csv(csv_path: Path) -> None:
         raise DownloadError(f"Monthly Trends export missing expected columns: {missing}")
 
 
+def validate_bookings_report_xlsx(xlsx_path: Path) -> None:
+    if not xlsx_path.exists():
+        raise DownloadError(f"Missing staged file: {xlsx_path}")
+    if xlsx_path.stat().st_size <= 0:
+        raise DownloadError("Downloaded bookings_report export is empty.")
+
+    with xlsx_path.open("rb") as handle:
+        sample = handle.read(2048)
+    text_sample = sample.decode("utf-8-sig", errors="ignore")
+    if looks_like_html(text_sample):
+        raise DownloadError("Downloaded bookings_report file looks like an HTML login/error page.")
+    json_error = maybe_json_error_message(text_sample)
+    if json_error:
+        raise DownloadError(f"Downloaded bookings_report file is not XLSX. {json_error}")
+
+    try:
+        workbook_rows = read_xlsx_rows(xlsx_path)
+    except Exception as exc:
+        raise DownloadError("Downloaded bookings_report file is not a readable XLSX workbook.") from exc
+
+    header = find_xlsx_header(workbook_rows)
+
+    normalized = {column.strip().lower() for column in header}
+    check_in_columns = {"check-in date", "check in date", "arrival date", "start date"}
+    check_out_columns = {"check-out date", "check out date", "departure date", "end date"}
+    source_columns = {"booking source", "source", "channel"}
+    revenue_columns = {"rental revenue", "total revenue", "booking value", "amount", "revenue"}
+    status_or_id_columns = {"booking status", "status", "reservation id", "booking id"}
+
+    missing_groups = []
+    if not normalized.intersection(check_in_columns):
+        missing_groups.append("check-in/start date field")
+    if not normalized.intersection(check_out_columns):
+        missing_groups.append("check-out/end date field")
+    if not normalized.intersection(source_columns):
+        missing_groups.append("booking source/channel field")
+    if not normalized.intersection(revenue_columns):
+        missing_groups.append("revenue/amount field")
+    if not normalized.intersection(status_or_id_columns):
+        missing_groups.append("status or booking identifier field")
+
+    if missing_groups:
+        missing = ", ".join(missing_groups)
+        raise DownloadError(f"Bookings Report export missing expected columns: {missing}")
+
+
+def find_xlsx_header(rows: list[list[str]]) -> list[str]:
+    if not rows:
+        raise DownloadError("Bookings Report workbook has no worksheets.")
+    for row in rows[:20]:
+        values = [str(value or "").strip() for value in row]
+        non_empty = [value for value in values if value]
+        if len(non_empty) >= 3:
+            return values
+    raise DownloadError("Bookings Report workbook is missing a header row.")
+
+
 def wait_for_manual_login_checkpoint(
     *,
     skip_login_pause: bool,
@@ -324,6 +393,18 @@ def wait_for_manual_login_checkpoint(
         return
     print(message)
     input()
+
+
+def bookings_date_range_checkpoint_message(run_date: str) -> str:
+    parsed_run_date = datetime.strptime(run_date, "%Y-%m-%d").date()
+    suggested_from = (parsed_run_date - timedelta(days=30)).isoformat()
+    suggested_to = parsed_run_date.isoformat()
+    return (
+        "Set Booking Date range to the previous 30 days through the run date. "
+        "Do not use Stay Date as the main filter. Leave Stay Date broad/default if available. "
+        f"Suggested Booking Date range: {suggested_from} to {suggested_to}. "
+        "When ready to download, return to this terminal and press Enter."
+    )
 
 
 def download_future_export_with_playwright(
@@ -497,6 +578,80 @@ def download_monthly_trends_with_playwright(
             browser.close()
 
     return tab_strategy, download_button_strategy
+
+
+def download_bookings_report_with_playwright(
+    staging_path: Path,
+    *,
+    logs_dir: Path,
+    run_date: str,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> tuple[str, str]:
+    """Download PriceLabs bookings report XLSX into staging."""
+
+    if headless and not skip_login_pause:
+        raise DownloadError("Headless mode requires --skip-login-pause for bookings-report downloads.")
+
+    try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise DownloadError("Playwright is not installed in this environment.") from exc
+
+    staging_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_download_path = staging_path.with_suffix(".download")
+    if temp_download_path.exists():
+        temp_download_path.unlink()
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=headless)
+        context = browser.new_context(accept_downloads=True)
+        page = context.new_page()
+        try:
+            page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
+            wait_for_manual_login_checkpoint(
+                skip_login_pause=skip_login_pause,
+                message=BOOKING_INSIGHTS_LOGIN_CHECKPOINT_MESSAGE,
+            )
+            page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
+            page.wait_for_load_state("networkidle", timeout=120_000)
+            validate_visible_pricing_page(page)
+            wait_for_booking_insights_panel_marker(page)
+            try:
+                view_all_strategy = find_view_all_bookings_button_strategy(page)
+                try:
+                    with context.expect_page(timeout=30_000) as page_info:
+                        click_view_all_bookings_button(page, view_all_strategy)
+                    bookings_page = page_info.value
+                except PlaywrightTimeoutError:
+                    click_view_all_bookings_button(page, view_all_strategy)
+                    bookings_page = page
+
+                bookings_page.wait_for_load_state("domcontentloaded", timeout=120_000)
+                try:
+                    bookings_page.wait_for_load_state("networkidle", timeout=60_000)
+                except Exception:
+                    pass
+                wait_for_manual_login_checkpoint(
+                    skip_login_pause=skip_login_pause,
+                    message=bookings_date_range_checkpoint_message(run_date),
+                )
+                download_button_strategy = find_bookings_download_button_strategy(bookings_page)
+                with bookings_page.expect_download(timeout=120_000) as download_info:
+                    click_bookings_download_button(bookings_page, download_button_strategy)
+                download = download_info.value
+                download.save_as(temp_download_path)
+            except DownloadError as exc:
+                active_page = bookings_page if "bookings_page" in locals() else page
+                screenshot_path = save_debug_screenshot(active_page, logs_dir, run_date)
+                raise DownloadError(f"{exc} Debug screenshot saved to {screenshot_path}") from exc
+        finally:
+            context.close()
+            browser.close()
+
+    replace_file(temp_download_path, staging_path)
+    return view_all_strategy, download_button_strategy
 
 
 def replace_file(source_path: Path, destination_path: Path) -> None:
@@ -851,6 +1006,79 @@ def find_monthly_trends_download_button_strategy(page) -> str:
     raise DownloadError("Could not find Monthly Trends CSV Download button. PriceLabs layout may have changed.")
 
 
+def find_view_all_bookings_button_strategy(page) -> str:
+    button = first_existing_locator(page, VIEW_ALL_BOOKINGS_BUTTON_SELECTOR)
+    if button is not None:
+        return "qa-id-booking-insights-bookings-cta"
+
+    button = first_existing_locator(page, VIEW_ALL_BOOKINGS_BUTTON_ID_SELECTOR)
+    if button is not None:
+        return "id-booking-insights-bookings-cta"
+
+    button = page.get_by_text(VIEW_ALL_BOOKINGS_BUTTON_TEXT, exact=True).first
+    try:
+        if button.count() > 0:
+            return "text-view-all-bookings"
+    except Exception:
+        pass
+
+    raise DownloadError("Could not find View All Bookings button. PriceLabs layout may have changed.")
+
+
+def click_view_all_bookings_button(page, strategy: str) -> None:
+    if strategy == "qa-id-booking-insights-bookings-cta":
+        button = page.locator(VIEW_ALL_BOOKINGS_BUTTON_SELECTOR).first
+    elif strategy == "id-booking-insights-bookings-cta":
+        button = page.locator(VIEW_ALL_BOOKINGS_BUTTON_ID_SELECTOR).first
+    elif strategy == "text-view-all-bookings":
+        button = page.get_by_text(VIEW_ALL_BOOKINGS_BUTTON_TEXT, exact=True).first
+    else:
+        raise DownloadError(f"Unsupported View All Bookings button strategy: {strategy}")
+
+    try:
+        button.wait_for(state="visible", timeout=60_000)
+        wait_for_enabled(button, strategy)
+        button.click(timeout=30_000)
+    except Exception as exc:
+        raise DownloadError(f"Could not click View All Bookings using strategy '{strategy}'.") from exc
+
+
+def find_bookings_download_button_strategy(page) -> str:
+    button = page.get_by_role("button", name=BOOKINGS_DOWNLOAD_BUTTON_TEXT, exact=True).first
+    try:
+        if button.count() > 0:
+            button.wait_for(state="visible", timeout=60_000)
+            wait_for_enabled(button, "role-button-download")
+            return "role-button-download"
+    except Exception:
+        pass
+
+    button = page.get_by_text(BOOKINGS_DOWNLOAD_BUTTON_TEXT, exact=True).first
+    try:
+        if button.count() > 0:
+            button.wait_for(state="visible", timeout=60_000)
+            wait_for_enabled(button, "text-download")
+            return "text-download"
+    except Exception:
+        pass
+
+    raise DownloadError("Could not find bookings report Download button. PriceLabs layout may have changed.")
+
+
+def click_bookings_download_button(page, strategy: str) -> None:
+    if strategy == "role-button-download":
+        button = page.get_by_role("button", name=BOOKINGS_DOWNLOAD_BUTTON_TEXT, exact=True).first
+    elif strategy == "text-download":
+        button = page.get_by_text(BOOKINGS_DOWNLOAD_BUTTON_TEXT, exact=True).first
+    else:
+        raise DownloadError(f"Unsupported bookings report Download button strategy: {strategy}")
+
+    try:
+        button.click(timeout=30_000)
+    except Exception as exc:
+        raise DownloadError(f"Could not click bookings report Download using strategy '{strategy}'.") from exc
+
+
 def wait_for_enabled(locator, selector: str, *, timeout_ms: int = 60_000) -> None:
     deadline = datetime.now(timezone.utc).timestamp() + (timeout_ms / 1000)
     last_error: Exception | None = None
@@ -1048,6 +1276,7 @@ def real_download_log_lines(
     menu_strategy: str | None = None,
     pricing_url: str | None = None,
     tab_strategy: str | None = None,
+    view_all_bookings_strategy: str | None = None,
     download_button_strategy: str | None = None,
     reason: str | None = None,
 ) -> list[str]:
@@ -1068,6 +1297,8 @@ def real_download_log_lines(
         lines.append(f"pricing_url={pricing_url}")
     if tab_strategy:
         lines.append(f"tab_strategy={tab_strategy}")
+    if view_all_bookings_strategy:
+        lines.append(f"view_all_bookings_strategy={view_all_bookings_strategy}")
     if download_button_strategy:
         lines.append(f"download_button_strategy={download_button_strategy}")
     if reason:
@@ -1216,6 +1447,54 @@ def run_monthly_trends_download(
     return log_file
 
 
+def run_bookings_report_download(
+    run_date: str,
+    *,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> Path:
+    _, staging_dir, logs_dir, log_file = get_run_paths(run_date)
+    staging_path = staging_dir / BOOKINGS_REPORT_FILENAME
+
+    try:
+        view_all_strategy, download_button_strategy = download_bookings_report_with_playwright(
+            staging_path,
+            logs_dir=logs_dir,
+            run_date=run_date,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
+        validate_bookings_report_xlsx(staging_path)
+    except DownloadError as exc:
+        write_log(
+            log_file,
+            real_download_log_lines(
+                run_date=run_date,
+                target=BOOKINGS_REPORT_TARGET,
+                staging_path=staging_path,
+                status="failed",
+                pricing_url=PRICELABS_BOOKING_INSIGHTS_URL,
+                reason=str(exc),
+            ),
+        )
+        raise
+
+    write_log(
+        log_file,
+        real_download_log_lines(
+            run_date=run_date,
+            target=BOOKINGS_REPORT_TARGET,
+            staging_path=staging_path,
+            status="passed",
+            pricing_url=PRICELABS_BOOKING_INSIGHTS_URL,
+            view_all_bookings_strategy=view_all_strategy,
+            download_button_strategy=download_button_strategy,
+        )
+        + ["Bookings Report export downloaded and validated in staging.", "Raw folder was not touched."],
+    )
+    return log_file
+
+
 def run(
     run_date: str,
     *,
@@ -1240,6 +1519,12 @@ def run(
         )
     if target == MONTHLY_TRENDS_TARGET:
         return run_monthly_trends_download(
+            run_date,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
+    if target == BOOKINGS_REPORT_TARGET:
+        return run_bookings_report_download(
             run_date,
             headless=headless,
             skip_login_pause=skip_login_pause,
