@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,62 @@ BOOKINGS_REPORT_HEADERS = (
     "Reservation ID",
     "Listing ID",
 )
+
+
+def sample_settings_payload(run_date: str = "2099-02-10") -> dict:
+    settings = {
+        key: {
+            "label": label,
+            "value": f"{label} configured",
+            "value_text": f"{label} configured",
+            "value_lines": [f"{label} configured"],
+        }
+        for key, label in pricelabs_downloader.SETTING_LABELS.items()
+    }
+    settings["minimum_stay_settings"] = {
+        "label": "Minimum Stay Settings",
+        "value": (
+            "ACTIVE MINSTAY PROFILE : EffortSaver - Revenue Optimized "
+            "Default : Fixed Weekday: 1 night | Weekend: 2 nights "
+            "Last Minute : 1 night Far Out : 3 nights Orphan Gaps : 1 night "
+            "Lowest Minstay Allowed : 1 night"
+        ),
+        "value_text": (
+            "ACTIVE MINSTAY PROFILE : EffortSaver - Revenue Optimized "
+            "Default : Fixed Weekday: 1 night | Weekend: 2 nights "
+            "Last Minute : 1 night Far Out : 3 nights Orphan Gaps : 1 night "
+            "Lowest Minstay Allowed : 1 night"
+        ),
+        "value_lines": [
+            "ACTIVE MINSTAY PROFILE : EffortSaver - Revenue Optimized",
+            "Default : Fixed Weekday: 1 night | Weekend: 2 nights",
+            "Last Minute : 1 night",
+            "Far Out : 3 nights",
+            "Orphan Gaps : 1 night",
+            "Lowest Minstay Allowed : 1 night",
+        ],
+    }
+    settings["safety_minimum_price"] = {
+        "label": "Safety Minimum Price",
+        "value": "Set Safety Minimum Price to 110% of last-year-same-day ADR for nights beyond 180 days from today.",
+        "value_text": (
+            "Set Safety Minimum Price to 110% of last-year-same-day ADR "
+            "for nights beyond 180 days from today."
+        ),
+        "value_lines": [
+            "Set Safety Minimum Price to 110% of last-year-same-day ADR for nights beyond 180 days from today."
+        ],
+    }
+    return {
+        "run_date": run_date,
+        "listing_id": "650255___717243",
+        "pms_name": "lodgify",
+        "source": "pricelabs_ui_customization_well",
+        "source_url": pricelabs_downloader.PRICELABS_BOOKING_INSIGHTS_URL,
+        "captured_at_utc": "2099-02-10T00:00:00+00:00",
+        "url": pricelabs_downloader.PRICELABS_BOOKING_INSIGHTS_URL,
+        "settings": settings,
+    }
 
 
 def write_xlsx(path: Path, rows: list[tuple[str, ...]]) -> None:
@@ -294,6 +351,39 @@ def test_bookings_report_target_is_accepted_in_dry_run() -> None:
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_settings_snapshot_target_is_accepted_in_dry_run() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-10"
+    run_dir = repo_root / "data" / "runs" / run_date
+    raw_dir = run_dir / "raw"
+
+    shutil.rmtree(run_dir, ignore_errors=True)
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pricelabs.download.pricelabs_downloader",
+                "--run-date",
+                run_date,
+                "--target",
+                "settings-snapshot",
+                "--dry-run",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 0
+        assert (run_dir / "downloads_staging").is_dir()
+        assert not raw_dir.exists()
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
 def test_price_occ_validation_passes_for_expected_columns(tmp_path: Path) -> None:
     csv_path = tmp_path / "price_occ.csv"
     csv_path.write_text(
@@ -452,6 +542,56 @@ def test_bookings_report_validation_fails_when_key_columns_are_missing(tmp_path:
         pricelabs_downloader.validate_bookings_report_xlsx(xlsx_path)
 
 
+def test_settings_snapshot_validation_passes_for_expected_json(tmp_path: Path) -> None:
+    json_path = tmp_path / "pricelabs_settings_snapshot_from_ui.json"
+    json_path.write_text(json.dumps(sample_settings_payload()), encoding="utf-8")
+
+    pricelabs_downloader.validate_settings_snapshot_json(json_path)
+
+
+def test_settings_snapshot_validation_fails_for_missing_required_setting(tmp_path: Path) -> None:
+    json_path = tmp_path / "pricelabs_settings_snapshot_from_ui.json"
+    payload = sample_settings_payload()
+    payload["settings"].pop("far_out_premium")
+    json_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="missing required settings"):
+        pricelabs_downloader.validate_settings_snapshot_json(json_path)
+
+
+def test_settings_snapshot_validation_fails_for_truncated_min_stay(tmp_path: Path) -> None:
+    json_path = tmp_path / "pricelabs_settings_snapshot_from_ui.json"
+    payload = sample_settings_payload()
+    payload["settings"]["minimum_stay_settings"]["value_text"] = (
+        "ACTIVE MINSTAY PROFILE : EffortSaver - Revenue Optimized "
+        "Default : Fixed Weekday: 1 night | Weekend: 2 nights"
+    )
+    json_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="minimum_stay_settings appears truncated"):
+        pricelabs_downloader.validate_settings_snapshot_json(json_path)
+
+
+def test_settings_snapshot_validation_fails_for_truncated_safety_minimum(tmp_path: Path) -> None:
+    json_path = tmp_path / "pricelabs_settings_snapshot_from_ui.json"
+    payload = sample_settings_payload()
+    payload["settings"]["safety_minimum_price"]["value_text"] = "Set"
+    json_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="safety_minimum_price appears truncated"):
+        pricelabs_downloader.validate_settings_snapshot_json(json_path)
+
+
+def test_settings_snapshot_validation_requires_booking_insights_source_url(tmp_path: Path) -> None:
+    json_path = tmp_path / "pricelabs_settings_snapshot_from_ui.json"
+    payload = sample_settings_payload()
+    payload["source_url"] = pricelabs_downloader.PRICELABS_CUSTOMIZATION_URL
+    json_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="source_url"):
+        pricelabs_downloader.validate_settings_snapshot_json(json_path)
+
+
 def test_price_occ_ui_flow_uses_confirmed_stable_selectors() -> None:
     assert pricelabs_downloader.PRICELABS_PRICING_URL == (
         "https://app.pricelabs.co/pricing?"
@@ -491,6 +631,231 @@ def test_bookings_report_ui_flow_uses_confirmed_stable_selectors() -> None:
     )
     assert pricelabs_downloader.VIEW_ALL_BOOKINGS_BUTTON_TEXT == "View All Bookings"
     assert pricelabs_downloader.BOOKINGS_DOWNLOAD_BUTTON_TEXT == "Download"
+
+
+def test_settings_snapshot_ui_flow_uses_customization_well_selector() -> None:
+    assert pricelabs_downloader.PRICELABS_CUSTOMIZATION_URL == "https://app.pricelabs.co/customization"
+    assert pricelabs_downloader.CUSTOMIZATION_WELL_SELECTOR == 'div[qa-id="customization-well"]'
+    assert pricelabs_downloader.SETTING_VALUE_SELECTORS["minimum_stay_settings"] == (
+        "#customization-text-min_stay"
+    )
+    assert pricelabs_downloader.SETTING_VALUE_SELECTORS["safety_minimum_price"] == (
+        "#customization-text-safety_minimum"
+    )
+    assert pricelabs_downloader.SETTING_LABELS["last_minute"] == "Last Minute"
+    assert pricelabs_downloader.SETTING_LABELS["far_out_premium"] == "Far Out Premium"
+
+
+def test_extract_settings_from_customization_well_passes_single_payload() -> None:
+    class FakePage:
+        def evaluate(self, script: str, payload: dict) -> dict:
+            assert "({ selector, labels, valueSelectors, detailStatus })" in script
+            assert payload["selector"] == pricelabs_downloader.CUSTOMIZATION_WELL_SELECTOR
+            assert payload["labels"]["last_minute"] == "Last Minute"
+            assert payload["valueSelectors"]["minimum_stay_settings"] == "#customization-text-min_stay"
+            return {
+                key: {
+                    "label": label,
+                    "value": f"{label} configured",
+                    "value_text": f"{label} configured",
+                    "value_lines": [f"{label} configured"],
+                }
+                for key, label in payload["labels"].items()
+            }
+
+    settings = pricelabs_downloader.extract_settings_from_customization_well(FakePage())
+
+    assert settings["last_minute"]["value_text"] == "Last Minute configured"
+    assert settings["minimum_stay_settings"]["value_lines"] == ["Minimum Stay Settings configured"]
+
+
+def test_extract_settings_from_customization_well_preserves_full_min_stay_and_safety_text() -> None:
+    class FakePage:
+        def evaluate(self, script: str, payload: dict) -> dict:
+            assert "innerText" in script
+            assert "value_lines" in script
+            settings = {
+                key: {
+                    "label": label,
+                    "value": f"{label} configured",
+                    "value_text": f"{label} configured",
+                    "value_lines": [f"{label} configured"],
+                }
+                for key, label in payload["labels"].items()
+            }
+            settings["minimum_stay_settings"] = {
+                "label": "Minimum Stay Settings",
+                "value": (
+                    "ACTIVE MINSTAY PROFILE : EffortSaver - Revenue Optimized "
+                    "Default : Fixed Weekday: 1 night | Weekend: 2 nights "
+                    "Last Minute : 1 night Far Out : 3 nights Orphan Gaps : 1 night "
+                    "Lowest Minstay Allowed : 1 night"
+                ),
+                "value_text": (
+                    "ACTIVE MINSTAY PROFILE : EffortSaver - Revenue Optimized "
+                    "Default : Fixed Weekday: 1 night | Weekend: 2 nights "
+                    "Last Minute : 1 night Far Out : 3 nights Orphan Gaps : 1 night "
+                    "Lowest Minstay Allowed : 1 night"
+                ),
+                "value_lines": [
+                    "ACTIVE MINSTAY PROFILE : EffortSaver - Revenue Optimized",
+                    "Default : Fixed Weekday: 1 night | Weekend: 2 nights",
+                    "Last Minute : 1 night",
+                    "Far Out : 3 nights",
+                    "Orphan Gaps : 1 night",
+                    "Lowest Minstay Allowed : 1 night",
+                ],
+            }
+            settings["safety_minimum_price"] = {
+                "label": "Safety Minimum Price",
+                "value": (
+                    "Set Safety Minimum Price to 110% of last-year-same-day ADR "
+                    "for nights beyond 180 days from today."
+                ),
+                "value_text": (
+                    "Set Safety Minimum Price to 110% of last-year-same-day ADR "
+                    "for nights beyond 180 days from today."
+                ),
+                "value_lines": [
+                    "Set Safety Minimum Price to 110% of last-year-same-day ADR for nights beyond 180 days from today."
+                ],
+            }
+            return settings
+
+    settings = pricelabs_downloader.extract_settings_from_customization_well(FakePage())
+
+    assert "Last Minute" in settings["minimum_stay_settings"]["value_text"]
+    assert "Orphan Gaps" in settings["minimum_stay_settings"]["value_text"]
+    assert "Lowest Minstay Allowed" in settings["minimum_stay_settings"]["value_text"]
+    assert settings["safety_minimum_price"]["value_text"] != "Set"
+    assert "110%" in settings["safety_minimum_price"]["value_text"]
+    assert "180 days" in settings["safety_minimum_price"]["value_text"]
+
+
+def test_capture_settings_popover_details_adds_los_and_occupancy_detail_text() -> None:
+    class FakePage:
+        def evaluate(self, script: str, payload: dict) -> dict:
+            assert "aria-haspopup" in script
+            assert "pointerover" in script
+            assert "mouseover" in script
+            assert "aria-controls" in script
+            assert "getElementById" in script
+            assert ".chakra-popover__content" in script
+            assert payload["selector"] == pricelabs_downloader.CUSTOMIZATION_WELL_SELECTOR
+            assert payload["keys"] == list(pricelabs_downloader.SETTING_DETAIL_KEYS)
+            return {
+                "length_of_stay_based_pricing": {
+                    "detail_capture_status": "captured",
+                    "detail_text": "LOS pricing 7 nights 10% monthly 20%",
+                    "detail_lines": ["LOS pricing", "7 nights 10%", "monthly 20%"],
+                },
+                "occupancy_based_adjustments": {
+                    "detail_capture_status": "captured",
+                    "detail_text": "Market driven occupancy adjustment details",
+                    "detail_lines": ["Market driven occupancy adjustment details"],
+                },
+            }
+
+    settings = {
+        "length_of_stay_based_pricing": {
+            "label": "Length-of-stay Based Pricing",
+            "value": "Custom",
+            "value_text": "Custom",
+            "value_lines": ["Custom"],
+            "detail_capture_status": "not_captured",
+        },
+        "occupancy_based_adjustments": {
+            "label": "Occupancy Based Adjustments",
+            "value": "Market Driven",
+            "value_text": "Market Driven",
+            "value_lines": ["Market Driven"],
+            "detail_capture_status": "not_captured",
+        },
+    }
+
+    pricelabs_downloader.capture_settings_popover_details(FakePage(), settings)
+
+    assert settings["length_of_stay_based_pricing"]["detail_capture_status"] == "captured"
+    assert settings["length_of_stay_based_pricing"]["detail_text"] == "LOS pricing 7 nights 10% monthly 20%"
+    assert settings["length_of_stay_based_pricing"]["detail_lines"] == [
+        "LOS pricing",
+        "7 nights 10%",
+        "monthly 20%",
+    ]
+    assert settings["occupancy_based_adjustments"]["detail_capture_status"] == "captured"
+    assert settings["occupancy_based_adjustments"]["detail_text"] == "Market driven occupancy adjustment details"
+
+
+def test_capture_settings_popover_details_does_not_fail_when_unavailable() -> None:
+    class FakePage:
+        def evaluate(self, _script: str, _payload: dict) -> dict:
+            raise RuntimeError("popover unavailable")
+
+    settings = {
+        "length_of_stay_based_pricing": {
+            "label": "Length-of-stay Based Pricing",
+            "value": "Custom",
+            "value_text": "Custom",
+            "value_lines": ["Custom"],
+        },
+        "occupancy_based_adjustments": {
+            "label": "Occupancy Based Adjustments",
+            "value": "Market Driven",
+            "value_text": "Market Driven",
+            "value_lines": ["Market Driven"],
+        },
+    }
+
+    pricelabs_downloader.capture_settings_popover_details(FakePage(), settings)
+
+    assert settings["length_of_stay_based_pricing"]["value_text"] == "Custom"
+    assert settings["length_of_stay_based_pricing"]["detail_capture_status"] == "not_captured"
+    assert settings["occupancy_based_adjustments"]["detail_capture_status"] == "not_captured"
+
+
+def test_expand_applied_customizations_well_clicks_outer_header() -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.waited = False
+
+        def evaluate(self, script: str) -> int:
+            assert 'div[qa-id="applied-cust-well"]' in script
+            assert "#re-aplied-customizations" in script
+            assert 'svg[data-icon="caret-right"]' in script
+            assert "dispatchEvent(new MouseEvent('click'" in script
+            return 1
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            assert milliseconds == 500
+            self.waited = True
+
+    page = FakePage()
+
+    assert pricelabs_downloader.expand_applied_customizations_well(page) == 1
+    assert page.waited is True
+
+
+def test_expand_collapsed_customization_sections_uses_collapsed_arrow_path() -> None:
+    class FakePage:
+        def __init__(self) -> None:
+            self.waited = False
+
+        def evaluate(self, script: str, selector: str) -> int:
+            assert "M246.6 278.6c12.5-12.5" in script
+            assert 'svg[data-icon="caret-right"]' in script
+            assert "dispatchEvent(new MouseEvent('click'" in script
+            assert 'aria-expanded="false"' in script
+            assert selector == pricelabs_downloader.CUSTOMIZATION_WELL_SELECTOR
+            return 3
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            assert milliseconds == 500
+            self.waited = True
+
+    page = FakePage()
+
+    assert pricelabs_downloader.expand_collapsed_customization_sections(page) == 3
+    assert page.waited is True
 
 
 def test_bookings_report_date_range_instruction_uses_booking_date() -> None:
@@ -758,6 +1123,60 @@ def test_bookings_report_real_mode_uses_staging_only_with_mocked_download(monkey
         assert "validation_status=passed" in log_text
         assert "view_all_bookings_strategy=mocked-view-all-bookings" in log_text
         assert "download_button_strategy=mocked-download-button" in log_text
+        assert "Raw folder was not touched." in log_text
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_settings_snapshot_real_mode_uses_staging_only_with_mocked_capture(monkeypatch) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-11"
+    run_dir = repo_root / "data" / "runs" / run_date
+    staging_file = run_dir / "downloads_staging" / "pricelabs_settings_snapshot_from_ui.json"
+    raw_dir = run_dir / "raw"
+    log_file = run_dir / "logs" / f"pricelabs_download_{run_date}.log"
+
+    shutil.rmtree(run_dir, ignore_errors=True)
+
+    def fake_capture(
+        staging_path: Path,
+        *,
+        logs_dir: Path,
+        run_date: str,
+        headless: bool,
+        skip_login_pause: bool = False,
+    ) -> int:
+        assert staging_path == staging_file
+        assert logs_dir == run_dir / "logs"
+        assert run_date == "2099-02-11"
+        assert headless is True
+        assert skip_login_pause is True
+        staging_path.write_text(json.dumps(sample_settings_payload(run_date)), encoding="utf-8")
+        return len(pricelabs_downloader.SETTING_LABELS)
+
+    monkeypatch.setattr(
+        pricelabs_downloader,
+        "capture_settings_snapshot_with_playwright",
+        fake_capture,
+    )
+
+    try:
+        result_log = pricelabs_downloader.run(
+            run_date,
+            target="settings-snapshot",
+            headless=True,
+            skip_login_pause=True,
+        )
+
+        assert result_log == log_file
+        assert staging_file.exists()
+        assert log_file.exists()
+        assert not raw_dir.exists()
+        assert list((run_dir / "downloads_staging").glob("*.html")) == []
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "target=settings-snapshot" in log_text
+        assert "validation_status=passed" in log_text
+        assert f"settings_count={len(pricelabs_downloader.SETTING_LABELS)}" in log_text
         assert "Raw folder was not touched." in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

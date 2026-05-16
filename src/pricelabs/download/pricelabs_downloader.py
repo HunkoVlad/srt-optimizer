@@ -33,11 +33,19 @@ FUTURE_EXPORT_FILENAME = "priceLabs_future_export.csv"
 PRICE_OCC_FILENAME = "price_occ.csv"
 MONTHLY_TRENDS_FILENAME = "monthly_trends.csv"
 BOOKINGS_REPORT_FILENAME = "bookings_report.xlsx"
+SETTINGS_SNAPSHOT_FILENAME = "pricelabs_settings_snapshot_from_ui.json"
 FUTURE_EXPORT_TARGET = "future-export"
 PRICE_OCC_TARGET = "price-occ"
 MONTHLY_TRENDS_TARGET = "monthly-trends"
 BOOKINGS_REPORT_TARGET = "bookings-report"
-SUPPORTED_TARGETS = [FUTURE_EXPORT_TARGET, PRICE_OCC_TARGET, MONTHLY_TRENDS_TARGET, BOOKINGS_REPORT_TARGET]
+SETTINGS_SNAPSHOT_TARGET = "settings-snapshot"
+SUPPORTED_TARGETS = [
+    FUTURE_EXPORT_TARGET,
+    PRICE_OCC_TARGET,
+    MONTHLY_TRENDS_TARGET,
+    BOOKINGS_REPORT_TARGET,
+    SETTINGS_SNAPSHOT_TARGET,
+]
 PRICELABS_CUSTOMIZATION_URL = "https://app.pricelabs.co/customization"
 PRICELABS_PRICING_URL = (
     "https://app.pricelabs.co/pricing?"
@@ -51,7 +59,7 @@ PRICELABS_ACCOUNT_LABEL = "Lodgify"
 FUTURE_EXPORT_MENU_ITEM = "Download CSV Prices"
 CUSTOMIZATION_LOGIN_CHECKPOINT_MESSAGE = (
     "Please log in to PriceLabs manually in the opened browser. Complete MFA if required. "
-    "When you see the Customizations page, return to this terminal and press Enter."
+    "When you see the Customization page, return to this terminal and press Enter."
 )
 PRICING_LOGIN_CHECKPOINT_MESSAGE = (
     "Please log in to PriceLabs manually in the opened browser. Complete MFA if required. "
@@ -72,6 +80,7 @@ VIEW_ALL_BOOKINGS_BUTTON_SELECTOR = 'button[qa-id="booking-insights-bookings-cta
 VIEW_ALL_BOOKINGS_BUTTON_ID_SELECTOR = "button#booking-insights-bookings-cta"
 VIEW_ALL_BOOKINGS_BUTTON_TEXT = "View All Bookings"
 BOOKINGS_DOWNLOAD_BUTTON_TEXT = "Download"
+CUSTOMIZATION_WELL_SELECTOR = 'div[qa-id="customization-well"]'
 MONTHLY_TRENDS_DOWNLOAD_BUTTON_SELECTOR = 'button[qa-id="mpt-csv-download"]'
 MONTHLY_TRENDS_DOWNLOAD_BUTTON_ID_SELECTOR = 'button#mpt-csv-download'
 MONTHLY_TRENDS_DOWNLOAD_BUTTON_TITLE_SELECTOR = 'button[title="CSV"]'
@@ -98,7 +107,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--target",
         choices=SUPPORTED_TARGETS,
-        help="Explicit real download target. Currently supports future-export and price-occ.",
+        help="Explicit real download or capture target.",
     )
     parser.add_argument(
         "--headless",
@@ -384,6 +393,77 @@ def find_xlsx_header(rows: list[list[str]]) -> list[str]:
     raise DownloadError("Bookings Report workbook is missing a header row.")
 
 
+REQUIRED_SETTINGS_KEYS = (
+    "last_minute",
+    "orphan_day_prices",
+    "booking_recency_factor",
+    "minimum_stay_settings",
+    "extra_person_fee",
+    "occupancy_based_adjustments",
+    "custom_seasonality_factor",
+    "length_of_stay_based_pricing",
+    "demand_factor_sensitivity",
+    "far_out_premium",
+    "safety_minimum_price",
+)
+
+
+def validate_settings_snapshot_json(json_path: Path) -> None:
+    if not json_path.exists():
+        raise DownloadError(f"Missing staged file: {json_path}")
+    if json_path.stat().st_size <= 0:
+        raise DownloadError("Settings snapshot JSON is empty.")
+
+    try:
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise DownloadError("Settings snapshot is not readable JSON.") from exc
+
+    if not isinstance(payload, dict):
+        raise DownloadError("Settings snapshot JSON must be an object.")
+    if not str(payload.get("run_date", "")).strip():
+        raise DownloadError("Settings snapshot JSON is missing run_date.")
+    if not str(payload.get("source", "")).strip():
+        raise DownloadError("Settings snapshot JSON is missing source.")
+    if str(payload.get("source_url", "")).strip() != PRICELABS_BOOKING_INSIGHTS_URL:
+        raise DownloadError("Settings snapshot JSON source_url must be the PriceLabs Booking Insights URL.")
+    settings = payload.get("settings")
+    if not isinstance(settings, dict):
+        raise DownloadError("Settings snapshot JSON is missing settings object.")
+
+    missing_keys = [key for key in REQUIRED_SETTINGS_KEYS if key not in settings]
+    if missing_keys:
+        raise DownloadError(f"Settings snapshot JSON is missing required settings: {', '.join(missing_keys)}")
+
+    empty_values = []
+    for key in REQUIRED_SETTINGS_KEYS:
+        setting = settings.get(key)
+        if not isinstance(setting, dict):
+            empty_values.append(key)
+            continue
+        value = setting.get("value_text") or setting.get("value")
+        if not isinstance(value, str) or not value.strip():
+            empty_values.append(key)
+    if empty_values:
+        raise DownloadError(f"Settings snapshot JSON has empty values for: {', '.join(empty_values)}")
+
+    min_stay_value = settings["minimum_stay_settings"].get("value_text") or settings["minimum_stay_settings"].get("value", "")
+    missing_min_stay_parts = [
+        part
+        for part in ("Default", "Last Minute", "Far Out", "Orphan Gaps", "Lowest Minstay Allowed")
+        if part.lower() not in str(min_stay_value).lower()
+    ]
+    if missing_min_stay_parts:
+        raise DownloadError(
+            "Settings snapshot minimum_stay_settings appears truncated; missing: "
+            + ", ".join(missing_min_stay_parts)
+        )
+
+    safety_value = settings["safety_minimum_price"].get("value_text") or settings["safety_minimum_price"].get("value", "")
+    if "110%" not in str(safety_value) or "180 days" not in str(safety_value):
+        raise DownloadError("Settings snapshot safety_minimum_price appears truncated.")
+
+
 def wait_for_manual_login_checkpoint(
     *,
     skip_login_pause: bool,
@@ -652,6 +732,63 @@ def download_bookings_report_with_playwright(
     return view_all_strategy, download_button_strategy
 
 
+def capture_settings_snapshot_with_playwright(
+    staging_path: Path,
+    *,
+    logs_dir: Path,
+    run_date: str,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> int:
+    """Capture visible PriceLabs customization-well settings into JSON."""
+
+    if headless and not skip_login_pause:
+        raise DownloadError("Headless mode requires --skip-login-pause for settings-snapshot captures.")
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise DownloadError("Playwright is not installed in this environment.") from exc
+
+    staging_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=headless)
+        context = browser.new_context(accept_downloads=True)
+        page = context.new_page()
+        try:
+            page.goto(PRICELABS_CUSTOMIZATION_URL, wait_until="domcontentloaded", timeout=120_000)
+            wait_for_manual_login_checkpoint(skip_login_pause=skip_login_pause)
+            page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
+            page.wait_for_load_state("networkidle", timeout=120_000)
+            validate_visible_pricing_page(page)
+            try:
+                expand_applied_customizations_well(page)
+                wait_for_customization_well(page)
+                expand_collapsed_customization_sections(page)
+                settings = extract_settings_from_customization_well(page)
+                capture_settings_popover_details(page, settings)
+                payload = {
+                    "run_date": run_date,
+                    "listing_id": "650255___717243",
+                    "pms_name": "lodgify",
+                    "source": "pricelabs_ui_customization_well",
+                    "source_url": PRICELABS_BOOKING_INSIGHTS_URL,
+                    "captured_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "url": PRICELABS_BOOKING_INSIGHTS_URL,
+                    "settings": settings,
+                }
+                staging_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            except DownloadError as exc:
+                screenshot_path = save_debug_screenshot(page, logs_dir, run_date)
+                raise DownloadError(f"{exc} Debug screenshot saved to {screenshot_path}") from exc
+        finally:
+            context.close()
+            browser.close()
+
+    return len(settings)
+
+
 def replace_file(source_path: Path, destination_path: Path) -> None:
     if destination_path.exists():
         destination_path.unlink()
@@ -848,6 +985,386 @@ def validate_visible_pricing_page(page) -> None:
             "PriceLabs still appears to be on a login page after the manual checkpoint. "
             "Complete login/MFA before pressing Enter."
         )
+
+
+def wait_for_customization_well(page) -> None:
+    well = page.locator(CUSTOMIZATION_WELL_SELECTOR).first
+    try:
+        well.wait_for(state="visible", timeout=120_000)
+    except Exception as exc:
+        raise DownloadError("Could not find visible PriceLabs customization well.") from exc
+
+
+def expand_applied_customizations_well(page) -> int:
+    """Open the outer Applied Customizations well if it is collapsed."""
+
+    script = """
+    () => {
+      const header = document.querySelector('div[qa-id="applied-cust-well"], #re-aplied-customizations');
+      if (!header) return 0;
+
+      const isVisible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && rect.width > 0
+          && rect.height > 0;
+      };
+
+      const collapsedCaret = header.querySelector('svg[data-icon="caret-right"], svg.fa-caret-right');
+      if (!collapsedCaret || !isVisible(collapsedCaret) || !isVisible(header)) return 0;
+
+      const clickTarget = collapsedCaret.closest('button,[role="button"],[aria-expanded]') || header;
+      clickTarget.scrollIntoView({ block: 'center', inline: 'nearest' });
+      clickTarget.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+      clickTarget.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+      clickTarget.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      return 1;
+    }
+    """
+    expanded_count = page.evaluate(script)
+    try:
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
+    return int(expanded_count or 0)
+
+
+def expand_collapsed_customization_sections(page) -> int:
+    """Expand visible collapsed sections before reading customization text."""
+
+    script = """
+    (selector) => {
+      const well = document.querySelector(selector);
+      if (!well) return 0;
+
+      const isVisible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && rect.width > 0
+          && rect.height > 0;
+      };
+
+      const collapsedPath = 'M246.6 278.6c12.5-12.5 12.5-32.8 0-45.3l-128-128c-9.2-9.2-22.9-11.9-34.9-6.9s-19.8 16.6-19.8 29.6l0 256c0 12.9 7.8 24.6 19.8 29.6s25.7 2.2 34.9-6.9l128-128z';
+      const candidates = new Set();
+
+      const addCandidateChain = (element) => {
+        if (!element || !isVisible(element)) return;
+        const svg = element.closest('svg');
+        if (svg && isVisible(svg)) candidates.add(svg);
+        const explicit = element.closest('button,[role="button"],[aria-expanded="false"]');
+        if (explicit && isVisible(explicit)) candidates.add(explicit);
+
+        let current = element.parentElement;
+        for (let depth = 0; current && depth < 8; depth += 1) {
+          if (well.contains(current) && isVisible(current)) {
+            const style = window.getComputedStyle(current);
+            const hasClickHint = style.cursor === 'pointer'
+              || current.hasAttribute('onclick')
+              || current.getAttribute('role') === 'button'
+              || current.hasAttribute('aria-expanded');
+            if (hasClickHint) candidates.add(current);
+          }
+          current = current.parentElement;
+        }
+      };
+
+      for (const path of Array.from(well.querySelectorAll('path'))) {
+        const d = (path.getAttribute('d') || '').trim();
+        if (d !== collapsedPath || !isVisible(path)) continue;
+        addCandidateChain(path);
+      }
+
+      for (const svg of Array.from(well.querySelectorAll('svg[data-icon="caret-right"], svg.fa-caret-right'))) {
+        addCandidateChain(svg);
+      }
+
+      for (const button of Array.from(well.querySelectorAll('button[aria-expanded="false"],[role="button"][aria-expanded="false"],[aria-expanded="false"]'))) {
+        if (isVisible(button)) candidates.add(button);
+      }
+
+      let clicked = 0;
+      for (const candidate of candidates) {
+        try {
+          candidate.scrollIntoView({ block: 'center', inline: 'nearest' });
+          candidate.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+          candidate.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+          candidate.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          clicked += 1;
+        } catch (_error) {}
+      }
+      return clicked;
+    }
+    """
+    expanded_count = page.evaluate(script, CUSTOMIZATION_WELL_SELECTOR)
+    try:
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
+    return int(expanded_count or 0)
+
+
+SETTING_LABELS = {
+    "last_minute": "Last Minute",
+    "orphan_day_prices": "Orphan Day Prices",
+    "booking_recency_factor": "Booking Recency Factor",
+    "minimum_stay_settings": "Minimum Stay Settings",
+    "extra_person_fee": "Extra Person Fee",
+    "occupancy_based_adjustments": "Occupancy Based Adjustments",
+    "custom_seasonality_factor": "Custom Seasonality Factor",
+    "length_of_stay_based_pricing": "Length-of-stay Based Pricing",
+    "demand_factor_sensitivity": "Demand Factor Sensitivity",
+    "far_out_premium": "Far Out Premium",
+    "safety_minimum_price": "Safety Minimum Price",
+}
+
+SETTING_VALUE_SELECTORS = {
+    "minimum_stay_settings": "#customization-text-min_stay",
+    "safety_minimum_price": "#customization-text-safety_minimum",
+}
+
+SETTING_DETAIL_STATUS = {
+    "length_of_stay_based_pricing": "not_captured",
+    "occupancy_based_adjustments": "not_captured",
+}
+
+SETTING_DETAIL_KEYS = tuple(SETTING_DETAIL_STATUS.keys())
+
+
+def extract_settings_from_customization_well(page) -> dict[str, dict[str, object]]:
+    script = """
+    ({ selector, labels, valueSelectors, detailStatus }) => {
+      const normalizeText = (value) => (value || '').replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');
+      const normalizeLine = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+      const valueLines = (value) => normalizeText(value)
+        .split('\\n')
+        .map((line) => normalizeLine(line))
+        .filter(Boolean);
+      const singleLine = (value) => valueLines(value).join(' ');
+      const well = document.querySelector(selector);
+      if (!well) return {};
+
+      const labelValues = Object.values(labels);
+      const allLines = valueLines(well.innerText);
+      const findFallbackLines = (label) => {
+        const start = allLines.findIndex((line) => line === label || line.startsWith(label + ' '));
+        if (start < 0) return [];
+        const firstLine = allLines[start] === label ? '' : allLines[start].slice(label.length).trim();
+        const lines = firstLine ? [firstLine] : [];
+        for (let index = start + 1; index < allLines.length; index += 1) {
+          const line = allLines[index];
+          if (labelValues.some((candidate) => line === candidate || line.startsWith(candidate + ' '))) break;
+          lines.push(line);
+        }
+        return lines.filter(Boolean);
+      };
+
+      const result = {};
+      for (const [key, label] of Object.entries(labels)) {
+        let lines = [];
+        const directSelector = valueSelectors[key];
+        if (directSelector) {
+          const directElement = well.querySelector(directSelector);
+          if (directElement) {
+            lines = valueLines(directElement.innerText);
+          }
+        }
+        if (lines.length === 0) {
+          const labelNode = Array.from(well.querySelectorAll('[qa-id$="-label"], p, span, div'))
+            .find((node) => normalizeLine(node.innerText) === label);
+          const block = labelNode ? labelNode.closest('[qa-id], .chakra-stack, .chakra-card, div') : null;
+          const text = block ? block.innerText : '';
+          const blockLines = valueLines(text).filter((line) => line !== label);
+          if (blockLines.length > 0 && blockLines.some((line) => line !== label)) {
+            lines = blockLines;
+          }
+        }
+        if (lines.length === 0) {
+          lines = findFallbackLines(label);
+        }
+        const valueText = lines.join(' ');
+        result[key] = {
+          label,
+          value: valueText,
+          value_text: valueText,
+          value_lines: lines,
+        };
+        if (detailStatus[key]) {
+          result[key].detail_capture_status = detailStatus[key];
+        }
+      }
+      return result;
+    }
+    """
+    extracted = page.evaluate(
+        script,
+        {
+            "selector": CUSTOMIZATION_WELL_SELECTOR,
+            "labels": SETTING_LABELS,
+            "valueSelectors": SETTING_VALUE_SELECTORS,
+            "detailStatus": SETTING_DETAIL_STATUS,
+        },
+    )
+    if not isinstance(extracted, dict):
+        raise DownloadError("Customization well settings parser returned an unexpected shape.")
+    settings = {}
+    for key, label in SETTING_LABELS.items():
+        setting = extracted.get(key, {})
+        if not isinstance(setting, dict):
+            setting = {}
+        value_lines = setting.get("value_lines")
+        if not isinstance(value_lines, list):
+            value_lines = []
+        cleaned_lines = [str(line).strip() for line in value_lines if str(line).strip()]
+        value_text = str(setting.get("value_text") or setting.get("value") or " ".join(cleaned_lines)).strip()
+        result = {
+            "label": str(setting.get("label") or label).strip(),
+            "value": value_text,
+            "value_text": value_text,
+            "value_lines": cleaned_lines,
+        }
+        detail_status = setting.get("detail_capture_status")
+        if isinstance(detail_status, str) and detail_status.strip():
+            result["detail_capture_status"] = detail_status.strip()
+        settings[key] = result
+    return settings
+
+
+def capture_settings_popover_details(page, settings: dict[str, dict[str, object]]) -> None:
+    """Best-effort capture for setting popovers without failing the snapshot."""
+
+    script = """
+    async ({ selector, labels, keys }) => {
+      const normalizeText = (value) => (value || '').replace(/\\r\\n/g, '\\n').replace(/\\r/g, '\\n');
+      const normalizeLine = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+      const linesFromText = (value) => normalizeText(value)
+        .split('\\n')
+        .map((line) => normalizeLine(line))
+        .filter(Boolean);
+      const isVisible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && rect.width > 0
+          && rect.height > 0;
+      };
+      const hoverElement = (element) => {
+        element.scrollIntoView({ block: 'center', inline: 'nearest' });
+        const rect = element.getBoundingClientRect();
+        const x = rect.left + Math.max(1, rect.width / 2);
+        const y = rect.top + Math.max(1, rect.height / 2);
+        for (const eventType of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'mousemove']) {
+          element.dispatchEvent(new MouseEvent(eventType, {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX: x,
+            clientY: y,
+          }));
+        }
+      };
+      const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+      const well = document.querySelector(selector);
+      const result = {};
+      if (!well) return result;
+
+      const visiblePopoverTexts = () => Array.from(document.querySelectorAll(
+        '[role="dialog"], .chakra-popover__content, [data-popper-placement], [id^="popover-content-"]'
+      ))
+        .filter((node) => isVisible(node) && !well.contains(node))
+        .map((node) => linesFromText(node.innerText))
+        .filter((lines) => lines.length > 0);
+
+      for (const key of keys) {
+        const label = labels[key];
+        result[key] = { detail_capture_status: 'not_captured' };
+        try {
+          const labelNode = Array.from(well.querySelectorAll('[qa-id$="-label"], p, span, div'))
+            .find((node) => normalizeLine(node.innerText) === label);
+          if (!labelNode) continue;
+
+          const candidateBlocks = [];
+          let current = labelNode;
+          for (let depth = 0; current && depth < 8; depth += 1) {
+            if (well.contains(current)) candidateBlocks.push(current);
+            current = current.parentElement;
+          }
+
+          let trigger = null;
+          for (const block of candidateBlocks) {
+            trigger = Array.from(block.querySelectorAll(
+              '[aria-haspopup="dialog"], [aria-controls], [id^="popover-trigger-"], [class*="customization-popover-trigger"]'
+            )).find((node) => isVisible(node) && normalizeLine(node.innerText) !== label);
+            if (trigger) break;
+          }
+          if (!trigger) continue;
+
+          const before = visiblePopoverTexts().map((lines) => lines.join(' '));
+          hoverElement(trigger);
+          await wait(1000);
+
+          const controlledId = trigger.getAttribute('aria-controls');
+          const controlledPopover = controlledId ? document.getElementById(controlledId) : null;
+          const controlledLines = isVisible(controlledPopover) ? linesFromText(controlledPopover.innerText) : [];
+          const candidates = (controlledLines.length > 0 ? [controlledLines] : visiblePopoverTexts())
+            .filter((lines) => !before.includes(lines.join(' ')))
+            .sort((left, right) => right.join(' ').length - left.join(' ').length);
+          const detailLines = candidates[0] || [];
+          if (detailLines.length === 0) continue;
+
+          result[key] = {
+            detail_capture_status: 'captured',
+            detail_text: detailLines.join(' '),
+            detail_lines: detailLines,
+          };
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          await wait(100);
+        } catch (_error) {
+          result[key] = { detail_capture_status: 'not_captured' };
+        }
+      }
+      return result;
+    }
+    """
+    try:
+        captured = page.evaluate(
+            script,
+            {
+                "selector": CUSTOMIZATION_WELL_SELECTOR,
+                "labels": SETTING_LABELS,
+                "keys": list(SETTING_DETAIL_KEYS),
+            },
+        )
+    except Exception:
+        captured = {}
+
+    if not isinstance(captured, dict):
+        captured = {}
+
+    for key in SETTING_DETAIL_KEYS:
+        setting = settings.setdefault(key, {})
+        detail = captured.get(key, {})
+        if not isinstance(detail, dict):
+            detail = {}
+        detail_status = str(detail.get("detail_capture_status") or "not_captured").strip() or "not_captured"
+        detail_lines = detail.get("detail_lines")
+        if not isinstance(detail_lines, list):
+            detail_lines = []
+        cleaned_lines = [str(line).strip() for line in detail_lines if str(line).strip()]
+        detail_text = str(detail.get("detail_text") or " ".join(cleaned_lines)).strip()
+        if detail_status == "captured" and detail_text:
+            setting["detail_capture_status"] = "captured"
+            setting["detail_text"] = detail_text
+            setting["detail_lines"] = cleaned_lines or [detail_text]
+        else:
+            setting["detail_capture_status"] = "not_captured"
 
 
 def click_neighbourhood_data_tab(page) -> str:
@@ -1276,6 +1793,7 @@ def real_download_log_lines(
     tab_strategy: str | None = None,
     view_all_bookings_strategy: str | None = None,
     download_button_strategy: str | None = None,
+    settings_count: int | None = None,
     reason: str | None = None,
 ) -> list[str]:
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -1299,6 +1817,8 @@ def real_download_log_lines(
         lines.append(f"view_all_bookings_strategy={view_all_bookings_strategy}")
     if download_button_strategy:
         lines.append(f"download_button_strategy={download_button_strategy}")
+    if settings_count is not None:
+        lines.append(f"settings_count={settings_count}")
     if reason:
         lines.append(f"failure_reason={reason}")
     return lines
@@ -1493,6 +2013,51 @@ def run_bookings_report_download(
     return log_file
 
 
+def run_settings_snapshot_capture(
+    run_date: str,
+    *,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> Path:
+    _, staging_dir, logs_dir, log_file = get_run_paths(run_date)
+    staging_path = staging_dir / SETTINGS_SNAPSHOT_FILENAME
+
+    try:
+        settings_count = capture_settings_snapshot_with_playwright(
+            staging_path,
+            logs_dir=logs_dir,
+            run_date=run_date,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
+        validate_settings_snapshot_json(staging_path)
+    except DownloadError as exc:
+        write_log(
+            log_file,
+            real_download_log_lines(
+                run_date=run_date,
+                target=SETTINGS_SNAPSHOT_TARGET,
+                staging_path=staging_path,
+                status="failed",
+                reason=str(exc),
+            ),
+        )
+        raise
+
+    write_log(
+        log_file,
+        real_download_log_lines(
+            run_date=run_date,
+            target=SETTINGS_SNAPSHOT_TARGET,
+            staging_path=staging_path,
+            status="passed",
+            settings_count=settings_count,
+        )
+        + ["Settings snapshot captured and validated in staging.", "Raw folder was not touched."],
+    )
+    return log_file
+
+
 def run(
     run_date: str,
     *,
@@ -1523,6 +2088,12 @@ def run(
         )
     if target == BOOKINGS_REPORT_TARGET:
         return run_bookings_report_download(
+            run_date,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
+    if target == SETTINGS_SNAPSHOT_TARGET:
+        return run_settings_snapshot_capture(
             run_date,
             headless=headless,
             skip_login_pause=skip_login_pause,
