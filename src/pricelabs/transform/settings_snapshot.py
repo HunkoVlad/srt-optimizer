@@ -6,6 +6,7 @@ import argparse
 from datetime import date
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -99,6 +100,211 @@ def setting_value(setting: Any) -> str:
     return str(setting or "").strip()
 
 
+def normalize_dash(value: str) -> str:
+    return value.replace("\u2013", "-").replace("\u2014", "-")
+
+
+def parse_percent(value: str) -> int | None:
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*%", value)
+    if not match:
+        return None
+    number = float(match.group(1))
+    return int(number) if number.is_integer() else round(number, 2)
+
+
+def parse_int_after(pattern: str, value: str) -> int | None:
+    match = re.search(pattern, value, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def adjustment_from_text(text: str) -> str:
+    match = re.search(r"(\d+(?:\.\d+)?%)\s*(premium|discount)", text, flags=re.IGNORECASE)
+    if not match:
+        if re.search(r"\bnone\b", text, flags=re.IGNORECASE):
+            return "none"
+        return text.strip()
+    percent, direction = match.groups()
+    return f"{percent} {direction.lower()}"
+
+
+def parse_weekday_weekend(text: str) -> dict[str, int | None]:
+    return {
+        "weekday_nights": parse_int_after(r"Weekday:\s*(\d+)", text),
+        "weekend_nights": parse_int_after(r"Weekend:\s*(\d+)", text),
+    }
+
+
+def parse_last_minute(text: str) -> dict[str, Any]:
+    return {
+        "percent": parse_percent(text),
+        "type": "premium" if "premium" in text.lower() else "discount" if "discount" in text.lower() else "",
+        "within_days": parse_int_after(r"within\s+(\d+)\s+day", text),
+        "raw_text": text,
+    }
+
+
+def parse_orphan_day_prices(text: str) -> dict[str, Any]:
+    weekday_match = re.search(r"Weekday:\s*([^|]+)", text, flags=re.IGNORECASE)
+    weekend_match = re.search(r"Weekend:\s*(.+?)\s+for gaps", text, flags=re.IGNORECASE)
+    gap_match = re.search(
+        r"gaps between\s+(\d+)\s+and\s+(\d+)\s+night.*?within\s+(\d+)\s+and\s+(\d+)\s+nights",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return {
+        "weekday": {"adjustment": adjustment_from_text(weekday_match.group(1)) if weekday_match else ""},
+        "weekend": {"adjustment": adjustment_from_text(weekend_match.group(1)) if weekend_match else ""},
+        "gap_rule": {
+            "gap_min_nights": int(gap_match.group(1)) if gap_match else None,
+            "gap_max_nights": int(gap_match.group(2)) if gap_match else None,
+            "applied_within_min_nights": int(gap_match.group(3)) if gap_match else None,
+            "applied_within_max_nights": int(gap_match.group(4)) if gap_match else None,
+        },
+        "raw_text": text,
+    }
+
+
+def parse_booking_recency_factor(text: str) -> dict[str, Any]:
+    return {
+        "start_discount_percent": parse_int_after(r"from\s+(\d+)%", text),
+        "start_no_booking_days": parse_int_after(r"last\s+(\d+)\s+days\)", text),
+        "max_discount_percent": parse_int_after(r"up to\s+(\d+)%", text),
+        "max_no_booking_days": parse_int_after(r"last\s+(\d+)\s+days\), affecting", text),
+        "affected_next_days": parse_int_after(r"next\s+(\d+)\s+days", text),
+        "raw_text": text,
+    }
+
+
+def parse_minimum_stay(lines: list[str], text: str) -> dict[str, Any]:
+    normalized_text = normalize_dash("\n".join(lines) if lines else text)
+    single_line = " ".join(normalized_text.split())
+    profile_match = re.search(r"ACTIVE MINSTAY PROFILE\s*:\s*(.+?)(?:\s+Default\s*:|$)", single_line, re.I)
+
+    def section_text(start_label: str, end_label: str | None = None) -> str:
+        pattern = rf"{re.escape(start_label)}\s*:\s*(.+?)"
+        if end_label:
+            pattern += rf"\s+{re.escape(end_label)}\s*:"
+        else:
+            pattern += r"$"
+        match = re.search(pattern, single_line, flags=re.IGNORECASE)
+        return match.group(1).strip() if match else ""
+
+    default_text = section_text("Default", "Last Minute")
+    last_minute_text = section_text("Last Minute", "Far Out")
+    far_out_text = section_text("Far Out", "Orphan Gaps")
+    orphan_text = section_text("Orphan Gaps", "Lowest Minstay Allowed")
+    lowest_text = section_text("Lowest Minstay Allowed")
+
+    default_nights = parse_weekday_weekend(default_text)
+    last_minute = parse_weekday_weekend(last_minute_text)
+    last_minute["within_nights"] = parse_int_after(r"within\s+(\d+)\s+nights?", last_minute_text)
+    far_out = parse_weekday_weekend(far_out_text)
+    far_out["beyond_nights"] = parse_int_after(r"beyond\s+(\d+)\s+nights?", far_out_text)
+    orphan = parse_weekday_weekend(orphan_text)
+    gap_match = re.search(r"gaps between\s+(\d+)\s+and\s+(\d+)\s+nights?", orphan_text, flags=re.I)
+    orphan["gap_min_nights"] = int(gap_match.group(1)) if gap_match else None
+    orphan["gap_max_nights"] = int(gap_match.group(2)) if gap_match else None
+
+    return {
+        "profile_name": (profile_match.group(1).strip() if profile_match else ""),
+        "default": default_nights,
+        "last_minute": last_minute,
+        "far_out": far_out,
+        "orphan_gaps": orphan,
+        "lowest_minstay_allowed": parse_weekday_weekend(lowest_text),
+        "raw_text": normalized_text,
+    }
+
+
+def parse_extra_person_fee(text: str) -> dict[str, Any]:
+    return {
+        "type": "percent" if "%" in text else "",
+        "value": parse_percent(text),
+        "after_guests": parse_int_after(r"after\s+(\d+)\s+guests?", text),
+        "raw_text": text,
+    }
+
+
+def parse_oba_mode(text: str) -> dict[str, str]:
+    return {"mode": text, "raw_text": text}
+
+
+def parse_oba_snapshot(text: str) -> dict[str, Any]:
+    result: dict[str, Any] = {"raw_text": text}
+    pattern = re.compile(
+        r"(?P<adjustment>\d+(?:\.\d+)?%\s+(?:discount|premium))\s+for next\s+"
+        r"(?P<start>\d+)\s+to\s+(?P<end>\d+)\s+days\s+"
+        r"(?P<note>Occupancy\s+\d+(?:\.\d+)?%\s+(?:below|above)\s+market)",
+        flags=re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        key = f"days_{match.group('start')}_{match.group('end')}"
+        result[key] = {
+            "adjustment": match.group("adjustment").lower(),
+            "market_position_note": match.group("note"),
+        }
+    return result
+
+
+def parse_los_pricing(setting: Any) -> dict[str, Any]:
+    detail_text = ""
+    if isinstance(setting, dict):
+        detail_text = str(setting.get("detail_text") or "")
+        if not detail_text:
+            lines = setting.get("detail_lines")
+            if isinstance(lines, list):
+                detail_text = " ".join(str(line) for line in lines)
+    text = detail_text or setting_value(setting)
+
+    thresholds: dict[int, str] = {}
+    for stay_length, percent in re.findall(r">(\d+)\s+(-?\d+(?:\.\d+)?)%", text):
+        number = float(percent)
+        if number > 0:
+            value = f"{int(number) if number.is_integer() else number}% premium"
+        elif number < 0:
+            number = abs(number)
+            value = f"{int(number) if number.is_integer() else number}% discount"
+        else:
+            value = "0%"
+        thresholds[int(stay_length)] = value
+
+    return {
+        "1_night": thresholds.get(1, ""),
+        "2_nights": thresholds.get(2, ""),
+        "3_nights": thresholds.get(3, thresholds.get(2, "")),
+        "4_plus_nights": thresholds.get(4, ""),
+        "raw_text": text,
+    }
+
+
+def parse_far_out_premium(text: str) -> dict[str, Any]:
+    return {
+        "percent": parse_percent(text),
+        "after_days": parse_int_after(r"After\s+(\d+)\s+days", text),
+        "raw_text": text,
+    }
+
+
+def parse_safety_minimum(text: str) -> dict[str, Any]:
+    return {
+        "percent_of_last_year_same_day_adr": parse_percent(text),
+        "beyond_days": parse_int_after(r"beyond\s+(\d+)\s+days", text),
+        "raw_text": text,
+    }
+
+
+def has_meaningful_value(value: Any) -> bool:
+    if value in ("", None, {}):
+        return False
+    if isinstance(value, dict):
+        return any(has_meaningful_value(child) for child in value.values())
+    if isinstance(value, list):
+        return any(has_meaningful_value(child) for child in value)
+    return bool(str(value).strip())
+
+
 def normalize_ui_settings(data: dict[str, Any], *, run_date: str, source_file: Path) -> dict[str, Any]:
     settings = data.get("settings")
     if not isinstance(settings, dict):
@@ -116,14 +322,30 @@ def normalize_ui_settings(data: dict[str, Any], *, run_date: str, source_file: P
         "captured_at_utc": data.get("captured_at_utc", ""),
         "raw_ui_settings": settings,
     }
-    for ui_key, output_field in UI_SETTING_TO_OUTPUT_FIELD.items():
-        snapshot[output_field] = setting_value(settings.get(ui_key))
+    snapshot["last_minute_rule"] = parse_last_minute(setting_value(settings.get("last_minute")))
+    snapshot["orphan_day_prices"] = parse_orphan_day_prices(setting_value(settings.get("orphan_day_prices")))
+    snapshot["booking_recency_factor"] = parse_booking_recency_factor(setting_value(settings.get("booking_recency_factor")))
+
+    min_stay_setting = settings.get("minimum_stay_settings")
+    min_stay_lines = min_stay_setting.get("value_lines", []) if isinstance(min_stay_setting, dict) else []
+    min_stay_lines = [str(line) for line in min_stay_lines] if isinstance(min_stay_lines, list) else []
+    snapshot["minimum_stay_settings"] = parse_minimum_stay(
+        min_stay_lines,
+        setting_value(min_stay_setting),
+    )
+    snapshot["extra_person_fee"] = parse_extra_person_fee(setting_value(settings.get("extra_person_fee")))
+    snapshot["occupancy_based_adjustments"] = parse_oba_mode(setting_value(settings.get("occupancy_based_adjustments")))
+    snapshot["custom_seasonality_factor"] = {"value": setting_value(settings.get("custom_seasonality_factor"))}
+    snapshot["length_of_stay_based_pricing"] = parse_los_pricing(settings.get("length_of_stay_based_pricing"))
+    snapshot["demand_factor_sensitivity"] = {"value": setting_value(settings.get("demand_factor_sensitivity"))}
+    snapshot["far_out_premium"] = parse_far_out_premium(setting_value(settings.get("far_out_premium")))
+    snapshot["safety_minimum_price_rule"] = parse_safety_minimum(setting_value(settings.get("safety_minimum_price")))
 
     oba = settings.get("occupancy_based_adjustments")
-    if isinstance(oba, dict) and oba.get("detail_text"):
-        snapshot["occupancy_based_adjustments_snapshot"] = oba["detail_text"]
-    else:
-        snapshot["occupancy_based_adjustments_snapshot"] = snapshot["occupancy_based_adjustments"]
+    oba_detail = ""
+    if isinstance(oba, dict):
+        oba_detail = str(oba.get("detail_text") or "")
+    snapshot["occupancy_based_adjustments_snapshot"] = parse_oba_snapshot(oba_detail or setting_value(oba))
 
     missing = [
         field
@@ -141,7 +363,7 @@ def normalize_ui_settings(data: dict[str, Any], *, run_date: str, source_file: P
             "far_out_premium",
             "safety_minimum_price_rule",
         )
-        if not str(snapshot.get(field, "")).strip()
+        if not has_meaningful_value(snapshot.get(field))
     ]
     if missing:
         raise ValueError(f"PriceLabs UI settings snapshot is missing normalized fields: {', '.join(missing)}")

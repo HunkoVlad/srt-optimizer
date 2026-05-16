@@ -9,9 +9,22 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from pricelabs.transform import settings_snapshot
+
 
 REQUIRED_SNAPSHOT_FIELDS = ("run_date", "listing_id")
-IGNORED_FIELDS = {"run_date", "source_file"}
+IGNORED_FIELDS = {
+    "run_date",
+    "pms_account",
+    "listing_name",
+    "base_price",
+    "raw_ui_settings",
+    "captured_at_utc",
+    "settings_source",
+    "source_url",
+    "source_file",
+    "url",
+}
 OUTPUT_COLUMNS = (
     "run_date",
     "prior_run_date",
@@ -55,7 +68,45 @@ def read_snapshot(path: Path, label: str) -> dict[str, Any]:
     return data
 
 
-def stable_value(value: Any) -> str:
+def strip_raw_text(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: strip_raw_text(child) for key, child in value.items() if key != "raw_text"}
+    if isinstance(value, list):
+        return [strip_raw_text(child) for child in value]
+    return value
+
+
+def canonical_value(field_name: str, value: Any) -> Any:
+    if isinstance(value, str):
+        if field_name == "last_minute_rule":
+            return settings_snapshot.parse_last_minute(value)
+        if field_name == "orphan_day_prices":
+            return settings_snapshot.parse_orphan_day_prices(value)
+        if field_name == "booking_recency_factor":
+            return settings_snapshot.parse_booking_recency_factor(value)
+        if field_name == "minimum_stay_settings":
+            return settings_snapshot.parse_minimum_stay([], value)
+        if field_name == "extra_person_fee":
+            return settings_snapshot.parse_extra_person_fee(value)
+        if field_name == "occupancy_based_adjustments":
+            return settings_snapshot.parse_oba_mode(value)
+        if field_name == "occupancy_based_adjustments_snapshot":
+            return settings_snapshot.parse_oba_snapshot(value)
+        if field_name == "custom_seasonality_factor":
+            return {"value": value}
+        if field_name == "length_of_stay_based_pricing":
+            return settings_snapshot.parse_los_pricing({"detail_text": value})
+        if field_name == "demand_factor_sensitivity":
+            return {"value": value}
+        if field_name == "far_out_premium":
+            return settings_snapshot.parse_far_out_premium(value)
+        if field_name == "safety_minimum_price_rule":
+            return settings_snapshot.parse_safety_minimum(value)
+    return value
+
+
+def stable_value(field_name: str, value: Any) -> str:
+    value = strip_raw_text(canonical_value(field_name, value))
     if isinstance(value, (dict, list)):
         return json.dumps(value, sort_keys=True, separators=(",", ":"))
     if value is None:
@@ -80,8 +131,8 @@ def build_change_rows(
 
     rows: list[dict[str, str]] = []
     for field_name in comparable_fields(current, prior):
-        current_value = stable_value(current.get(field_name))
-        previous_value = stable_value(prior.get(field_name))
+        current_value = stable_value(field_name, current.get(field_name))
+        previous_value = stable_value(field_name, prior.get(field_name))
         if current_value == previous_value:
             continue
         rows.append(
