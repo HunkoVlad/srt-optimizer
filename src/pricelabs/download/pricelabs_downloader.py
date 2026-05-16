@@ -46,6 +46,7 @@ SUPPORTED_TARGETS = [
     BOOKINGS_REPORT_TARGET,
     SETTINGS_SNAPSHOT_TARGET,
 ]
+DOWNLOAD_ALL_LOGIN_TIMEOUT_MS = 120_000
 PRICELABS_CUSTOMIZATION_URL = "https://app.pricelabs.co/customization"
 PRICELABS_PRICING_URL = (
     "https://app.pricelabs.co/pricing?"
@@ -487,8 +488,35 @@ def wait_for_manual_login_checkpoint(
 
 DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE = (
     "Please log in to PriceLabs manually in the opened browser. Complete MFA if required. "
-    "When ready, return to this terminal and press Enter."
+    "The downloader will continue automatically when the logged-in PriceLabs page is visible."
 )
+
+
+def wait_for_download_all_login_ready(page, *, skip_login_pause: bool) -> None:
+    if skip_login_pause:
+        return
+    print(DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE)
+    try:
+        page.wait_for_function(
+            """
+            () => {
+              const text = (document.body && document.body.innerText || '').replace(/\\s+/g, ' ').toLowerCase();
+              const url = window.location.href.toLowerCase();
+              const loggedInMarker = text.includes('aloha poconos')
+                || text.includes('applied customizations')
+                || text.includes('booking insights')
+                || text.includes('lodgify');
+              const loginMarker = text.includes('log in') || text.includes('sign in');
+              return url.includes('app.pricelabs.co') && loggedInMarker && !loginMarker;
+            }
+            """,
+            timeout=DOWNLOAD_ALL_LOGIN_TIMEOUT_MS,
+        )
+    except Exception as exc:
+        raise DownloadError(
+            "Timed out after 2 minutes waiting for manual PriceLabs login to complete. "
+            "Complete login/MFA in the browser and make sure a logged-in PriceLabs page is visible."
+        ) from exc
 
 
 def bookings_date_range_checkpoint_message(run_date: str) -> str:
@@ -897,15 +925,30 @@ def download_bookings_report_in_session(context, page, staging_path: Path) -> tu
         click_bookings_download_button(bookings_page, download_button_strategy)
     download_info.value.save_as(temp_download_path)
     replace_file(temp_download_path, staging_path)
+    return_to_primary_page(page, bookings_page)
     return view_all_strategy, download_button_strategy
+
+
+def return_to_primary_page(primary_page, secondary_page=None) -> None:
+    """Bring the original PriceLabs page back before the next one-session step."""
+
+    if secondary_page is not None and secondary_page is not primary_page:
+        try:
+            secondary_page.close()
+        except Exception:
+            pass
+    try:
+        primary_page.bring_to_front()
+    except Exception:
+        pass
 
 
 def capture_settings_snapshot_in_session(page, staging_path: Path, *, run_date: str) -> int:
     page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
     page.wait_for_load_state("networkidle", timeout=120_000)
     validate_visible_pricing_page(page)
-    wait_for_customization_well(page)
     expand_applied_customizations_well(page)
+    wait_for_customization_well(page)
     expand_collapsed_customization_sections(page)
     settings = extract_settings_from_customization_well(page)
     capture_settings_popover_details(page, settings)
@@ -1131,6 +1174,25 @@ def wait_for_customization_well(page) -> None:
 
 def expand_applied_customizations_well(page) -> int:
     """Open the outer Applied Customizations well if it is collapsed."""
+
+    try:
+        if page.locator(CUSTOMIZATION_WELL_SELECTOR).first.is_visible(timeout=1_000):
+            return 0
+    except Exception:
+        pass
+
+    try:
+        header = page.locator('div[qa-id="applied-cust-well"], #re-aplied-customizations').first
+        header.wait_for(state="visible", timeout=10_000)
+        header.click(timeout=10_000, position={"x": 24, "y": 24})
+        page.wait_for_timeout(750)
+        try:
+            if page.locator(CUSTOMIZATION_WELL_SELECTOR).first.is_visible(timeout=3_000):
+                return 1
+        except Exception:
+            pass
+    except Exception:
+        pass
 
     script = """
     () => {
@@ -2196,8 +2258,8 @@ DOWNLOAD_ALL_TARGETS = (
     FUTURE_EXPORT_TARGET,
     PRICE_OCC_TARGET,
     MONTHLY_TRENDS_TARGET,
-    BOOKINGS_REPORT_TARGET,
     SETTINGS_SNAPSHOT_TARGET,
+    BOOKINGS_REPORT_TARGET,
 )
 
 
@@ -2247,15 +2309,16 @@ def execute_download_all_sequence(context, page, staging_dir: Path, run_date: st
     validate_monthly_trends_csv(monthly_trends_path)
     completed_targets.append(MONTHLY_TRENDS_TARGET)
 
-    bookings_report_path = staging_dir / BOOKINGS_REPORT_FILENAME
-    download_bookings_report_in_session(context, page, bookings_report_path)
-    validate_bookings_report_xlsx(bookings_report_path)
-    completed_targets.append(BOOKINGS_REPORT_TARGET)
-
     settings_path = staging_dir / SETTINGS_SNAPSHOT_FILENAME
     capture_settings_snapshot_in_session(page, settings_path, run_date=run_date)
     validate_settings_snapshot_json(settings_path)
     completed_targets.append(SETTINGS_SNAPSHOT_TARGET)
+
+    bookings_report_path = staging_dir / BOOKINGS_REPORT_FILENAME
+    download_bookings_report_in_session(context, page, bookings_report_path)
+    validate_bookings_report_xlsx(bookings_report_path)
+    completed_targets.append(BOOKINGS_REPORT_TARGET)
+    return_to_primary_page(page)
 
     return completed_targets
 
@@ -2284,10 +2347,7 @@ def run_download_all(
             page = context.new_page()
             try:
                 page.goto(PRICELABS_CUSTOMIZATION_URL, wait_until="domcontentloaded", timeout=120_000)
-                wait_for_manual_login_checkpoint(
-                    skip_login_pause=skip_login_pause,
-                    message=DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE,
-                )
+                wait_for_download_all_login_ready(page, skip_login_pause=skip_login_pause)
                 completed_targets = execute_download_all_sequence(context, page, staging_dir, run_date)
             except DownloadError as exc:
                 screenshot_path = save_debug_screenshot(page, logs_dir, run_date)

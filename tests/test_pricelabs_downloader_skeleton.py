@@ -1397,11 +1397,15 @@ def test_download_all_sequence_calls_each_target_handler_once(monkeypatch, tmp_p
         staging_path.write_text(json.dumps(sample_settings_payload(run_date)), encoding="utf-8")
         return len(pricelabs_downloader.SETTING_LABELS)
 
+    def fake_return_to_primary_page(_primary_page, _secondary_page=None) -> None:
+        calls.append("return-to-primary-page")
+
     monkeypatch.setattr(pricelabs_downloader, "download_future_export_in_session", fake_future)
     monkeypatch.setattr(pricelabs_downloader, "download_price_occ_in_session", fake_price_occ)
     monkeypatch.setattr(pricelabs_downloader, "download_monthly_trends_in_session", fake_monthly_trends)
     monkeypatch.setattr(pricelabs_downloader, "download_bookings_report_in_session", fake_bookings)
     monkeypatch.setattr(pricelabs_downloader, "capture_settings_snapshot_in_session", fake_settings)
+    monkeypatch.setattr(pricelabs_downloader, "return_to_primary_page", fake_return_to_primary_page)
 
     completed = pricelabs_downloader.execute_download_all_sequence(
         object(),
@@ -1411,7 +1415,14 @@ def test_download_all_sequence_calls_each_target_handler_once(monkeypatch, tmp_p
     )
 
     assert completed == list(pricelabs_downloader.DOWNLOAD_ALL_TARGETS)
-    assert calls == list(pricelabs_downloader.DOWNLOAD_ALL_TARGETS)
+    assert calls == [
+        "future-export",
+        "price-occ",
+        "monthly-trends",
+        "settings-snapshot",
+        "bookings-report",
+        "return-to-primary-page",
+    ]
     assert (tmp_path / "priceLabs_future_export.csv").exists()
     assert (tmp_path / "price_occ.csv").exists()
     assert (tmp_path / "monthly_trends.csv").exists()
@@ -1586,3 +1597,34 @@ def test_manual_login_checkpoint_prints_instruction_and_waits_for_enter(monkeypa
     assert "Please log in to PriceLabs manually" in captured.out
     assert "Complete MFA if required" in captured.out
     assert "press Enter" in captured.out
+
+
+def test_download_all_login_waits_for_browser_ready_without_enter(monkeypatch, capsys) -> None:
+    input_called = False
+
+    def fake_input() -> str:
+        nonlocal input_called
+        input_called = True
+        return ""
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.waited = False
+
+        def wait_for_function(self, script: str, timeout: int) -> None:
+            assert "aloha poconos" in script
+            assert "booking insights" in script
+            assert timeout == pricelabs_downloader.DOWNLOAD_ALL_LOGIN_TIMEOUT_MS
+            assert timeout == 120_000
+            self.waited = True
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    page = FakePage()
+
+    pricelabs_downloader.wait_for_download_all_login_ready(page, skip_login_pause=False)
+
+    captured = capsys.readouterr()
+    assert input_called is False
+    assert page.waited is True
+    assert "continue automatically" in captured.out
+    assert "press Enter" not in captured.out
