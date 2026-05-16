@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$RunDate
+    [string]$RunDate,
+    [switch]$KeepStaging
 )
 
 Set-StrictMode -Version Latest
@@ -14,6 +15,7 @@ if ($RunDate -notmatch '^\d{4}-\d{2}-\d{2}$') {
 $scriptRoot = $PSScriptRoot
 $projectRoot = Split-Path -Parent $scriptRoot
 $runRoot = Join-Path (Join-Path $projectRoot "data\runs") $RunDate
+$stagingDir = Join-Path $runRoot "downloads_staging"
 $logsDir = Join-Path $runRoot "logs"
 $wrapperLog = Join-Path $logsDir "weekly_with_pricelabs_downloads_$RunDate.log"
 
@@ -69,18 +71,8 @@ Push-Location $projectRoot
 try {
     $env:PYTHONPATH = "src"
 
-    $downloadTargets = @(
-        "future-export",
-        "price-occ",
-        "monthly-trends",
-        "bookings-report",
-        "settings-snapshot"
-    )
-
-    foreach ($target in $downloadTargets) {
-        Invoke-WorkflowStep "PriceLabs download target: $target" {
-            & $pythonExe -m pricelabs.download.pricelabs_downloader --run-date $RunDate --target $target
-        }
+    Invoke-WorkflowStep "PriceLabs download-all" {
+        & $pythonExe -m pricelabs.download.pricelabs_downloader --run-date $RunDate --download-all
     }
 
     Invoke-WorkflowStep "Promote staged PriceLabs files to raw" {
@@ -89,6 +81,17 @@ try {
 
     Invoke-WorkflowStep "Weekly revenue pipeline" {
         & (Join-Path $projectRoot "run_weekly_pipeline.ps1") -RunDate $RunDate
+    }
+
+    if ($KeepStaging) {
+        Write-WrapperLog "KeepStaging requested; downloads_staging preserved."
+    }
+    elseif (Test-Path $stagingDir) {
+        Remove-Item -LiteralPath $stagingDir -Recurse -Force
+        Write-WrapperLog "Cleaned downloads_staging after successful workflow."
+    }
+    else {
+        Write-WrapperLog "downloads_staging not found after successful workflow; nothing to clean."
     }
 }
 finally {
