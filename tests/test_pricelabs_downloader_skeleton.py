@@ -143,6 +143,51 @@ def write_xlsx(path: Path, rows: list[tuple[str, ...]]) -> None:
         workbook.writestr("xl/worksheets/sheet1.xml", sheet_xml)
 
 
+def write_valid_staged_downloads(run_dir: Path, run_date: str) -> None:
+    staging_dir = run_dir / "downloads_staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    (staging_dir / "priceLabs_future_export.csv").write_text(
+        "Listing ID,Date,Your Price,Min Stay,Available\n"
+        "650255___717243,2026-05-14,425,2,True\n",
+        encoding="utf-8",
+    )
+    (staging_dir / "price_occ.csv").write_text(
+        "Date,Market Occupancy,Market 25th Percentile Price,Market 50th Percentile Price,Your Booked Occupancy\n"
+        "2026-05-14,72,230,275,12\n",
+        encoding="utf-8",
+    )
+    (staging_dir / "monthly_trends.csv").write_text(
+        "month_year,Revenue,Occupancy,Booked Occupancy,Blocked Occupancy,ADR\n"
+        "May 2026,5357,45,43,2,383\n",
+        encoding="utf-8",
+    )
+    write_xlsx(
+        staging_dir / "bookings_report.xlsx",
+        [
+            BOOKINGS_REPORT_HEADERS,
+            (
+                "Aloha Poconos",
+                "2026-05-14",
+                "2026-05-16",
+                "2026-04-01",
+                "425",
+                "850",
+                "900",
+                "Airbnb",
+                "Booked",
+                "2",
+                "43",
+                "ABC123",
+                "650255___717243",
+            ),
+        ],
+    )
+    (staging_dir / "pricelabs_settings_snapshot_from_ui.json").write_text(
+        json.dumps(sample_settings_payload(run_date)),
+        encoding="utf-8",
+    )
+
+
 def test_pricelabs_downloader_skeleton_creates_staging_and_log_only() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     run_date = "2099-02-01"
@@ -1178,6 +1223,116 @@ def test_settings_snapshot_real_mode_uses_staging_only_with_mocked_capture(monke
         assert "validation_status=passed" in log_text
         assert f"settings_count={len(pricelabs_downloader.SETTING_LABELS)}" in log_text
         assert "Raw folder was not touched." in log_text
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_promote_to_raw_succeeds_when_all_staged_files_are_valid() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-12"
+    run_dir = repo_root / "data" / "runs" / run_date
+    raw_dir = run_dir / "raw"
+    log_file = run_dir / "logs" / f"pricelabs_download_{run_date}.log"
+
+    shutil.rmtree(run_dir, ignore_errors=True)
+    try:
+        write_valid_staged_downloads(run_dir, run_date)
+
+        result_log = pricelabs_downloader.run(run_date, promote_to_raw=True)
+
+        assert result_log == log_file
+        assert (raw_dir / "priceLabs_future_export.csv").exists()
+        assert (raw_dir / "price_occ.csv").exists()
+        assert (raw_dir / "monthly_trends.csv").exists()
+        assert (raw_dir / "bookings_report.xlsx").exists()
+        assert (raw_dir / "pricelabs_settings_snapshot_from_ui.json").exists()
+        assert not (raw_dir / "pricelabs_settings_manual_input.json").exists()
+        assert list(raw_dir.glob("*.html")) == []
+        assert not (run_dir / "raw_promotion_tmp").exists()
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "promotion_started=true" in log_text
+        assert "promotion_status=passed" in log_text
+        assert "raw_touched=true" in log_text
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_promote_to_raw_fails_when_staged_file_is_missing() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-13"
+    run_dir = repo_root / "data" / "runs" / run_date
+    raw_dir = run_dir / "raw"
+    log_file = run_dir / "logs" / f"pricelabs_download_{run_date}.log"
+
+    shutil.rmtree(run_dir, ignore_errors=True)
+    try:
+        write_valid_staged_downloads(run_dir, run_date)
+        (run_dir / "downloads_staging" / "price_occ.csv").unlink()
+
+        with pytest.raises(pricelabs_downloader.DownloadError, match="Missing staged files"):
+            pricelabs_downloader.run(run_date, promote_to_raw=True)
+
+        assert not raw_dir.exists()
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "promotion_status=failed" in log_text
+        assert "raw_touched=false" in log_text
+        assert "price_occ.csv" in log_text
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_promote_to_raw_fails_when_staged_file_is_invalid_without_partial_copy() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-14"
+    run_dir = repo_root / "data" / "runs" / run_date
+    raw_dir = run_dir / "raw"
+    log_file = run_dir / "logs" / f"pricelabs_download_{run_date}.log"
+
+    shutil.rmtree(run_dir, ignore_errors=True)
+    try:
+        write_valid_staged_downloads(run_dir, run_date)
+        (run_dir / "downloads_staging" / "monthly_trends.csv").write_text(
+            "<html><body>login</body></html>",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(pricelabs_downloader.DownloadError, match="failed validation"):
+            pricelabs_downloader.run(run_date, promote_to_raw=True)
+
+        assert not raw_dir.exists()
+        assert not (run_dir / "raw_promotion_tmp").exists()
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "promotion_status=failed" in log_text
+        assert "raw_touched=false" in log_text
+        assert "monthly_trends.csv" in log_text
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_promote_to_raw_fails_if_any_raw_target_exists_without_overwrite() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-15"
+    run_dir = repo_root / "data" / "runs" / run_date
+    raw_dir = run_dir / "raw"
+    log_file = run_dir / "logs" / f"pricelabs_download_{run_date}.log"
+
+    shutil.rmtree(run_dir, ignore_errors=True)
+    try:
+        write_valid_staged_downloads(run_dir, run_date)
+        raw_dir.mkdir(parents=True)
+        existing_raw = raw_dir / "price_occ.csv"
+        existing_raw.write_text("trusted raw should remain\n", encoding="utf-8")
+
+        with pytest.raises(pricelabs_downloader.DownloadError, match="refusing to overwrite"):
+            pricelabs_downloader.run(run_date, promote_to_raw=True)
+
+        assert existing_raw.read_text(encoding="utf-8") == "trusted raw should remain\n"
+        assert not (raw_dir / "priceLabs_future_export.csv").exists()
+        assert not (raw_dir / "monthly_trends.csv").exists()
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "promotion_status=failed" in log_text
+        assert "raw_touched=false" in log_text
+        assert "Raw target already exists" in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
 

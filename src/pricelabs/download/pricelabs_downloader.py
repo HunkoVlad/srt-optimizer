@@ -119,6 +119,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Developer-only option to skip the manual login checkpoint.",
     )
+    parser.add_argument(
+        "--promote-to-raw",
+        action="store_true",
+        help="Validate all staged PriceLabs inputs and copy them into raw/ without overwriting existing raw files.",
+    )
     args = parser.parse_args(argv)
     validate_run_date(args.run_date, parser)
     return args
@@ -2058,6 +2063,126 @@ def run_settings_snapshot_capture(
     return log_file
 
 
+PROMOTION_FILES = (
+    (FUTURE_EXPORT_FILENAME, validate_future_export_csv),
+    (PRICE_OCC_FILENAME, validate_price_occ_csv),
+    (MONTHLY_TRENDS_FILENAME, validate_monthly_trends_csv),
+    (BOOKINGS_REPORT_FILENAME, validate_bookings_report_xlsx),
+    (SETTINGS_SNAPSHOT_FILENAME, validate_settings_snapshot_json),
+)
+
+
+def promotion_log_lines(
+    *,
+    run_date: str,
+    staging_dir: Path,
+    raw_dir: Path,
+    status: str,
+    checked_files: Sequence[str],
+    raw_targets: Sequence[Path],
+    raw_touched: bool,
+    reason: str | None = None,
+) -> list[str]:
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    lines = [
+        f"PriceLabs downloader promotion started at {timestamp}",
+        f"run_date={run_date}",
+        "promotion_started=true",
+        f"downloads_staging={staging_dir}",
+        f"raw_dir={raw_dir}",
+        f"promotion_status={status}",
+        f"raw_touched={str(raw_touched).lower()}",
+        "staged_files_checked:",
+    ]
+    lines.extend(f"- {filename}: validation_checked" for filename in checked_files)
+    lines.append("raw_target_paths:")
+    lines.extend(f"- {path}" for path in raw_targets)
+    if reason:
+        lines.append(f"failure_reason={reason}")
+    return lines
+
+
+def run_promote_to_raw(run_date: str) -> Path:
+    run_dir, staging_dir, _, log_file = get_run_paths(run_date)
+    raw_dir = run_dir / "raw"
+    temp_dir = run_dir / "raw_promotion_tmp"
+    staged_paths = [(filename, staging_dir / filename, raw_dir / filename, validator) for filename, validator in PROMOTION_FILES]
+    checked_files = [filename for filename, _staged, _raw, _validator in staged_paths]
+    raw_targets = [raw_path for _filename, _staged, raw_path, _validator in staged_paths]
+
+    try:
+        missing = [str(staged_path) for _filename, staged_path, _raw_path, _validator in staged_paths if not staged_path.exists()]
+        if missing:
+            raise DownloadError("Missing staged files for promotion: " + ", ".join(missing))
+
+        for filename, staged_path, _raw_path, validator in staged_paths:
+            try:
+                validator(staged_path)
+            except DownloadError as exc:
+                raise DownloadError(f"Staged file failed validation before promotion: {filename}: {exc}") from exc
+
+        existing_raw = [str(raw_path) for _filename, _staged_path, raw_path, _validator in staged_paths if raw_path.exists()]
+        if existing_raw:
+            raise DownloadError("Raw target already exists; refusing to overwrite: " + ", ".join(existing_raw))
+
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        temp_dir.mkdir(parents=True, exist_ok=False)
+
+        for filename, staged_path, _raw_path, _validator in staged_paths:
+            shutil.copy2(staged_path, temp_dir / filename)
+
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        created_targets: list[Path] = []
+        try:
+            for filename, _staged_path, raw_path, _validator in staged_paths:
+                shutil.move(str(temp_dir / filename), raw_path)
+                created_targets.append(raw_path)
+        except Exception:
+            for created_target in created_targets:
+                if created_target.exists():
+                    created_target.unlink()
+            raise
+        finally:
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+    except Exception as exc:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        reason = str(exc)
+        write_log(
+            log_file,
+            promotion_log_lines(
+                run_date=run_date,
+                staging_dir=staging_dir,
+                raw_dir=raw_dir,
+                status="failed",
+                checked_files=checked_files,
+                raw_targets=raw_targets,
+                raw_touched=False,
+                reason=reason,
+            ),
+        )
+        if isinstance(exc, DownloadError):
+            raise
+        raise DownloadError(f"Promotion to raw failed: {reason}") from exc
+
+    write_log(
+        log_file,
+        promotion_log_lines(
+            run_date=run_date,
+            staging_dir=staging_dir,
+            raw_dir=raw_dir,
+            status="passed",
+            checked_files=checked_files,
+            raw_targets=raw_targets,
+            raw_touched=True,
+        )
+        + ["Validated staged files promoted to raw.", "Existing raw files were protected from overwrite."],
+    )
+    return log_file
+
+
 def run(
     run_date: str,
     *,
@@ -2065,7 +2190,10 @@ def run(
     dry_run: bool = False,
     headless: bool = False,
     skip_login_pause: bool = False,
+    promote_to_raw: bool = False,
 ) -> Path:
+    if promote_to_raw:
+        return run_promote_to_raw(run_date)
     if dry_run or target is None:
         return run_skeleton(run_date)
     if target == FUTURE_EXPORT_TARGET:
@@ -2110,12 +2238,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             dry_run=args.dry_run,
             headless=args.headless,
             skip_login_pause=args.skip_login_pause,
+            promote_to_raw=args.promote_to_raw,
         )
     except DownloadError as exc:
         print(f"PriceLabs downloader failed: {exc}", file=sys.stderr)
         return 1
 
-    if args.target and not args.dry_run:
+    if args.promote_to_raw:
+        print(f"PriceLabs downloader promoted staged files to raw. Log: {log_file}")
+    elif args.target and not args.dry_run:
         print(f"PriceLabs downloader completed for {args.target}. Log: {log_file}")
     else:
         print(f"PriceLabs downloader skeleton completed. Log: {log_file}")
