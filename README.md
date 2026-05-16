@@ -2,20 +2,19 @@
 
 Python-only V1 pipeline for a weekly PriceLabs revenue workflow.
 
-Current flow:
+Current weekly workflow:
 
 ```text
-manual PriceLabs raw files -> standardized daily CSV -> enriched daily CSV -> monthly revenue reports -> email-ready reports
+one-session PriceLabs download-all -> downloads_staging/ -> validated raw/ -> standardized daily CSV -> analysis/settings outputs -> email-ready reports
 ```
 
 V1 scope is intentionally narrow:
 
 - PriceLabs only
 - One listing only
-- Manual CSV input only
+- PriceLabs headed/manual login checkpoint for downloads
 - Next 180 days only
-- No browser automation
-- Scheduler wrapper is local/manual safe mode only
+- Scheduler integration is not enabled for the Playwright workflow yet
 - No dashboards
 - No Airbnb
 
@@ -29,6 +28,10 @@ Required raw files for the current pipeline:
 - `data/runs/<run_date>/raw/price_occ.csv`
 - `data/runs/<run_date>/raw/monthly_trends.csv`
 - `data/runs/<run_date>/raw/bookings_report.xlsx`
+- `data/runs/<run_date>/raw/pricelabs_settings_snapshot_from_ui.json`
+
+Deprecated/manual fallback:
+
 - `data/runs/<run_date>/raw/pricelabs_settings_manual_input.json`
 
 Current source roles:
@@ -37,7 +40,8 @@ Current source roles:
 - Bookings Report supplies current/future cleanings/stays, length of stay, booking source, and booking window.
 - Future export supplies future calendar status, open ask, availability, min stay, and future booked proxy fallback.
 - `price_occ.csv` supplies market context only.
-- Settings JSON supplies the PriceLabs rule snapshot.
+- UI settings snapshot supplies the primary PriceLabs rule snapshot.
+- Manual settings JSON is deprecated and used only as fallback if the UI snapshot is missing.
 - KPI On The Books and Revenue On The Books are optional/deprecated for now.
 
 ## Real Weekly Run Folders
@@ -46,25 +50,43 @@ Current source roles:
 
 ```text
 data/runs/<run_date>/
+|-- downloads_staging/
 |-- raw/
 |-- standardized/
 |-- analysis/
+|-- logs/
 `-- settings/
 ```
 
-For each real run, place these raw input files in `data/runs/<run_date>/raw/`:
+`downloads_staging/` is temporary. `raw/` is the trusted validated input layer. `analysis/` and `settings/` are generated and reproducible.
+
+The standard weekly command is:
+
+```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
+```
+
+That wrapper opens one PriceLabs browser session, waits for one manual login/MFA checkpoint, downloads the five staged inputs, validates them, promotes them to `raw/`, runs the weekly pipeline, and cleans `downloads_staging/` only after the full workflow succeeds.
+
+Trusted raw input files after promotion:
 
 - `priceLabs_future_export.csv`
 - `price_occ.csv`
 - `monthly_trends.csv`
 - `bookings_report.xlsx`
-- `pricelabs_settings_manual_input.json` with structured settings sections for orphan pricing, min-stay rules, occupancy adjustments, and length-of-stay pricing.
+- `pricelabs_settings_snapshot_from_ui.json`
 
 Raw files should be retained with the run. Analysis outputs are snapshot-based and should not overwrite prior run folders.
 
 ## Run Weekly Pipeline
 
-After the raw files are in place, run:
+Preferred weekly command:
+
+```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate 2026-05-03
+```
+
+Manual raw fallback remains available. If trusted raw files already exist, run:
 
 ```powershell
 .\run_weekly_pipeline.ps1 -RunDate 2026-05-03
@@ -138,7 +160,7 @@ Output:
 
 ## Run Settings Snapshot
 
-Use `data/runs/<run_date>/raw/pricelabs_settings_manual_input.json` for operational runs. `sample_data/` is for debug fixtures only.
+Use `data/runs/<run_date>/raw/pricelabs_settings_snapshot_from_ui.json` for operational runs. The UI snapshot is normalized into structured business fields before comparison. `data/runs/<run_date>/raw/pricelabs_settings_manual_input.json` is deprecated/manual fallback only.
 
 ```powershell
 $env:PYTHONPATH = "src"
@@ -176,6 +198,22 @@ Output:
 - `analysis/future_signal_change_review_<run_date>.csv`
 
 Note: synthetic prior signal files may be created for pipeline debugging only. Do not use synthetic signal rows for business interpretation.
+
+## Run Performance Reason Review
+
+The weekly pipeline creates:
+
+```text
+data/runs/<run_date>/analysis/performance_reason_review_<run_date>.csv
+```
+
+Reports include a concise `Reason Review` section that classifies what happened, likely why, and whether a PriceLabs rule change is justified. Recommendation gating uses these categories:
+
+- `market_weakness`: monitor; no PriceLabs rule change.
+- `insufficient_data`: no recommendation.
+- `listing_or_conversion_issue`: investigate listing or conversion before pricing.
+- `price_or_rule_issue`: PriceLabs rule change may be considered.
+- `settings_change_impact`: evaluate the impact before changing again.
 
 ## Validated V1 Behavior
 

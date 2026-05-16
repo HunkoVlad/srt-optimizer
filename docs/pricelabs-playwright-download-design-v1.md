@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This design prepares a future Playwright downloader for PriceLabs exports without changing the current manual pipeline.
+This design began as the PriceLabs downloader design. The current implemented weekly workflow uses a one-session PriceLabs download-all wrapper and preserves the staging-first architecture described here.
 
 The existing STR revenue pipeline already works from trusted raw files under:
 
@@ -10,21 +10,19 @@ The existing STR revenue pipeline already works from trusted raw files under:
 data/runs/<run_date>/raw/
 ```
 
-Raw files remain the source of truth. Generated outputs are reproducible. This design only describes how a future downloader should safely fetch PriceLabs files before they become trusted raw inputs.
+Raw files remain the source of truth. Generated outputs are reproducible. Downloads are staged and validated before promotion to trusted raw inputs.
 
 ## Scope
 
-Included:
+Included/current:
 
-- Design only.
-- Future PriceLabs browser download approach.
+- PriceLabs browser download approach.
 - Staging-first file handling.
 - Validation and promotion rules.
 - Safe failure and manual fallback rules.
 
 Excluded:
 
-- No Playwright implementation yet.
 - No scheduler integration yet.
 - No pipeline behavior changes yet.
 - No PriceLabs credential storage.
@@ -32,18 +30,19 @@ Excluded:
 
 ## Required PriceLabs Download Targets
 
-Future Playwright automation should download these PriceLabs files:
+The standard PriceLabs download-all workflow stages these files:
 
 - `priceLabs_future_export.csv`
 - `price_occ.csv`
 - `monthly_trends.csv`
 - `bookings_report.xlsx`
+- `pricelabs_settings_snapshot_from_ui.json`
 
-This file remains manual/local:
+This file is deprecated/manual fallback only:
 
 - `pricelabs_settings_manual_input.json`
 
-The settings JSON should not be downloaded by Playwright in this design. It is a manually maintained PriceLabs rule snapshot.
+The UI settings snapshot is the primary settings source. It is normalized before settings comparison. The manual settings JSON remains available only if the UI snapshot is missing.
 
 ## Recommended Folder Model
 
@@ -55,7 +54,7 @@ data/runs/<run_date>/raw/
 data/runs/<run_date>/logs/
 ```
 
-Playwright should download into `downloads_staging/` first. Only validated files should be promoted or copied into `raw/`.
+The downloader writes into `downloads_staging/` first. Only validated files are promoted or copied into `raw/`.
 
 ## Why Staging First
 
@@ -71,12 +70,12 @@ It:
 
 ## Proposed Download Flow
 
-Future downloader flow:
+Current one-session downloader flow:
 
 1. Create the run folder structure if missing.
 2. Launch Playwright with a controlled download directory.
-3. Authenticate to PriceLabs.
-4. Download each required export to `downloads_staging/`.
+3. Use one headed/manual login and MFA checkpoint.
+4. Download each required file to `downloads_staging/`.
 5. Normalize filenames in staging.
 6. Validate file presence.
 7. Validate basic file shape.
@@ -84,11 +83,13 @@ Future downloader flow:
 9. Write a download attempt log.
 10. Exit with a clear success or failure status.
 
-The current scheduled/manual pipeline command remains unchanged:
+The standard weekly workflow command is:
 
 ```powershell
-.\scripts\run_scheduled_weekly_pipeline.ps1 -RunDate YYYY-MM-DD
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
 ```
+
+Windows Task Scheduler should not use this Playwright workflow until scheduler integration is separately validated.
 
 ## Validation Before Promotion
 
@@ -162,6 +163,18 @@ Expected to include stay or reservation rows with:
 
 Bookings Report supports cleanings/stays, LOS, source mix, and booking-window analysis.
 
+### `pricelabs_settings_snapshot_from_ui.json`
+
+Expected to include:
+
+- run date and listing metadata
+- captured timestamp
+- PriceLabs UI source metadata
+- visible settings labels and values
+- optional detail text for settings where the UI exposes hover/popover detail
+
+The settings snapshot is normalized into structured business fields before comparison. Metadata and raw UI audit fields are excluded from `settings_changes`.
+
 ## Safe Promotion Rules
 
 Promotion from staging to raw should be conservative:
@@ -207,7 +220,7 @@ The user can still place files directly in:
 data/runs/<run_date>/raw/
 ```
 
-The existing scheduler/manual pipeline should continue to work without Playwright. The Playwright downloader should be an optional pre-step until it is proven stable.
+The existing raw-file pipeline continues to work without Playwright if trusted raw files are placed manually. The one-session wrapper is the current standard manual weekly workflow, but scheduler use is not recommended until separately validated.
 
 ## Logging
 
@@ -296,7 +309,19 @@ Step 30 - Add all required downloads.
 
 Step 31 - Add staging validation and promote-to-raw.
 
-Step 32 - Optional scheduler integration.
+Step 32 - Add bookings report download target.
+
+Step 33 - Add PriceLabs UI settings snapshot target.
+
+Step 34 - Promote validated staged files to raw.
+
+Step 35 - Use UI settings snapshot as primary settings input.
+
+Step 36 - Add one-command and one-session weekly workflow.
+
+Step 37 - Add Reason Review.
+
+Future - Optional scheduler integration only after separate validation.
 
 ## Acceptance Criteria
 
@@ -304,8 +329,8 @@ This design step is complete when:
 
 - `docs/pricelabs-playwright-download-design-v1.md` exists.
 - The document clearly recommends staging-first download.
-- The document identifies the four future automated PriceLabs downloads.
-- The document keeps `pricelabs_settings_manual_input.json` manual/local.
+- The document identifies the five staged PriceLabs inputs.
+- The document keeps `pricelabs_settings_manual_input.json` as deprecated/manual fallback.
 - The document explains validation before promotion.
 - The document explains no-overwrite raw safety.
 - The document explains login, MFA, and download failure handling.

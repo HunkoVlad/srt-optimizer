@@ -13,9 +13,9 @@ Required weekly PriceLabs files:
 ```text
 data/runs/<run_date>/raw/priceLabs_future_export.csv
 data/runs/<run_date>/raw/price_occ.csv
-data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
 data/runs/<run_date>/raw/monthly_trends.csv
 data/runs/<run_date>/raw/bookings_report.xlsx
+data/runs/<run_date>/raw/pricelabs_settings_snapshot_from_ui.json
 ```
 
 `priceLabs_future_export.csv` role:
@@ -38,11 +38,17 @@ data/runs/<run_date>/raw/bookings_report.xlsx
 - market context only
 - must not provide `upcoming_adr`
 
+`pricelabs_settings_snapshot_from_ui.json` role:
+
+- primary PriceLabs UI rule snapshot
+- normalized settings source before comparison
+- settings changes without metadata/audit noise
+- rule-performance context
+
 `pricelabs_settings_manual_input.json` role:
 
-- PriceLabs rule snapshot
-- settings changes
-- rule-performance context
+- deprecated/manual fallback only when the UI snapshot is missing
+- should not be required for the standard weekly workflow
 
 `monthly_trends.csv` role:
 
@@ -137,8 +143,9 @@ Therefore:
 | `average_length_of_stay` | `bookings_report.xlsx` | Airbnb report later | Current weekly cleaning/LOS metrics come from Bookings Report. |
 | `booking_source_mix` | `bookings_report.xlsx` | Airbnb report later | Context only; no channel-specific revenue adjustment yet. |
 | `listing_conversion` | Airbnb report | none | Useful for view/contact/book funnel context. |
-| `settings_snapshot` | `pricelabs_settings_manual_input.json` | future automated settings capture | Manual for now. |
-| `settings_changes` | settings snapshot comparison | none | Rule-performance context. |
+| `settings_snapshot` | `pricelabs_settings_snapshot_from_ui.json` | `pricelabs_settings_manual_input.json` fallback | UI settings are normalized before comparison. |
+| `settings_changes` | normalized settings snapshot comparison | none | Metadata/audit fields are excluded; only business-rule fields are compared. |
+| `performance_reason_review` | monthly pace, window signals, settings changes | raw market context and booking metrics | Classifies likely reason before recommendations. |
 
 ## Monthly Reporting Source Labels
 
@@ -174,15 +181,54 @@ Required weekly now:
 
 - `priceLabs_future_export.csv`
 - `price_occ.csv`
-- `pricelabs_settings_manual_input.json`
 - `monthly_trends.csv`
 - `bookings_report.xlsx`
+- `pricelabs_settings_snapshot_from_ui.json`
 
 Optional weekly/monthly later:
 
+- `pricelabs_settings_manual_input.json`, deprecated/manual fallback only
 - PriceLabs KPIs On The Books, optional/deprecated for now
 - Revenue On The Books, optional/deprecated reconciliation source only
 - Airbnb monthly/listing performance report
+
+## Weekly Workflow And Folder Model
+
+Current standard command:
+
+```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
+```
+
+This wrapper uses one headed PriceLabs session and one manual login/MFA checkpoint, downloads the five required files into `downloads_staging/`, validates them, promotes validated files into `raw/`, then runs the weekly pipeline. `downloads_staging/` is cleaned only after the full workflow succeeds.
+
+Folder roles:
+
+- `downloads_staging/`: temporary downloaded files and troubleshooting artifacts during failures.
+- `raw/`: trusted validated inputs.
+- `analysis/`: generated analysis/report outputs.
+- `settings/`: generated normalized settings outputs.
+- `logs/`: preserved run/download logs.
+
+Windows Task Scheduler should not use the Playwright download workflow until that integration is separately validated.
+
+## Causal Reason Review
+
+The pipeline generates:
+
+```text
+data/runs/<run_date>/analysis/performance_reason_review_<run_date>.csv
+```
+
+Reason Review connects settings changes, monthly pace, future window signals, and market context. It classifies likely reason before any recommendation:
+
+- `market_weakness`: monitor; no PriceLabs rule change.
+- `insufficient_data`: no recommendation.
+- `listing_or_conversion_issue`: investigate listing/conversion before pricing.
+- `price_or_rule_issue`: PriceLabs rule change may be considered.
+- `settings_change_impact`: evaluate impact before changing again.
+
+Market 75th percentile remains context only. Do not compare daily market occupancy directly to single-listing daily occupancy; use aggregate window/month context.
 
 ## One-Time / Occasional Historical Backfill
 
@@ -197,6 +243,10 @@ Do not fake historical data. If no source exists for a historical month, keep:
 Current Step 26 source model:
 
 Normalize Monthly Trends and Bookings Report into monthly truth and booking metrics.
+
+Current Step 37 decision model:
+
+Classify likely performance reason before allowing rule-area recommendations.
 
 Next documentation/cleanup steps:
 

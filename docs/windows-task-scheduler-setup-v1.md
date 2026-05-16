@@ -15,7 +15,7 @@ The wrapper is responsible for:
 - Calling the main pipeline.
 - Safe email config summary without secrets.
 
-This setup does not add Playwright automation and does not automate PriceLabs downloads. Raw files remain the source of truth.
+This setup does not add Playwright automation and does not automate PriceLabs downloads. Raw files remain the source of truth. The newer one-session command `.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD` should not be used from Windows Task Scheduler until that browser/login workflow is separately validated.
 
 ## Recommended Schedule
 
@@ -101,9 +101,9 @@ Required raw files:
 ```text
 priceLabs_future_export.csv
 price_occ.csv
-pricelabs_settings_manual_input.json
 monthly_trends.csv
 bookings_report.xlsx
+pricelabs_settings_snapshot_from_ui.json
 ```
 
 Optional/deprecated for the current monthly reporting flow:
@@ -112,7 +112,7 @@ Optional/deprecated for the current monthly reporting flow:
 kpis_on_the_books.xlsx
 ```
 
-`monthly_trends.csv` is required because it is the monthly revenue, occupancy, and ADR truth source. `bookings_report.xlsx` is required because it supplies reservation-level cleaning, length-of-stay, and booking-window metrics.
+`monthly_trends.csv` is required because it is the monthly revenue, occupancy, and ADR truth source. `bookings_report.xlsx` is required because it supplies reservation-level cleaning, length-of-stay, and booking-window metrics. `pricelabs_settings_manual_input.json` is deprecated/manual fallback only and is not the primary settings source when the UI snapshot exists.
 
 ### C. Run The Task Manually
 
@@ -203,5 +203,6 @@ Different Windows user account:
 - No Playwright automation in this step.
 - No automatic PriceLabs downloads in this step.
 - No email send mode change in this step.
+- No one-session Playwright workflow in Task Scheduler until separately validated.
 - Keep scheduled testing draft-first.
 - Keep raw files as the source of truth.

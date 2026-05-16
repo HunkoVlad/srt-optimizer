@@ -47,9 +47,9 @@ Required:
 ```text
 data/runs/<run_date>/raw/priceLabs_future_export.csv
 data/runs/<run_date>/raw/price_occ.csv
-data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
 data/runs/<run_date>/raw/monthly_trends.csv
 data/runs/<run_date>/raw/bookings_report.xlsx
+data/runs/<run_date>/raw/pricelabs_settings_snapshot_from_ui.json
 ```
 
 Optional:
@@ -58,7 +58,7 @@ Optional:
 data/runs/<run_date>/raw/kpis_on_the_books.xlsx
 ```
 
-The optional KPI file may be missing. Missing `kpis_on_the_books.xlsx` should not fail the run, and it is deprecated for the current monthly reporting flow unless reconciliation is needed.
+The optional KPI file may be missing. Missing `kpis_on_the_books.xlsx` should not fail the run, and it is deprecated for the current monthly reporting flow unless reconciliation is needed. `pricelabs_settings_manual_input.json` is deprecated/manual fallback only if the UI settings snapshot is unavailable.
 
 `monthly_trends.csv` is the primary monthly revenue/occupancy/ADR truth source. `bookings_report.xlsx` is the reservation-level source for cleaning, length-of-stay, and booking-window metrics.
 
@@ -146,6 +146,14 @@ Step 25 — Test with Windows Task Scheduler using manually placed raw files.
 Step 26 — Require Monthly Trends and Bookings Report for accurate current-month reporting.
 
 Step 27 — Add Playwright PriceLabs download automation.
+
+Current manual standard:
+
+```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
+```
+
+This one-session workflow is not yet approved for Windows Task Scheduler. Task Scheduler should continue using the separately documented safe wrapper until Playwright scheduling is explicitly validated.
 
 Step 28 — Add Airbnb/listing conversion data later.
 

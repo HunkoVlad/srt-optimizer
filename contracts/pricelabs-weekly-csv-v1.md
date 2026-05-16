@@ -2,15 +2,15 @@
 
 Status: Current V1
 Owner: SRT pipeline
-Scope: Manual weekly PriceLabs pipeline for one listing
+Scope: Weekly PriceLabs pipeline for one listing
 
 This contract defines the current Python-only V1 pipeline shape:
 
 ```text
-manual raw PriceLabs files -> standardized daily CSV -> enriched daily CSV -> monthly revenue pace -> analysis/settings outputs
+one-session PriceLabs download-all -> downloads_staging/ -> validated raw files -> standardized daily CSV -> enriched daily CSV -> monthly revenue pace -> analysis/settings outputs
 ```
 
-V1 is local and raw-file driven. It does not include browser download automation, Airbnb data, dashboards, or automatic pricing-rule changes. The scheduler wrapper is a safe local runner around the same raw-file pipeline.
+V1 is local and raw-file driven. The current standard workflow uses a headed PriceLabs download wrapper with one manual login/MFA checkpoint, then promotes validated staged files to `raw/`. It does not include scheduler integration for Playwright downloads, Airbnb data, dashboards, or automatic pricing-rule changes.
 
 ## Run Folder Contract
 
@@ -27,6 +27,12 @@ data/runs/<run_date>/raw/priceLabs_future_export.csv
 data/runs/<run_date>/raw/price_occ.csv
 data/runs/<run_date>/raw/monthly_trends.csv
 data/runs/<run_date>/raw/bookings_report.xlsx
+data/runs/<run_date>/raw/pricelabs_settings_snapshot_from_ui.json
+```
+
+Deprecated/manual fallback only:
+
+```text
 data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
 ```
 
@@ -42,7 +48,10 @@ Generated outputs are reproducible from the raw inputs and live under:
 data/runs/<run_date>/standardized/
 data/runs/<run_date>/analysis/
 data/runs/<run_date>/settings/
+data/runs/<run_date>/logs/
 ```
+
+`downloads_staging/` is temporary and should be cleaned only after the full workflow succeeds. `raw/` is the trusted validated input layer.
 
 `sample_data/` is debug/test fixture data only. It is not operational input for real weekly runs.
 
@@ -173,10 +182,17 @@ Rules:
 File:
 
 ```text
-data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
+data/runs/<run_date>/raw/pricelabs_settings_snapshot_from_ui.json
 ```
 
-Role: required manual PriceLabs rule snapshot input.
+Role: primary PriceLabs UI rule snapshot input.
+
+Rules:
+
+- UI settings are normalized into structured business fields before comparison.
+- `settings_changes` excludes metadata/audit noise such as source URL, source file, capture timestamp, and raw UI audit fields.
+- `pricelabs_settings_manual_input.json` is deprecated/manual fallback only when the UI snapshot is missing.
+- Settings files do not change revenue calculations or send behavior.
 
 ## Standardized Daily Contract
 
@@ -569,6 +585,7 @@ Required sections:
 - Executive summary bullets.
 - Executive Decision View.
 - Interpretation.
+- Reason Review.
 - Monthly revenue pace table.
 - Key diagnostics.
 
@@ -645,11 +662,23 @@ Interpretation rules:
 
 Interpretation text must not mention changing base price, min price, LOS, discounts, orphan rules, or other PriceLabs settings.
 
+Reason Review:
+
+- Appears before Recommendation Review.
+- Uses `analysis/performance_reason_review_<run_date>.csv`.
+- States what happened, likely why, and whether a PriceLabs rule change is justified now.
+- Must classify likely reason before any rule-area recommendation.
+- `market_weakness` means monitor and no PriceLabs rule change.
+- `insufficient_data` means no recommendation.
+- `listing_or_conversion_issue` means investigate listing/conversion before pricing.
+- `price_or_rule_issue` means a PriceLabs rule-area change may be considered.
+- `settings_change_impact` means evaluate the setting impact before changing again.
+
 Limits:
 
 - Step 4/6/7/8 is reporting, decision grouping, and interpretation only.
-- It does not create PriceLabs recommendations.
-- It does not create pricing recommendations.
+- It does not create ungated PriceLabs recommendations.
+- It does not create pricing recommendations without a likely-reason classification.
 - It does not modify window signals.
 - Market benchmark remains context only.
 
@@ -676,6 +705,7 @@ Required sections:
 - Executive Snapshot.
 - What Needs Attention.
 - What To Protect.
+- Reason Review.
 - Recommendation Review.
 - Key Monthly Snapshot.
 - Data Notes.
@@ -1061,12 +1091,68 @@ data/runs/<run_date>/settings/pricelabs_settings_changes_<run_date>.csv
 
 Settings files are analysis context. They do not change the operational transform or Step 1 revenue-proxy logic.
 
+## Performance Reason Review Step 37 Contract
+
+Output:
+
+```text
+data/runs/<run_date>/analysis/performance_reason_review_<run_date>.csv
+```
+
+Generated from:
+
+```text
+data/runs/<run_date>/settings/pricelabs_settings_snapshot_<run_date>.json
+data/runs/<run_date>/settings/pricelabs_settings_changes_<run_date>.csv
+data/runs/<run_date>/analysis/monthly_revenue_pace_<run_date>.csv
+data/runs/<run_date>/analysis/future_window_summary_<run_date>.csv
+data/runs/<run_date>/analysis/future_window_signals_<run_date>.csv
+data/runs/<run_date>/analysis/future_signal_change_review_<run_date>.csv
+```
+
+Purpose: classify likely performance reason before recommendation review.
+
+Required output columns:
+
+- `run_date`
+- `listing_id`
+- `scope_type`
+- `scope_name`
+- `observed_issue`
+- `relevant_setting_change`
+- `last_setting_change_date`
+- `setting_change_summary`
+- `performance_after_change`
+- `market_context`
+- `likely_reason`
+- `confidence`
+- `recommendation_allowed`
+- `recommendation_type`
+- `explanation_note`
+
+Allowed `likely_reason` values:
+
+- `market_weakness`
+- `listing_or_conversion_issue`
+- `price_or_rule_issue`
+- `settings_change_impact`
+- `insufficient_data`
+- `no_issue`
+
+Rules:
+
+- If data is insufficient, use `likely_reason = insufficient_data` and `recommendation_allowed = false`.
+- If market context is weak and listing performance is not clearly worse than market, do not recommend a PriceLabs rule change.
+- Do not compare daily market occupancy directly to single-listing daily occupancy; use window/month context.
+- OBA snapshot changes are context and do not automatically justify rule recommendations.
+- Recommendations must be gated by `likely_reason`.
+- Do not recommend manual date-level calendar edits.
+
 ## Non-Goals
 
-- No browser automation.
-- No Playwright download automation.
 - No Windows Task Scheduler configuration in the pipeline contract.
+- No Windows Task Scheduler integration for the PriceLabs Playwright workflow until separately validated.
 - No Airbnb data.
 - No dashboard.
-- No recommendation logic.
+- No ungated recommendation logic.
 - No final realized ADR claims from `upcoming_adr` or `booked_revenue_proxy`.

@@ -6,19 +6,16 @@ Operator checklist for the current V1 pipeline.
 
 - PriceLabs only
 - One listing only
-- Manual CSV input only
+- One-session PriceLabs download-all workflow
 - Next 180 days only
-- No browser automation
-- Local scheduler wrapper supported separately; no browser/download automation
+- One manual PriceLabs login/MFA checkpoint
+- Windows Task Scheduler should not use this Playwright workflow until separately validated
 - No dashboards
 
 ## Run Checklist
 
-- [ ] Download the PriceLabs future pricing CSV manually.
-- [ ] Download or export the Price Occ benchmark CSV manually.
-- [ ] Download or export Monthly Trends manually.
-- [ ] Download or export Bookings Report manually.
-- [ ] Prepare the manual PriceLabs settings JSON.
+- [ ] Confirm the machine can open a headed browser for PriceLabs.
+- [ ] Confirm no trusted raw files already exist for the same run date unless this is an intentional manual fallback run.
 - [ ] For development runs, keep email delivery in draft mode:
 
 ```toml
@@ -29,46 +26,59 @@ mode = "draft"
 enabled = false
 ```
 
-- [ ] Create the run folders:
+- [ ] Run the standard weekly workflow from the repo root:
 
-```text
-data/runs/<run_date>/raw/
-data/runs/<run_date>/standardized/
-data/runs/<run_date>/analysis/
-data/runs/<run_date>/settings/
+```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
 ```
 
-- [ ] Place the real raw input files in `data/runs/<run_date>/raw/`:
+- [ ] Complete the single manual PriceLabs login/MFA checkpoint in the opened browser.
+- [ ] Let the wrapper finish the full flow:
+  - download all files into `downloads_staging/`
+  - validate staged files
+  - promote validated files to `raw/`
+  - run the weekly pipeline
+  - clean `downloads_staging/` only after full success
+- [ ] Confirm trusted raw files exist in `data/runs/<run_date>/raw/`:
   - `priceLabs_future_export.csv`
   - `price_occ.csv`
   - `monthly_trends.csv`
   - `bookings_report.xlsx`
-  - `pricelabs_settings_manual_input.json`
+  - `pricelabs_settings_snapshot_from_ui.json`
 - [ ] Treat `sample_data/` as debug fixtures only, not real weekly input storage.
 - [ ] Do not use legacy top-level `analysis/` or `standardized/` folders for real outputs.
-- [ ] Run the weekly runner from the repo root:
-
-```powershell
-.\run_weekly_pipeline.ps1 -RunDate YYYY-MM-DD
-```
 
 ## Required Raw Files
 
-The runner expects these exact filenames for each real run:
+The standard wrapper creates and validates these trusted raw inputs:
 
 ```text
 data/runs/<run_date>/raw/priceLabs_future_export.csv
 data/runs/<run_date>/raw/price_occ.csv
 data/runs/<run_date>/raw/monthly_trends.csv
 data/runs/<run_date>/raw/bookings_report.xlsx
-data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
+data/runs/<run_date>/raw/pricelabs_settings_snapshot_from_ui.json
 ```
+
+`data/runs/<run_date>/raw/pricelabs_settings_manual_input.json` is deprecated/manual fallback only. Do not treat it as the primary settings source when the UI snapshot exists.
 
 `priceLabs_future_export.csv` is the canonical Windows filename. Avoid creating a duplicate lowercase variant.
 
 `priceLabs_future_export.csv` column `ADR` maps to `upcoming_adr`. `price_occ.csv` is market/context input only and must not provide `upcoming_adr`.
 
 `monthly_trends.csv` is the primary monthly truth source for captured revenue, occupancy, and ADR. `bookings_report.xlsx` supplies current/future cleanings/stays, length of stay, booking source mix, and booking window. `kpis_on_the_books.xlsx` and Revenue On The Books exports are optional/deprecated for now and are not required for the current weekly report.
+
+## Folder Model
+
+```text
+data/runs/<run_date>/downloads_staging/  temporary downloads, removed after full success
+data/runs/<run_date>/raw/                trusted validated inputs
+data/runs/<run_date>/analysis/           generated analysis and reports
+data/runs/<run_date>/settings/           generated normalized settings outputs
+data/runs/<run_date>/logs/               preserved logs
+```
+
+If the workflow fails, keep `downloads_staging/` for troubleshooting. If it succeeds, the wrapper cleans `downloads_staging/` after reports are generated.
 
 ## After The Run
 
@@ -77,6 +87,13 @@ data/runs/<run_date>/raw/pricelabs_settings_manual_input.json
 - [ ] Confirm `data/runs/<run_date>/manifest.json` has `status = "success"`.
 - [ ] Confirm analysis outputs are under `data/runs/<run_date>/analysis/`.
 - [ ] Confirm settings outputs are under `data/runs/<run_date>/settings/`.
+- [ ] Confirm Reason Review was generated:
+
+```text
+data/runs/<run_date>/analysis/performance_reason_review_<run_date>.csv
+```
+
+- [ ] Confirm reports include `Reason Review`.
 - [ ] Confirm Monthly Trends was normalized:
 
 ```text
@@ -133,6 +150,18 @@ data/runs/<run_date>/analysis/future_daily_pricing_enriched_<run_date>.csv
   - `booked_stay_start_proxy`
   - `booked_stay_id_proxy`
 - [ ] Treat market 75th percentile fields as context only. Revenue pace is the business goal.
+
+## Reason Review
+
+The pipeline classifies likely reasons before recommendations:
+
+- `market_weakness`: monitor; no PriceLabs rule change.
+- `insufficient_data`: no recommendation.
+- `listing_or_conversion_issue`: investigate listing/conversion before changing pricing.
+- `price_or_rule_issue`: a PriceLabs rule-area change may be considered.
+- `settings_change_impact`: evaluate the setting impact before changing again.
+
+Recommendations should be read through this gate. Do not jump from weak revenue directly to a price/rule change without the likely reason classification.
 
 ## Email Delivery Mode
 
@@ -201,7 +230,7 @@ format = "html"
 2. Run:
 
 ```powershell
-.\run_weekly_pipeline.ps1 -RunDate YYYY-MM-DD
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
 ```
 
 3. Confirm `.md`, `.html`, and `.eml` outputs exist under `data/runs/<run_date>/analysis/`.
