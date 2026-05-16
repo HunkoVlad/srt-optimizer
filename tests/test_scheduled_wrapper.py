@@ -38,3 +38,26 @@ def test_scheduled_wrapper_reports_new_required_raw_files_when_missing() -> None
         assert "Pipeline not executed because required inputs are incomplete." in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_weekly_with_pricelabs_downloads_wrapper_orders_safe_steps() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "run_weekly_with_pricelabs_downloads.ps1"
+
+    script = script_path.read_text(encoding="utf-8")
+
+    expected_order = [
+        '"future-export"',
+        '"price-occ"',
+        '"monthly-trends"',
+        '"bookings-report"',
+        '"settings-snapshot"',
+        "--promote-to-raw",
+        "run_weekly_pipeline.ps1",
+    ]
+    positions = [script.index(token) for token in expected_order]
+    assert positions == sorted(positions)
+    assert "--promote-to-raw" in script
+    assert "--target $target" in script
+    assert '$env:PYTHONPATH = "src"' in script
+    assert "Gmail/send mode is not changed by this wrapper." in script
