@@ -27,19 +27,36 @@ foreach ($dir in @($rawDir, $standardizedDir, $analysisDir, $settingsDir)) {
 
 $futureExport = Join-Path $rawDir "priceLabs_future_export.csv"
 $priceOcc = Join-Path $rawDir "price_occ.csv"
-$settingsInput = Join-Path $rawDir "pricelabs_settings_manual_input.json"
+$settingsUiInput = Join-Path $rawDir "pricelabs_settings_snapshot_from_ui.json"
+$settingsManualInput = Join-Path $rawDir "pricelabs_settings_manual_input.json"
 $monthlyTrends = Join-Path $rawDir "monthly_trends.csv"
 $bookingsReport = Join-Path $rawDir "bookings_report.xlsx"
 $kpisOnTheBooks = Join-Path $rawDir "kpis_on_the_books.xlsx"
 
 $missingInputs = @()
-foreach ($path in @($futureExport, $priceOcc, $settingsInput, $monthlyTrends, $bookingsReport)) {
+foreach ($path in @($futureExport, $priceOcc, $monthlyTrends, $bookingsReport)) {
     if (-not (Test-Path $path)) {
         $missingInputs += $path
     }
 }
 if ($missingInputs.Count -gt 0) {
     Write-Error ("Missing required raw input file(s):`n  " + ($missingInputs -join "`n  "))
+    exit 1
+}
+
+$settingsInput = $null
+$settingsSource = $null
+if (Test-Path $settingsUiInput) {
+    $settingsInput = $settingsUiInput
+    $settingsSource = "pricelabs_ui_snapshot"
+}
+elseif (Test-Path $settingsManualInput) {
+    $settingsInput = $settingsManualInput
+    $settingsSource = "deprecated_manual_fallback"
+    Write-Host "Using deprecated manual PriceLabs settings fallback: $settingsManualInput"
+}
+else {
+    Write-Error "Missing settings input. Expected primary UI snapshot or deprecated manual fallback:`n  $settingsUiInput`n  $settingsManualInput"
     exit 1
 }
 
@@ -95,6 +112,7 @@ if (-not $settings.listing_id) {
     exit 1
 }
 $listingId = [string]$settings.listing_id
+Write-Host "Settings source: $settingsSource ($settingsInput)"
 
 $standardizedFile = Join-Path $standardizedDir "future_daily_pricing_$RunDate.csv"
 $manifestFile = Join-Path $runRoot "manifest.json"
