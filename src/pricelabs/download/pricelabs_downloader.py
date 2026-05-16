@@ -124,6 +124,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Validate all staged PriceLabs inputs and copy them into raw/ without overwriting existing raw files.",
     )
+    parser.add_argument(
+        "--download-all",
+        action="store_true",
+        help="Open one PriceLabs browser session and stage all required downloads after one manual login checkpoint.",
+    )
     args = parser.parse_args(argv)
     validate_run_date(args.run_date, parser)
     return args
@@ -480,6 +485,12 @@ def wait_for_manual_login_checkpoint(
     input()
 
 
+DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE = (
+    "Please log in to PriceLabs manually in the opened browser. Complete MFA if required. "
+    "When ready, return to this terminal and press Enter."
+)
+
+
 def bookings_date_range_checkpoint_message(run_date: str) -> str:
     datetime.strptime(run_date, "%Y-%m-%d")
     return (
@@ -791,6 +802,124 @@ def capture_settings_snapshot_with_playwright(
             context.close()
             browser.close()
 
+    return len(settings)
+
+
+def download_future_export_in_session(page, staging_path: Path) -> str:
+    temp_download_path = staging_path.with_suffix(".download")
+    if temp_download_path.exists():
+        temp_download_path.unlink()
+
+    page.goto(PRICELABS_CUSTOMIZATION_URL, wait_until="domcontentloaded", timeout=120_000)
+    page.wait_for_load_state("networkidle", timeout=120_000)
+    validate_visible_customization_page(page)
+    menu_strategy = trigger_future_export_download(page)
+    with page.expect_download(timeout=120_000) as download_info:
+        click_download_csv_prices(page)
+    download_info.value.save_as(temp_download_path)
+    replace_file(temp_download_path, staging_path)
+    return menu_strategy
+
+
+def download_price_occ_in_session(page, staging_path: Path) -> tuple[str, str]:
+    temp_download_path = staging_path.with_suffix(".download")
+    if temp_download_path.exists():
+        temp_download_path.unlink()
+
+    page.goto(PRICELABS_PRICING_URL, wait_until="domcontentloaded", timeout=120_000)
+    page.wait_for_load_state("networkidle", timeout=120_000)
+    validate_visible_pricing_page(page)
+    tab_strategy = click_neighbourhood_data_tab(page)
+    wait_for_price_occ_panel(page)
+    download_button_strategy = find_price_occ_download_button_strategy(page)
+    with page.expect_download(timeout=120_000) as download_info:
+        click_price_occ_download_button(page, download_button_strategy)
+    download_info.value.save_as(temp_download_path)
+    replace_file(temp_download_path, staging_path)
+    return tab_strategy, download_button_strategy
+
+
+def download_monthly_trends_in_session(page, staging_path: Path) -> tuple[str, str]:
+    page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
+    page.wait_for_load_state("networkidle", timeout=120_000)
+    validate_visible_pricing_page(page)
+    tab_strategy = "url-open-bi"
+    wait_for_booking_insights_panel_marker(page)
+    wait_for_monthly_trends_panel(page)
+    download_button_strategy = find_monthly_trends_download_button_strategy(page)
+    try:
+        capture_validated_download(
+            page,
+            staging_path,
+            lambda: click_monthly_trends_download_button(page, download_button_strategy),
+            validate_monthly_trends_csv,
+            file_label="monthly_trends",
+        )
+    except DownloadError as exc:
+        if "PriceLabs API error response" not in str(exc):
+            raise
+        export_monthly_trends_table_from_ui(page, staging_path)
+        validate_monthly_trends_csv(staging_path)
+        download_button_strategy = f"{download_button_strategy}+ui-table-fallback"
+    return tab_strategy, download_button_strategy
+
+
+def download_bookings_report_in_session(context, page, staging_path: Path) -> tuple[str, str]:
+    try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    except ImportError as exc:
+        raise DownloadError("Playwright is not installed in this environment.") from exc
+
+    temp_download_path = staging_path.with_suffix(".download")
+    if temp_download_path.exists():
+        temp_download_path.unlink()
+
+    page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
+    page.wait_for_load_state("networkidle", timeout=120_000)
+    validate_visible_pricing_page(page)
+    wait_for_booking_insights_panel_marker(page)
+    view_all_strategy = find_view_all_bookings_button_strategy(page)
+    try:
+        with context.expect_page(timeout=30_000) as page_info:
+            click_view_all_bookings_button(page, view_all_strategy)
+        bookings_page = page_info.value
+    except PlaywrightTimeoutError:
+        click_view_all_bookings_button(page, view_all_strategy)
+        bookings_page = page
+
+    bookings_page.wait_for_load_state("domcontentloaded", timeout=120_000)
+    try:
+        bookings_page.wait_for_load_state("networkidle", timeout=60_000)
+    except Exception:
+        pass
+    download_button_strategy = find_bookings_download_button_strategy(bookings_page)
+    with bookings_page.expect_download(timeout=120_000) as download_info:
+        click_bookings_download_button(bookings_page, download_button_strategy)
+    download_info.value.save_as(temp_download_path)
+    replace_file(temp_download_path, staging_path)
+    return view_all_strategy, download_button_strategy
+
+
+def capture_settings_snapshot_in_session(page, staging_path: Path, *, run_date: str) -> int:
+    page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
+    page.wait_for_load_state("networkidle", timeout=120_000)
+    validate_visible_pricing_page(page)
+    wait_for_customization_well(page)
+    expand_applied_customizations_well(page)
+    expand_collapsed_customization_sections(page)
+    settings = extract_settings_from_customization_well(page)
+    capture_settings_popover_details(page, settings)
+    payload = {
+        "run_date": run_date,
+        "listing_id": "650255___717243",
+        "pms_name": "lodgify",
+        "source": "pricelabs_ui_customization_well",
+        "source_url": PRICELABS_BOOKING_INSIGHTS_URL,
+        "captured_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "url": PRICELABS_BOOKING_INSIGHTS_URL,
+        "settings": settings,
+    }
+    staging_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return len(settings)
 
 
@@ -2063,6 +2192,137 @@ def run_settings_snapshot_capture(
     return log_file
 
 
+DOWNLOAD_ALL_TARGETS = (
+    FUTURE_EXPORT_TARGET,
+    PRICE_OCC_TARGET,
+    MONTHLY_TRENDS_TARGET,
+    BOOKINGS_REPORT_TARGET,
+    SETTINGS_SNAPSHOT_TARGET,
+)
+
+
+def download_all_log_lines(
+    *,
+    run_date: str,
+    staging_dir: Path,
+    status: str,
+    completed_targets: Sequence[str],
+    raw_touched: bool = False,
+    reason: str | None = None,
+) -> list[str]:
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    lines = [
+        f"PriceLabs download-all started at {timestamp}",
+        f"run_date={run_date}",
+        "download_all_started=true",
+        "mode=one-session download-all",
+        f"downloads_staging={staging_dir}",
+        f"raw_touched={str(raw_touched).lower()}",
+        f"download_all_status={status}",
+        "target_sequence:",
+    ]
+    lines.extend(f"- {target}" for target in DOWNLOAD_ALL_TARGETS)
+    lines.append("completed_targets:")
+    lines.extend(f"- {target}" for target in completed_targets)
+    if reason:
+        lines.append(f"failure_reason={reason}")
+    return lines
+
+
+def execute_download_all_sequence(context, page, staging_dir: Path, run_date: str) -> list[str]:
+    completed_targets: list[str] = []
+
+    future_export_path = staging_dir / FUTURE_EXPORT_FILENAME
+    download_future_export_in_session(page, future_export_path)
+    validate_future_export_csv(future_export_path)
+    completed_targets.append(FUTURE_EXPORT_TARGET)
+
+    price_occ_path = staging_dir / PRICE_OCC_FILENAME
+    download_price_occ_in_session(page, price_occ_path)
+    validate_price_occ_csv(price_occ_path)
+    completed_targets.append(PRICE_OCC_TARGET)
+
+    monthly_trends_path = staging_dir / MONTHLY_TRENDS_FILENAME
+    download_monthly_trends_in_session(page, monthly_trends_path)
+    validate_monthly_trends_csv(monthly_trends_path)
+    completed_targets.append(MONTHLY_TRENDS_TARGET)
+
+    bookings_report_path = staging_dir / BOOKINGS_REPORT_FILENAME
+    download_bookings_report_in_session(context, page, bookings_report_path)
+    validate_bookings_report_xlsx(bookings_report_path)
+    completed_targets.append(BOOKINGS_REPORT_TARGET)
+
+    settings_path = staging_dir / SETTINGS_SNAPSHOT_FILENAME
+    capture_settings_snapshot_in_session(page, settings_path, run_date=run_date)
+    validate_settings_snapshot_json(settings_path)
+    completed_targets.append(SETTINGS_SNAPSHOT_TARGET)
+
+    return completed_targets
+
+
+def run_download_all(
+    run_date: str,
+    *,
+    headless: bool,
+    skip_login_pause: bool = False,
+) -> Path:
+    if headless and not skip_login_pause:
+        raise DownloadError("Headless mode requires --skip-login-pause for download-all.")
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise DownloadError("Playwright is not installed in this environment.") from exc
+
+    _, staging_dir, logs_dir, log_file = get_run_paths(run_date)
+    completed_targets: list[str] = []
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=headless)
+            context = browser.new_context(accept_downloads=True)
+            page = context.new_page()
+            try:
+                page.goto(PRICELABS_CUSTOMIZATION_URL, wait_until="domcontentloaded", timeout=120_000)
+                wait_for_manual_login_checkpoint(
+                    skip_login_pause=skip_login_pause,
+                    message=DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE,
+                )
+                completed_targets = execute_download_all_sequence(context, page, staging_dir, run_date)
+            except DownloadError as exc:
+                screenshot_path = save_debug_screenshot(page, logs_dir, run_date)
+                raise DownloadError(f"{exc} Debug screenshot saved to {screenshot_path}") from exc
+            finally:
+                context.close()
+                browser.close()
+    except DownloadError as exc:
+        write_log(
+            log_file,
+            download_all_log_lines(
+                run_date=run_date,
+                staging_dir=staging_dir,
+                status="failed",
+                completed_targets=completed_targets,
+                raw_touched=False,
+                reason=str(exc),
+            ),
+        )
+        raise
+
+    write_log(
+        log_file,
+        download_all_log_lines(
+            run_date=run_date,
+            staging_dir=staging_dir,
+            status="passed",
+            completed_targets=completed_targets,
+            raw_touched=False,
+        )
+        + ["All download-all staged files validated.", "Raw folder was not touched."],
+    )
+    return log_file
+
+
 PROMOTION_FILES = (
     (FUTURE_EXPORT_FILENAME, validate_future_export_csv),
     (PRICE_OCC_FILENAME, validate_price_occ_csv),
@@ -2191,7 +2451,17 @@ def run(
     headless: bool = False,
     skip_login_pause: bool = False,
     promote_to_raw: bool = False,
+    download_all: bool = False,
 ) -> Path:
+    if download_all:
+        log_file = run_download_all(
+            run_date,
+            headless=headless,
+            skip_login_pause=skip_login_pause,
+        )
+        if promote_to_raw:
+            return run_promote_to_raw(run_date)
+        return log_file
     if promote_to_raw:
         return run_promote_to_raw(run_date)
     if dry_run or target is None:
@@ -2239,12 +2509,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             headless=args.headless,
             skip_login_pause=args.skip_login_pause,
             promote_to_raw=args.promote_to_raw,
+            download_all=args.download_all,
         )
     except DownloadError as exc:
         print(f"PriceLabs downloader failed: {exc}", file=sys.stderr)
         return 1
 
-    if args.promote_to_raw:
+    if args.download_all and args.promote_to_raw:
+        print(f"PriceLabs downloader completed download-all and promoted staged files to raw. Log: {log_file}")
+    elif args.download_all:
+        print(f"PriceLabs downloader completed download-all. Log: {log_file}")
+    elif args.promote_to_raw:
         print(f"PriceLabs downloader promoted staged files to raw. Log: {log_file}")
     elif args.target and not args.dry_run:
         print(f"PriceLabs downloader completed for {args.target}. Log: {log_file}")

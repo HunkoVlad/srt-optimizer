@@ -1337,6 +1337,166 @@ def test_promote_to_raw_fails_if_any_raw_target_exists_without_overwrite() -> No
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_download_all_sequence_calls_each_target_handler_once(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+
+    def fake_future(_page, staging_path: Path) -> str:
+        calls.append("future-export")
+        staging_path.write_text(
+            "Listing ID,Date,Your Price,Min Stay,Available\n"
+            "650255___717243,2026-05-14,425,2,True\n",
+            encoding="utf-8",
+        )
+        return "future"
+
+    def fake_price_occ(_page, staging_path: Path) -> tuple[str, str]:
+        calls.append("price-occ")
+        staging_path.write_text(
+            "Date,Market Occupancy,Market 50th Percentile Price,Your Booked Occupancy\n"
+            "2026-05-14,72,275,12\n",
+            encoding="utf-8",
+        )
+        return "tab", "button"
+
+    def fake_monthly_trends(_page, staging_path: Path) -> tuple[str, str]:
+        calls.append("monthly-trends")
+        staging_path.write_text(
+            "month_year,Revenue,Occupancy,ADR\n"
+            "May 2026,5357,45,383\n",
+            encoding="utf-8",
+        )
+        return "tab", "button"
+
+    def fake_bookings(_context, _page, staging_path: Path) -> tuple[str, str]:
+        calls.append("bookings-report")
+        write_xlsx(
+            staging_path,
+            [
+                BOOKINGS_REPORT_HEADERS,
+                (
+                    "Aloha Poconos",
+                    "2026-05-14",
+                    "2026-05-16",
+                    "2026-04-01",
+                    "425",
+                    "850",
+                    "900",
+                    "Airbnb",
+                    "Booked",
+                    "2",
+                    "43",
+                    "ABC123",
+                    "650255___717243",
+                ),
+            ],
+        )
+        return "view", "download"
+
+    def fake_settings(_page, staging_path: Path, *, run_date: str) -> int:
+        calls.append("settings-snapshot")
+        staging_path.write_text(json.dumps(sample_settings_payload(run_date)), encoding="utf-8")
+        return len(pricelabs_downloader.SETTING_LABELS)
+
+    monkeypatch.setattr(pricelabs_downloader, "download_future_export_in_session", fake_future)
+    monkeypatch.setattr(pricelabs_downloader, "download_price_occ_in_session", fake_price_occ)
+    monkeypatch.setattr(pricelabs_downloader, "download_monthly_trends_in_session", fake_monthly_trends)
+    monkeypatch.setattr(pricelabs_downloader, "download_bookings_report_in_session", fake_bookings)
+    monkeypatch.setattr(pricelabs_downloader, "capture_settings_snapshot_in_session", fake_settings)
+
+    completed = pricelabs_downloader.execute_download_all_sequence(
+        object(),
+        object(),
+        tmp_path,
+        "2099-02-16",
+    )
+
+    assert completed == list(pricelabs_downloader.DOWNLOAD_ALL_TARGETS)
+    assert calls == list(pricelabs_downloader.DOWNLOAD_ALL_TARGETS)
+    assert (tmp_path / "priceLabs_future_export.csv").exists()
+    assert (tmp_path / "price_occ.csv").exists()
+    assert (tmp_path / "monthly_trends.csv").exists()
+    assert (tmp_path / "bookings_report.xlsx").exists()
+    assert (tmp_path / "pricelabs_settings_snapshot_from_ui.json").exists()
+
+
+def test_download_all_sequence_stops_after_target_failure(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+
+    def fake_future(_page, staging_path: Path) -> str:
+        calls.append("future-export")
+        staging_path.write_text(
+            "Listing ID,Date,Your Price,Min Stay,Available\n"
+            "650255___717243,2026-05-14,425,2,True\n",
+            encoding="utf-8",
+        )
+        return "future"
+
+    def fake_price_occ(_page, _staging_path: Path) -> tuple[str, str]:
+        calls.append("price-occ")
+        raise pricelabs_downloader.DownloadError("price-occ failed")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("download-all should stop after the first failed target")
+
+    monkeypatch.setattr(pricelabs_downloader, "download_future_export_in_session", fake_future)
+    monkeypatch.setattr(pricelabs_downloader, "download_price_occ_in_session", fake_price_occ)
+    monkeypatch.setattr(pricelabs_downloader, "download_monthly_trends_in_session", fail_if_called)
+    monkeypatch.setattr(pricelabs_downloader, "download_bookings_report_in_session", fail_if_called)
+    monkeypatch.setattr(pricelabs_downloader, "capture_settings_snapshot_in_session", fail_if_called)
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="price-occ failed"):
+        pricelabs_downloader.execute_download_all_sequence(object(), object(), tmp_path, "2099-02-17")
+
+    assert calls == ["future-export", "price-occ"]
+
+
+def test_download_all_mode_is_accepted_without_touching_raw(monkeypatch) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-18"
+    run_dir = repo_root / "data" / "runs" / run_date
+    raw_dir = run_dir / "raw"
+    log_file = run_dir / "logs" / f"pricelabs_download_{run_date}.log"
+
+    shutil.rmtree(run_dir, ignore_errors=True)
+
+    def fake_download_all(run_date: str, *, headless: bool, skip_login_pause: bool = False) -> Path:
+        assert run_date == "2099-02-18"
+        assert headless is True
+        assert skip_login_pause is True
+        _run_dir, staging_dir, _logs_dir, log_file = pricelabs_downloader.get_run_paths(run_date)
+        write_valid_staged_downloads(_run_dir, run_date)
+        pricelabs_downloader.write_log(
+            log_file,
+            pricelabs_downloader.download_all_log_lines(
+                run_date=run_date,
+                staging_dir=staging_dir,
+                status="passed",
+                completed_targets=pricelabs_downloader.DOWNLOAD_ALL_TARGETS,
+                raw_touched=False,
+            ),
+        )
+        return log_file
+
+    monkeypatch.setattr(pricelabs_downloader, "run_download_all", fake_download_all)
+
+    try:
+        result_log = pricelabs_downloader.run(
+            run_date,
+            download_all=True,
+            headless=True,
+            skip_login_pause=True,
+        )
+
+        assert result_log == log_file
+        assert not raw_dir.exists()
+        assert (run_dir / "downloads_staging" / "price_occ.csv").exists()
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "download_all_started=true" in log_text
+        assert "raw_touched=false" in log_text
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
 def test_monthly_trends_capture_keeps_first_valid_download_candidate(tmp_path: Path) -> None:
     class FakeDownload:
         def __init__(self, suggested_filename: str, content: str) -> None:
