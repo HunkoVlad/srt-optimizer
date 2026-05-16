@@ -132,6 +132,7 @@ $signalsFile = Join-Path $analysisDir "future_window_signals_$RunDate.csv"
 $settingsSnapshotFile = Join-Path $settingsDir "pricelabs_settings_snapshot_$RunDate.json"
 $settingsChangesFile = Join-Path $settingsDir "pricelabs_settings_changes_$RunDate.csv"
 $signalReviewFile = Join-Path $analysisDir "future_signal_change_review_$RunDate.csv"
+$performanceReasonReviewFile = Join-Path $analysisDir "performance_reason_review_$RunDate.csv"
 $runtimeConfig = Join-Path $settingsDir "pricelabs_transform_config.toml"
 
 @"
@@ -210,44 +211,6 @@ if (Test-Path $historicalMonthlyActualsFile) {
     )
 }
 
-Invoke-PythonStep "Monthly revenue summary" @(
-    "-m", "pricelabs.transform.monthly_revenue_summary",
-    "--run-date", $RunDate,
-    "--rolling-file", $rollingRevenueViewFile,
-    "--output-file", $monthlyRevenueSummaryFile
-)
-
-Invoke-PythonStep "Email revenue report" @(
-    "-m", "pricelabs.transform.email_revenue_report",
-    "--run-date", $RunDate,
-    "--rolling-file", $rollingRevenueViewFile,
-    "--summary-file", $monthlyRevenueSummaryFile,
-    "--output-file", $emailRevenueReportFile
-)
-
-Invoke-PythonStep "Email HTML report" @(
-    "-m", "pricelabs.transform.email_html_report",
-    "--run-date", $RunDate,
-    "--report-file", $emailRevenueReportFile,
-    "--output-file", $emailHtmlReportFile
-)
-
-Invoke-PythonStep "Email draft file" @(
-    "-m", "pricelabs.transform.email_draft_file",
-    "--run-date", $RunDate,
-    "--report-file", $emailRevenueReportFile,
-    "--config-file", "config\email.toml",
-    "--output-file", $emailDraftFile
-)
-
-Invoke-PythonStep "Email send mode" @(
-    "-m", "pricelabs.transform.email_sender",
-    "--run-date", $RunDate,
-    "--report-file", $emailRevenueReportFile,
-    "--html-file", $emailHtmlReportFile,
-    "--config-file", "config\email.toml"
-)
-
 Invoke-PythonStep "Future window summary" @(
     "-m", "pricelabs.transform.summarize_future",
     "--run-date", $RunDate,
@@ -302,6 +265,57 @@ if ($priorSignal -and (Test-Path $settingsChangesFile)) {
     Write-Host ""
     Write-Host "Skipping signal change review: settings changes file was not created."
 }
+
+Invoke-PythonStep "Performance reason review" @(
+    "-m", "pricelabs.transform.performance_reason_review",
+    "--run-date", $RunDate,
+    "--monthly-file", $monthlyRevenuePaceFile,
+    "--window-summary-file", $summaryFile,
+    "--window-signals-file", $signalsFile,
+    "--settings-changes-file", $settingsChangesFile,
+    "--signal-review-file", $signalReviewFile,
+    "--output-file", $performanceReasonReviewFile
+)
+
+Invoke-PythonStep "Monthly revenue summary" @(
+    "-m", "pricelabs.transform.monthly_revenue_summary",
+    "--run-date", $RunDate,
+    "--rolling-file", $rollingRevenueViewFile,
+    "--reason-review-file", $performanceReasonReviewFile,
+    "--output-file", $monthlyRevenueSummaryFile
+)
+
+Invoke-PythonStep "Email revenue report" @(
+    "-m", "pricelabs.transform.email_revenue_report",
+    "--run-date", $RunDate,
+    "--rolling-file", $rollingRevenueViewFile,
+    "--summary-file", $monthlyRevenueSummaryFile,
+    "--reason-review-file", $performanceReasonReviewFile,
+    "--output-file", $emailRevenueReportFile
+)
+
+Invoke-PythonStep "Email HTML report" @(
+    "-m", "pricelabs.transform.email_html_report",
+    "--run-date", $RunDate,
+    "--report-file", $emailRevenueReportFile,
+    "--output-file", $emailHtmlReportFile
+)
+
+Invoke-PythonStep "Email draft file" @(
+    "-m", "pricelabs.transform.email_draft_file",
+    "--run-date", $RunDate,
+    "--report-file", $emailRevenueReportFile,
+    "--config-file", "config\email.toml",
+    "--output-file", $emailDraftFile
+)
+
+Invoke-PythonStep "Email send mode" @(
+    "-m", "pricelabs.transform.email_sender",
+    "--run-date", $RunDate,
+    "--report-file", $emailRevenueReportFile,
+    "--html-file", $emailHtmlReportFile,
+    "--config-file", "config\email.toml"
+)
 
 Write-Host ""
 Write-Host "Weekly pipeline complete."

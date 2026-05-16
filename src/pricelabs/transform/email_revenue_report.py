@@ -12,6 +12,7 @@ from pricelabs.transform.monthly_revenue_summary import (
     is_actionable_row,
     is_historical_actual_row,
     read_monthly_rows,
+    read_reason_rows,
     table_adr,
     table_booked_revenue,
     table_cleanings,
@@ -36,6 +37,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-file",
         help="Email report markdown. Defaults to analysis/email_revenue_report_<run-date>.md.",
+    )
+    parser.add_argument(
+        "--reason-review-file",
+        help="Optional performance reason review CSV. Defaults to analysis/performance_reason_review_<run-date>.csv.",
     )
     return parser.parse_args()
 
@@ -154,6 +159,31 @@ def recommendation_section(rows: list[dict[str, str]]) -> list[str]:
     return lines
 
 
+def reason_review_section(reason_rows: list[dict[str, str]]) -> list[str]:
+    lines = ["## Reason Review", ""]
+    if not reason_rows:
+        lines.append("- Reason review unavailable; no PriceLabs rule change is justified from this layer.")
+        lines.append("")
+        return lines
+    issue_rows = [
+        row
+        for row in reason_rows
+        if row.get("observed_issue", "") != "none"
+        or row.get("likely_reason", "") in {"insufficient_data", "settings_change_impact"}
+    ]
+    selected = issue_rows[:2] or reason_rows[:1]
+    for row in selected:
+        allowed = "yes" if row.get("recommendation_allowed", "").lower() == "true" else "no"
+        lines.append(
+            "- "
+            f"{row.get('scope_name', '')}: {row.get('observed_issue', 'none')} likely "
+            f"{row.get('likely_reason', 'insufficient_data')}; "
+            f"PriceLabs rule change justified now: {allowed} ({row.get('recommendation_type', 'monitor')})."
+        )
+    lines.append("")
+    return lines
+
+
 def booking_source_notes(rows: list[dict[str, str]]) -> list[str]:
     lines = ["## Booking Source Notes", ""]
     source_rows = [
@@ -170,7 +200,7 @@ def booking_source_notes(rows: list[dict[str, str]]) -> list[str]:
     return lines
 
 
-def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
+def build_markdown(run_date: str, rows: list[dict[str, str]], reason_rows: list[dict[str, str]] | None = None) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
         f"Subject: Aloha Poconos Weekly Revenue Snapshot — {run_date}",
@@ -200,6 +230,7 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
             "",
         ]
     )
+    lines.extend(reason_review_section(reason_rows or []))
     lines.extend(recommendation_section(sorted_rows))
     lines.extend(booking_source_notes(sorted_rows))
     lines.extend(
@@ -281,12 +312,14 @@ def run() -> int:
     rolling_path = Path(args.rolling_file or f"analysis/rolling_13_month_revenue_view_{args.run_date}.csv")
     summary_path = Path(args.summary_file or f"analysis/monthly_revenue_summary_{args.run_date}.md")
     output_path = Path(args.output_file or f"analysis/email_revenue_report_{args.run_date}.md")
+    reason_path = Path(args.reason_review_file or f"analysis/performance_reason_review_{args.run_date}.csv")
 
     if not summary_path.exists():
         raise FileNotFoundError(f"Monthly revenue summary markdown does not exist: {summary_path}")
 
     rows = read_monthly_rows(rolling_path)
-    write_markdown(output_path, build_markdown(args.run_date, rows))
+    reason_rows = read_reason_rows(reason_path)
+    write_markdown(output_path, build_markdown(args.run_date, rows, reason_rows))
     print(f"Wrote {output_path}")
     return 0
 

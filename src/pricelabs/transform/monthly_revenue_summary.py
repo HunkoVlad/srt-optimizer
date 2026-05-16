@@ -63,6 +63,10 @@ def parse_args() -> argparse.Namespace:
         "--output-file",
         help="Markdown output file. Defaults to analysis/monthly_revenue_summary_<run-date>.md.",
     )
+    parser.add_argument(
+        "--reason-review-file",
+        help="Optional performance reason review CSV. Defaults to analysis/performance_reason_review_<run-date>.csv.",
+    )
     return parser.parse_args()
 
 
@@ -80,6 +84,14 @@ def read_monthly_rows(path: Path) -> list[dict[str, str]]:
     with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
         reader = csv.DictReader(csv_file)
         require_columns(reader.fieldnames)
+        return [{key: value or "" for key, value in row.items()} for row in reader]
+
+
+def read_reason_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        reader = csv.DictReader(csv_file)
         return [{key: value or "" for key, value in row.items()} for row in reader]
 
 
@@ -513,6 +525,42 @@ def build_recommendation_review(rows: list[dict[str, str]]) -> list[str]:
     ]
 
 
+def build_reason_review(reason_rows: list[dict[str, str]]) -> list[str]:
+    lines = ["## Reason Review", ""]
+    if not reason_rows:
+        lines.extend(
+            [
+                "- What happened: reason review was not available.",
+                "- Likely why: insufficient_data.",
+                "- PriceLabs rule change justified now: no.",
+                "",
+            ]
+        )
+        return lines
+
+    issue_rows = [
+        row
+        for row in reason_rows
+        if row.get("observed_issue", "") != "none"
+        or row.get("likely_reason", "") in {"insufficient_data", "settings_change_impact"}
+    ]
+    selected = issue_rows[:3] or reason_rows[:1]
+    for row in selected:
+        allowed = "yes" if row.get("recommendation_allowed", "").lower() == "true" else "no"
+        lines.extend(
+            [
+                f"- What happened: {row.get('scope_type', '')} {row.get('scope_name', '')} shows {row.get('observed_issue', 'none')}.",
+                f"- Likely why: {row.get('likely_reason', 'insufficient_data')} ({row.get('market_context', 'insufficient_data')}).",
+                f"- PriceLabs rule change justified now: {allowed}; {row.get('recommendation_type', 'monitor')}.",
+            ]
+        )
+        note = row.get("explanation_note", "").strip()
+        if note:
+            lines.append(f"- Note: {note}")
+    lines.append("")
+    return lines
+
+
 def rows_with_booking_source_mix(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return [
         row
@@ -551,7 +599,7 @@ def build_booking_source_mix(rows: list[dict[str, str]]) -> list[str]:
     return lines
 
 
-def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
+def build_markdown(run_date: str, rows: list[dict[str, str]], reason_rows: list[dict[str, str]] | None = None) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
         f"# Monthly Revenue Summary - {run_date}",
@@ -562,6 +610,7 @@ def build_markdown(run_date: str, rows: list[dict[str, str]]) -> str:
     lines.extend(f"- {bullet}" for bullet in build_executive_summary(sorted_rows))
     lines.extend(["", *build_executive_decision_view(sorted_rows)])
     lines.extend(build_interpretation(sorted_rows))
+    lines.extend(build_reason_review(reason_rows or []))
     lines.extend(build_recommendation_review(sorted_rows))
     lines.extend(build_booking_source_mix(sorted_rows))
     lines.extend(
@@ -646,9 +695,11 @@ def run() -> int:
         or f"analysis/rolling_13_month_revenue_view_{args.run_date}.csv"
     )
     output_path = Path(args.output_file or f"analysis/monthly_revenue_summary_{args.run_date}.md")
+    reason_path = Path(args.reason_review_file or f"analysis/performance_reason_review_{args.run_date}.csv")
 
     rows = read_monthly_rows(monthly_path)
-    write_markdown(output_path, build_markdown(args.run_date, rows))
+    reason_rows = read_reason_rows(reason_path)
+    write_markdown(output_path, build_markdown(args.run_date, rows, reason_rows))
     print(f"Wrote {output_path}")
     return 0
 
