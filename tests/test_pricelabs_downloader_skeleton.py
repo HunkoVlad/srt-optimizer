@@ -1470,10 +1470,17 @@ def test_download_all_mode_is_accepted_without_touching_raw(monkeypatch) -> None
 
     shutil.rmtree(run_dir, ignore_errors=True)
 
-    def fake_download_all(run_date: str, *, headless: bool, skip_login_pause: bool = False) -> Path:
+    def fake_download_all(
+        run_date: str,
+        *,
+        headless: bool,
+        skip_login_pause: bool = False,
+        use_persistent_session: bool = False,
+    ) -> Path:
         assert run_date == "2099-02-18"
         assert headless is True
         assert skip_login_pause is True
+        assert use_persistent_session is False
         _run_dir, staging_dir, _logs_dir, log_file = pricelabs_downloader.get_run_paths(run_date)
         write_valid_staged_downloads(_run_dir, run_date)
         pricelabs_downloader.write_log(
@@ -1506,6 +1513,72 @@ def test_download_all_mode_is_accepted_without_touching_raw(monkeypatch) -> None
         assert "raw_touched=false" in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_persistent_session_flag_is_accepted_and_passed_to_download_all(monkeypatch) -> None:
+    calls = []
+
+    def fake_download_all(
+        run_date: str,
+        *,
+        headless: bool,
+        skip_login_pause: bool = False,
+        use_persistent_session: bool = False,
+    ) -> Path:
+        calls.append(
+            {
+                "run_date": run_date,
+                "headless": headless,
+                "skip_login_pause": skip_login_pause,
+                "use_persistent_session": use_persistent_session,
+            }
+        )
+        return Path("data/runs/2099-02-19/logs/pricelabs_download_2099-02-19.log")
+
+    monkeypatch.setattr(pricelabs_downloader, "run_download_all", fake_download_all)
+
+    args = pricelabs_downloader.parse_args(
+        [
+            "--run-date",
+            "2099-02-19",
+            "--download-all",
+            "--use-persistent-session",
+            "--headless",
+            "--skip-login-pause",
+        ]
+    )
+    assert args.use_persistent_session is True
+
+    pricelabs_downloader.run(
+        args.run_date,
+        download_all=args.download_all,
+        headless=args.headless,
+        skip_login_pause=args.skip_login_pause,
+        use_persistent_session=args.use_persistent_session,
+    )
+
+    assert calls == [
+        {
+            "run_date": "2099-02-19",
+            "headless": True,
+            "skip_login_pause": True,
+            "use_persistent_session": True,
+        }
+    ]
+
+
+def test_persistent_session_path_is_local_and_not_in_run_data() -> None:
+    path_text = pricelabs_downloader.PERSISTENT_SESSION_PROFILE_DIR.as_posix()
+
+    assert path_text == ".local/pricelabs_browser_profile"
+    assert "data/runs" not in path_text
+
+
+def test_local_session_path_is_gitignored() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    gitignore_text = (repo_root / ".gitignore").read_text(encoding="utf-8")
+
+    assert ".local/" in gitignore_text
 
 
 def test_monthly_trends_capture_keeps_first_valid_download_candidate(tmp_path: Path) -> None:

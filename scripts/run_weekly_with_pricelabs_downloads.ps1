@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$RunDate,
-    [switch]$KeepStaging
+    [switch]$KeepStaging,
+    [switch]$UsePersistentSession
 )
 
 Set-StrictMode -Version Latest
@@ -66,13 +67,20 @@ Write-WrapperLog "Run date: $RunDate"
 Write-WrapperLog "Project root: $projectRoot"
 Write-WrapperLog "Python executable: $pythonExe"
 Write-WrapperLog "Gmail/send mode is not changed by this wrapper."
+if ($UsePersistentSession) {
+    Write-WrapperLog "Using gitignored local PriceLabs browser profile for session reuse."
+}
 
 Push-Location $projectRoot
 try {
     $env:PYTHONPATH = "src"
 
     Invoke-WorkflowStep "PriceLabs download-all" {
-        & $pythonExe -m pricelabs.download.pricelabs_downloader --run-date $RunDate --download-all
+        $downloadArgs = @("-m", "pricelabs.download.pricelabs_downloader", "--run-date", $RunDate, "--download-all")
+        if ($UsePersistentSession) {
+            $downloadArgs += "--use-persistent-session"
+        }
+        & $pythonExe @downloadArgs
     }
 
     Invoke-WorkflowStep "Promote staged PriceLabs files to raw" {

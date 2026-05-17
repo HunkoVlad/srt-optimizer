@@ -6,6 +6,7 @@
 .env.*
 !config/*.example.env
 config/email.toml
+.local/
 
 # Legacy top-level generated outputs
 manifest.json

@@ -47,6 +47,7 @@ SUPPORTED_TARGETS = [
     SETTINGS_SNAPSHOT_TARGET,
 ]
 DOWNLOAD_ALL_LOGIN_TIMEOUT_MS = 120_000
+PERSISTENT_SESSION_PROFILE_DIR = Path(".local") / "pricelabs_browser_profile"
 PRICELABS_CUSTOMIZATION_URL = "https://app.pricelabs.co/customization"
 PRICELABS_PRICING_URL = (
     "https://app.pricelabs.co/pricing?"
@@ -129,6 +130,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--download-all",
         action="store_true",
         help="Open one PriceLabs browser session and stage all required downloads after one manual login checkpoint.",
+    )
+    parser.add_argument(
+        "--use-persistent-session",
+        action="store_true",
+        help="Use a local gitignored Playwright browser profile to reuse PriceLabs login when possible.",
     )
     args = parser.parse_args(argv)
     validate_run_date(args.run_date, parser)
@@ -495,7 +501,21 @@ DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE = (
 def wait_for_download_all_login_ready(page, *, skip_login_pause: bool) -> None:
     if skip_login_pause:
         return
+    if is_download_all_login_ready(page, timeout_ms=3_000):
+        return
     print(DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE)
+    wait_for_download_all_login_state(page, timeout_ms=DOWNLOAD_ALL_LOGIN_TIMEOUT_MS)
+
+
+def is_download_all_login_ready(page, *, timeout_ms: int) -> bool:
+    try:
+        wait_for_download_all_login_state(page, timeout_ms=timeout_ms)
+        return True
+    except DownloadError:
+        return False
+
+
+def wait_for_download_all_login_state(page, *, timeout_ms: int) -> None:
     try:
         page.wait_for_function(
             """
@@ -510,7 +530,7 @@ def wait_for_download_all_login_ready(page, *, skip_login_pause: bool) -> None:
               return url.includes('app.pricelabs.co') && loggedInMarker && !loginMarker;
             }
             """,
-            timeout=DOWNLOAD_ALL_LOGIN_TIMEOUT_MS,
+            timeout=timeout_ms,
         )
     except Exception as exc:
         raise DownloadError(
@@ -2328,6 +2348,7 @@ def run_download_all(
     *,
     headless: bool,
     skip_login_pause: bool = False,
+    use_persistent_session: bool = False,
 ) -> Path:
     if headless and not skip_login_pause:
         raise DownloadError("Headless mode requires --skip-login-pause for download-all.")
@@ -2342,11 +2363,21 @@ def run_download_all(
 
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=headless)
-            context = browser.new_context(accept_downloads=True)
-            page = context.new_page()
+            browser = None
+            if use_persistent_session:
+                PERSISTENT_SESSION_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+                context = playwright.chromium.launch_persistent_context(
+                    str(PERSISTENT_SESSION_PROFILE_DIR),
+                    headless=headless,
+                    accept_downloads=True,
+                )
+                page = context.pages[0] if context.pages else context.new_page()
+            else:
+                browser = playwright.chromium.launch(headless=headless)
+                context = browser.new_context(accept_downloads=True)
+                page = context.new_page()
             try:
-                page.goto(PRICELABS_CUSTOMIZATION_URL, wait_until="domcontentloaded", timeout=120_000)
+                page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
                 wait_for_download_all_login_ready(page, skip_login_pause=skip_login_pause)
                 completed_targets = execute_download_all_sequence(context, page, staging_dir, run_date)
             except DownloadError as exc:
@@ -2354,7 +2385,8 @@ def run_download_all(
                 raise DownloadError(f"{exc} Debug screenshot saved to {screenshot_path}") from exc
             finally:
                 context.close()
-                browser.close()
+                if browser is not None:
+                    browser.close()
     except DownloadError as exc:
         write_log(
             log_file,
@@ -2512,12 +2544,14 @@ def run(
     skip_login_pause: bool = False,
     promote_to_raw: bool = False,
     download_all: bool = False,
+    use_persistent_session: bool = False,
 ) -> Path:
     if download_all:
         log_file = run_download_all(
             run_date,
             headless=headless,
             skip_login_pause=skip_login_pause,
+            use_persistent_session=use_persistent_session,
         )
         if promote_to_raw:
             return run_promote_to_raw(run_date)
@@ -2570,6 +2604,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             skip_login_pause=args.skip_login_pause,
             promote_to_raw=args.promote_to_raw,
             download_all=args.download_all,
+            use_persistent_session=args.use_persistent_session,
         )
     except DownloadError as exc:
         print(f"PriceLabs downloader failed: {exc}", file=sys.stderr)
