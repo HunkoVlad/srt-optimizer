@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$RunDate,
     [switch]$KeepStaging,
-    [switch]$UsePersistentSession
+    [switch]$UsePersistentSession,
+    [switch]$UseLocalCredentials
 )
 
 Set-StrictMode -Version Latest
@@ -70,6 +71,9 @@ Write-WrapperLog "Gmail/send mode is not changed by this wrapper."
 if ($UsePersistentSession) {
     Write-WrapperLog "Using gitignored local PriceLabs browser profile for session reuse."
 }
+if ($UseLocalCredentials) {
+    Write-WrapperLog "Using local PriceLabs credential login fallback if manual login is required; secrets are not logged."
+}
 
 Push-Location $projectRoot
 try {
@@ -79,6 +83,9 @@ try {
         $downloadArgs = @("-m", "pricelabs.download.pricelabs_downloader", "--run-date", $RunDate, "--download-all")
         if ($UsePersistentSession) {
             $downloadArgs += "--use-persistent-session"
+        }
+        if ($UseLocalCredentials) {
+            $downloadArgs += "--use-local-credentials"
         }
         & $pythonExe @downloadArgs
     }

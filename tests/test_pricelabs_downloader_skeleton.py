@@ -2,6 +2,7 @@ import json
 import shutil
 import subprocess
 import sys
+import types
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 from pathlib import Path
@@ -1476,11 +1477,13 @@ def test_download_all_mode_is_accepted_without_touching_raw(monkeypatch) -> None
         headless: bool,
         skip_login_pause: bool = False,
         use_persistent_session: bool = False,
+        use_local_credentials: bool = False,
     ) -> Path:
         assert run_date == "2099-02-18"
         assert headless is True
         assert skip_login_pause is True
         assert use_persistent_session is False
+        assert use_local_credentials is False
         _run_dir, staging_dir, _logs_dir, log_file = pricelabs_downloader.get_run_paths(run_date)
         write_valid_staged_downloads(_run_dir, run_date)
         pricelabs_downloader.write_log(
@@ -1524,6 +1527,7 @@ def test_persistent_session_flag_is_accepted_and_passed_to_download_all(monkeypa
         headless: bool,
         skip_login_pause: bool = False,
         use_persistent_session: bool = False,
+        use_local_credentials: bool = False,
     ) -> Path:
         calls.append(
             {
@@ -1531,6 +1535,7 @@ def test_persistent_session_flag_is_accepted_and_passed_to_download_all(monkeypa
                 "headless": headless,
                 "skip_login_pause": skip_login_pause,
                 "use_persistent_session": use_persistent_session,
+                "use_local_credentials": use_local_credentials,
             }
         )
         return Path("data/runs/2099-02-19/logs/pricelabs_download_2099-02-19.log")
@@ -1543,11 +1548,13 @@ def test_persistent_session_flag_is_accepted_and_passed_to_download_all(monkeypa
             "2099-02-19",
             "--download-all",
             "--use-persistent-session",
+            "--use-local-credentials",
             "--headless",
             "--skip-login-pause",
         ]
     )
     assert args.use_persistent_session is True
+    assert args.use_local_credentials is True
 
     pricelabs_downloader.run(
         args.run_date,
@@ -1555,6 +1562,7 @@ def test_persistent_session_flag_is_accepted_and_passed_to_download_all(monkeypa
         headless=args.headless,
         skip_login_pause=args.skip_login_pause,
         use_persistent_session=args.use_persistent_session,
+        use_local_credentials=args.use_local_credentials,
     )
 
     assert calls == [
@@ -1563,15 +1571,19 @@ def test_persistent_session_flag_is_accepted_and_passed_to_download_all(monkeypa
             "headless": True,
             "skip_login_pause": True,
             "use_persistent_session": True,
+            "use_local_credentials": True,
         }
     ]
 
 
 def test_persistent_session_path_is_local_and_not_in_run_data() -> None:
-    path_text = pricelabs_downloader.PERSISTENT_SESSION_PROFILE_DIR.as_posix()
+    repo_root = Path(__file__).resolve().parents[1]
+    path = pricelabs_downloader.PERSISTENT_SESSION_PROFILE_DIR
+    path_text = path.relative_to(repo_root).as_posix()
 
     assert path_text == ".local/pricelabs_browser_profile"
     assert "data/runs" not in path_text
+    assert path.is_absolute()
 
 
 def test_local_session_path_is_gitignored() -> None:
@@ -1579,6 +1591,294 @@ def test_local_session_path_is_gitignored() -> None:
     gitignore_text = (repo_root / ".gitignore").read_text(encoding="utf-8")
 
     assert ".local/" in gitignore_text
+
+
+def test_persistent_mode_uses_launch_persistent_context_not_new_context(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+
+    class FakeContext:
+        pages = []
+
+        def new_page(self):
+            calls.append("persistent-new-page")
+            return object()
+
+    class FakeBrowser:
+        def new_context(self, **_kwargs):
+            raise AssertionError("persistent mode must not create a fresh incognito context")
+
+    class FakeChromium:
+        def launch_persistent_context(self, *, user_data_dir: str, headless: bool, accept_downloads: bool):
+            calls.append(("launch_persistent_context", Path(user_data_dir), headless, accept_downloads))
+            return FakeContext()
+
+        def launch(self, **_kwargs):
+            calls.append("launch")
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+    profile_dir = tmp_path / ".local" / "pricelabs_browser_profile"
+    monkeypatch.setattr(pricelabs_downloader, "PERSISTENT_SESSION_PROFILE_DIR", profile_dir)
+
+    context, browser, page = pricelabs_downloader.launch_download_all_browser(
+        FakePlaywright(),
+        headless=False,
+        use_persistent_session=True,
+    )
+
+    assert isinstance(context, FakeContext)
+    assert browser is None
+    assert page is not None
+    assert calls == [("launch_persistent_context", profile_dir, False, True), "persistent-new-page"]
+    assert profile_dir.exists()
+
+
+def test_non_persistent_mode_uses_regular_browser_context() -> None:
+    calls = []
+
+    class FakeContext:
+        pages = []
+
+        def new_page(self):
+            calls.append("new-page")
+            return object()
+
+    class FakeBrowser:
+        def new_context(self, *, accept_downloads: bool):
+            calls.append(("new_context", accept_downloads))
+            return FakeContext()
+
+    class FakeChromium:
+        def launch_persistent_context(self, **_kwargs):
+            raise AssertionError("non-persistent mode must not use the persistent profile")
+
+        def launch(self, *, headless: bool):
+            calls.append(("launch", headless))
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+    context, browser, page = pricelabs_downloader.launch_download_all_browser(
+        FakePlaywright(),
+        headless=True,
+        use_persistent_session=False,
+    )
+
+    assert isinstance(context, FakeContext)
+    assert isinstance(browser, FakeBrowser)
+    assert page is not None
+    assert calls == [("launch", True), ("new_context", True), "new-page"]
+
+
+def test_auth_check_flag_is_accepted_without_run_date() -> None:
+    args = pricelabs_downloader.parse_args(["--auth-check", "--use-persistent-session"])
+
+    assert args.auth_check is True
+    assert args.use_persistent_session is True
+    assert args.run_date is None
+
+
+def test_auth_check_requires_persistent_session() -> None:
+    try:
+        pricelabs_downloader.run(None, auth_check=True, headless=True)
+    except pricelabs_downloader.DownloadError as exc:
+        assert "--auth-check requires --use-persistent-session" in str(exc)
+    else:
+        raise AssertionError("auth-check without persistent session should fail clearly")
+
+
+def test_auth_check_uses_persistent_profile_without_run_artifacts(monkeypatch, tmp_path: Path, capsys) -> None:
+    calls = []
+    profile_dir = tmp_path / ".local" / "pricelabs_browser_profile"
+    run_data_dir = tmp_path / "data" / "runs"
+
+    class FakePage:
+        def goto(self, url: str, wait_until: str, timeout: int) -> None:
+            calls.append(("goto", url, wait_until, timeout))
+
+        def wait_for_load_state(self, state: str, timeout: int) -> None:
+            calls.append(("wait_for_load_state", state, timeout))
+
+    class FakeContext:
+        pages = []
+
+        def new_page(self):
+            calls.append("new-page")
+            return FakePage()
+
+        def close(self):
+            calls.append("context-close")
+
+    class FakeChromium:
+        def launch_persistent_context(self, *, user_data_dir: str, headless: bool, accept_downloads: bool):
+            calls.append(("launch_persistent_context", Path(user_data_dir), headless, accept_downloads))
+            return FakeContext()
+
+        def launch(self, **_kwargs):
+            raise AssertionError("auth-check must not use non-persistent browser launch")
+
+    class FakeSyncPlaywright:
+        def __enter__(self):
+            return type("FakePlaywright", (), {"chromium": FakeChromium()})()
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(pricelabs_downloader, "PERSISTENT_SESSION_PROFILE_DIR", profile_dir)
+    fake_module = types.ModuleType("playwright.sync_api")
+    fake_module.sync_playwright = lambda: FakeSyncPlaywright()
+    monkeypatch.setitem(
+        sys.modules,
+        "playwright.sync_api",
+        fake_module,
+    )
+    monkeypatch.setattr(pricelabs_downloader, "classify_auth_status", lambda _page: "logged_in")
+
+    result = pricelabs_downloader.run_auth_check(headless=True, use_persistent_session=True)
+
+    output = capsys.readouterr().out
+    assert result == profile_dir
+    assert ("launch_persistent_context", profile_dir, True, True) in calls
+    assert "persistent_profile_path=" in output
+    assert "persistent_profile_exists=false" in output
+    assert "auth_status=logged_in" in output
+    assert "cookie" not in output.lower()
+    assert "token" not in output.lower()
+    assert "localstorage" not in output.lower()
+    assert not run_data_dir.exists()
+
+
+def test_auth_status_classification() -> None:
+    class FakePage:
+        def __init__(self, body_text: str) -> None:
+            self.body_text = body_text
+
+        def locator(self, selector: str):
+            assert selector == "body"
+            page = self
+
+            class FakeLocator:
+                def inner_text(self, timeout: int) -> str:
+                    return page.body_text
+
+            return FakeLocator()
+
+    assert pricelabs_downloader.classify_auth_status(FakePage("Aloha Poconos Booking Insights")) == "logged_in"
+    assert pricelabs_downloader.classify_auth_status(FakePage("Log in Email Password")) == "login_required"
+    assert pricelabs_downloader.classify_auth_status(FakePage("Loading")) == "unknown"
+
+
+def test_auth_check_log_lines_are_safe() -> None:
+    lines = pricelabs_downloader.auth_check_log_lines(
+        profile_path=Path("C:/repo/.local/pricelabs_browser_profile"),
+        profile_exists=True,
+        auth_status="login_required",
+    )
+    text = "\n".join(lines).lower()
+
+    assert "persistent_profile_path=" in text
+    assert "persistent_profile_exists=true" in text
+    assert "auth_status=login_required" in text
+    assert "cookie" not in text
+    assert "token" not in text
+    assert "sessionstorage" not in text
+    assert "localstorage" not in text
+
+
+def test_local_credentials_parser_reads_gitignored_env_file(tmp_path: Path) -> None:
+    env_file = tmp_path / "pricelabs.env"
+    env_file.write_text(
+        "# local only\nPRICELABS_EMAIL=owner@example.com\nPRICELABS_PASSWORD='super-secret'\n",
+        encoding="utf-8",
+    )
+
+    credentials = pricelabs_downloader.read_local_credentials(env_file)
+
+    assert credentials == {"email": "owner@example.com", "password": "super-secret"}
+
+
+def test_local_credentials_parser_returns_none_when_missing_or_incomplete(tmp_path: Path) -> None:
+    missing_file = tmp_path / "missing.env"
+    incomplete_file = tmp_path / "pricelabs.env"
+    incomplete_file.write_text("PRICELABS_EMAIL=owner@example.com\n", encoding="utf-8")
+
+    assert pricelabs_downloader.read_local_credentials(missing_file) is None
+    assert pricelabs_downloader.read_local_credentials(incomplete_file) is None
+
+
+def test_credential_login_log_lines_do_not_include_secrets() -> None:
+    lines = pricelabs_downloader.credential_login_log_lines(
+        requested=True,
+        file_found=True,
+        attempted=True,
+        mfa_manual_checkpoint=True,
+    )
+    text = "\n".join(lines)
+
+    assert "local_credentials_requested=true" in text
+    assert "local_credentials_file_found=true" in text
+    assert "credential_login_attempted=true" in text
+    assert "mfa_manual_checkpoint=true" in text
+    assert "owner@example.com" not in text
+    assert "super-secret" not in text
+    assert "PRICELABS_PASSWORD" not in text
+
+
+def test_missing_local_credentials_falls_back_to_manual_login(monkeypatch, capsys) -> None:
+    calls = []
+
+    class FakePage:
+        def wait_for_function(self, _script: str, timeout: int) -> None:
+            calls.append(("wait_for_function", timeout))
+            raise pricelabs_downloader.DownloadError("not logged in")
+
+    monkeypatch.setattr(pricelabs_downloader, "read_local_credentials", lambda: None)
+
+    try:
+        pricelabs_downloader.wait_for_download_all_login_ready(
+            FakePage(),
+            skip_login_pause=False,
+            use_local_credentials=True,
+        )
+    except pricelabs_downloader.DownloadError:
+        pass
+
+    output = capsys.readouterr().out
+    assert "local_credentials_requested=true" in output
+    assert "local_credentials_file_found=false" in output
+    assert "credential_login_attempted=false" in output
+    assert "Please log in to PriceLabs manually" in output
+
+
+def test_local_credential_login_includes_pricelabs_sign_in_submit_selector(monkeypatch) -> None:
+    requested_selectors = []
+
+    class FakeLocator:
+        def fill(self, _value: str) -> None:
+            return
+
+        def click(self) -> None:
+            return
+
+    def fake_first_visible_locator(_page, selectors, *, timeout_ms=5_000):
+        requested_selectors.append(tuple(selectors))
+        return FakeLocator()
+
+    monkeypatch.setattr(pricelabs_downloader, "first_visible_locator", fake_first_visible_locator)
+
+    assert pricelabs_downloader.attempt_local_credential_login(
+        object(),
+        {"email": "owner@example.com", "password": "super-secret"},
+    ) is True
+
+    submit_selectors = requested_selectors[2]
+    assert submit_selectors[0] == 'input[type="submit"][name="commit"][value="Sign in"]'
+    assert 'input[type="submit"][value="Sign in"]' in submit_selectors
+    assert 'input[name="commit"]' in submit_selectors
+    assert 'text="Sign in"' in submit_selectors
 
 
 def test_monthly_trends_capture_keeps_first_valid_download_candidate(tmp_path: Path) -> None:

@@ -47,7 +47,9 @@ SUPPORTED_TARGETS = [
     SETTINGS_SNAPSHOT_TARGET,
 ]
 DOWNLOAD_ALL_LOGIN_TIMEOUT_MS = 120_000
-PERSISTENT_SESSION_PROFILE_DIR = Path(".local") / "pricelabs_browser_profile"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PERSISTENT_SESSION_PROFILE_DIR = REPO_ROOT / ".local" / "pricelabs_browser_profile"
+LOCAL_CREDENTIALS_FILE = REPO_ROOT / ".local" / "pricelabs.env"
 PRICELABS_CUSTOMIZATION_URL = "https://app.pricelabs.co/customization"
 PRICELABS_PRICING_URL = (
     "https://app.pricelabs.co/pricing?"
@@ -98,7 +100,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--run-date",
-        required=True,
+        required=False,
         help="Run date in YYYY-MM-DD format.",
     )
     parser.add_argument(
@@ -136,8 +138,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Use a local gitignored Playwright browser profile to reuse PriceLabs login when possible.",
     )
+    parser.add_argument(
+        "--auth-check",
+        action="store_true",
+        help="Check whether the local PriceLabs browser session appears logged in without downloading files.",
+    )
+    parser.add_argument(
+        "--use-local-credentials",
+        action="store_true",
+        help="Use local gitignored .local/pricelabs.env as an optional login fallback.",
+    )
     args = parser.parse_args(argv)
-    validate_run_date(args.run_date, parser)
+    if args.run_date:
+        validate_run_date(args.run_date, parser)
+    elif not args.auth_check:
+        parser.error("--run-date is required unless --auth-check is used.")
     return args
 
 
@@ -498,11 +513,44 @@ DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE = (
 )
 
 
-def wait_for_download_all_login_ready(page, *, skip_login_pause: bool) -> None:
+def wait_for_download_all_login_ready(
+    page,
+    *,
+    skip_login_pause: bool,
+    use_local_credentials: bool = False,
+) -> None:
     if skip_login_pause:
         return
     if is_download_all_login_ready(page, timeout_ms=3_000):
         return
+    if use_local_credentials:
+        credentials = read_local_credentials()
+        print(
+            "\n".join(
+                credential_login_log_lines(
+                    requested=True,
+                    file_found=credentials is not None,
+                    attempted=credentials is not None,
+                    mfa_manual_checkpoint=False,
+                )
+            )
+        )
+        if credentials is not None and attempt_local_credential_login(page, credentials):
+            if is_download_all_login_ready(page, timeout_ms=10_000):
+                return
+            print(
+                "\n".join(
+                    credential_login_log_lines(
+                        requested=True,
+                        file_found=True,
+                        attempted=True,
+                        mfa_manual_checkpoint=True,
+                    )
+                )
+            )
+            print("Complete PriceLabs MFA manually in the opened browser. The downloader will continue after login.")
+            wait_for_download_all_login_state(page, timeout_ms=DOWNLOAD_ALL_LOGIN_TIMEOUT_MS)
+            return
     print(DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE)
     wait_for_download_all_login_state(page, timeout_ms=DOWNLOAD_ALL_LOGIN_TIMEOUT_MS)
 
@@ -537,6 +585,124 @@ def wait_for_download_all_login_state(page, *, timeout_ms: int) -> None:
             "Timed out after 2 minutes waiting for manual PriceLabs login to complete. "
             "Complete login/MFA in the browser and make sure a logged-in PriceLabs page is visible."
         ) from exc
+
+
+def read_local_credentials(path: Path = LOCAL_CREDENTIALS_FILE) -> dict[str, str] | None:
+    if not path.exists():
+        return None
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    email = values.get("PRICELABS_EMAIL", "").strip()
+    password = values.get("PRICELABS_PASSWORD", "").strip()
+    if not email or not password:
+        return None
+    return {"email": email, "password": password}
+
+
+def credential_login_log_lines(
+    *,
+    requested: bool,
+    file_found: bool,
+    attempted: bool,
+    mfa_manual_checkpoint: bool,
+) -> list[str]:
+    return [
+        f"local_credentials_requested={'true' if requested else 'false'}",
+        f"local_credentials_file_found={'true' if file_found else 'false'}",
+        f"credential_login_attempted={'true' if attempted else 'false'}",
+        f"mfa_manual_checkpoint={'true' if mfa_manual_checkpoint else 'false'}",
+    ]
+
+
+def first_visible_locator(page, selectors: Sequence[str], *, timeout_ms: int = 5_000):
+    last_error: Exception | None = None
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            locator.wait_for(state="visible", timeout=timeout_ms)
+            return locator
+        except Exception as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise DownloadError("No selectors provided.")
+
+
+def attempt_local_credential_login(page, credentials: dict[str, str]) -> bool:
+    try:
+        email = first_visible_locator(
+            page,
+            (
+                'input[type="email"]',
+                'input[name*="email" i]',
+                'input[placeholder*="email" i]',
+                'input[autocomplete="username"]',
+            ),
+        )
+        password = first_visible_locator(
+            page,
+            (
+                'input[type="password"]',
+                'input[name*="password" i]',
+                'input[placeholder*="password" i]',
+                'input[autocomplete="current-password"]',
+            ),
+        )
+        email.fill(credentials["email"])
+        password.fill(credentials["password"])
+        submit = first_visible_locator(
+            page,
+            (
+                'input[type="submit"][name="commit"][value="Sign in"]',
+                'input[type="submit"][value="Sign in"]',
+                'input[name="commit"]',
+                'button[type="submit"]',
+                'button:has-text("Log in")',
+                'button:has-text("Login")',
+                'button:has-text("Sign in")',
+                'button:has-text("Continue")',
+                'text="Sign in"',
+            ),
+        )
+        submit.click()
+        try:
+            page.wait_for_load_state("networkidle", timeout=15_000)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def classify_auth_status(page) -> str:
+    try:
+        body_text = visible_body_text(page)
+    except Exception:
+        body_text = ""
+    normalized = " ".join(body_text.split()).lower()
+    if (
+        "aloha poconos" in normalized
+        or "applied customizations" in normalized
+        or "booking insights" in normalized
+        or "lodgify" in normalized
+    ) and "log in" not in normalized and "sign in" not in normalized:
+        return "logged_in"
+    if any(marker in normalized for marker in ("log in", "sign in", "password", "email")):
+        return "login_required"
+    return "unknown"
+
+
+def auth_check_log_lines(*, profile_path: Path, profile_exists: bool, auth_status: str) -> list[str]:
+    return [
+        f"persistent_profile_path={profile_path}",
+        f"persistent_profile_exists={'true' if profile_exists else 'false'}",
+        f"auth_status={auth_status}",
+    ]
 
 
 def bookings_date_range_checkpoint_message(run_date: str) -> str:
@@ -2343,12 +2509,37 @@ def execute_download_all_sequence(context, page, staging_dir: Path, run_date: st
     return completed_targets
 
 
+def launch_download_all_browser(playwright, *, headless: bool, use_persistent_session: bool):
+    """Launch the download-all browser context.
+
+    Persistent mode must use Playwright's persistent context directly so cookies,
+    local storage, and session state survive across runs.
+    """
+
+    browser = None
+    if use_persistent_session:
+        PERSISTENT_SESSION_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        context = playwright.chromium.launch_persistent_context(
+            user_data_dir=str(PERSISTENT_SESSION_PROFILE_DIR),
+            headless=headless,
+            accept_downloads=True,
+        )
+        page = context.pages[0] if context.pages else context.new_page()
+        return context, browser, page
+
+    browser = playwright.chromium.launch(headless=headless)
+    context = browser.new_context(accept_downloads=True)
+    page = context.new_page()
+    return context, browser, page
+
+
 def run_download_all(
     run_date: str,
     *,
     headless: bool,
     skip_login_pause: bool = False,
     use_persistent_session: bool = False,
+    use_local_credentials: bool = False,
 ) -> Path:
     if headless and not skip_login_pause:
         raise DownloadError("Headless mode requires --skip-login-pause for download-all.")
@@ -2363,22 +2554,18 @@ def run_download_all(
 
     try:
         with sync_playwright() as playwright:
-            browser = None
-            if use_persistent_session:
-                PERSISTENT_SESSION_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-                context = playwright.chromium.launch_persistent_context(
-                    str(PERSISTENT_SESSION_PROFILE_DIR),
-                    headless=headless,
-                    accept_downloads=True,
-                )
-                page = context.pages[0] if context.pages else context.new_page()
-            else:
-                browser = playwright.chromium.launch(headless=headless)
-                context = browser.new_context(accept_downloads=True)
-                page = context.new_page()
+            context, browser, page = launch_download_all_browser(
+                playwright,
+                headless=headless,
+                use_persistent_session=use_persistent_session,
+            )
             try:
                 page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
-                wait_for_download_all_login_ready(page, skip_login_pause=skip_login_pause)
+                wait_for_download_all_login_ready(
+                    page,
+                    skip_login_pause=skip_login_pause,
+                    use_local_credentials=use_local_credentials,
+                )
                 completed_targets = execute_download_all_sequence(context, page, staging_dir, run_date)
             except DownloadError as exc:
                 screenshot_path = save_debug_screenshot(page, logs_dir, run_date)
@@ -2413,6 +2600,43 @@ def run_download_all(
         + ["All download-all staged files validated.", "Raw folder was not touched."],
     )
     return log_file
+
+
+def run_auth_check(*, headless: bool, use_persistent_session: bool = False) -> Path:
+    if not use_persistent_session:
+        raise DownloadError("--auth-check requires --use-persistent-session so it can inspect the reusable profile.")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise DownloadError("Playwright is not installed in this environment.") from exc
+
+    profile_exists = PERSISTENT_SESSION_PROFILE_DIR.exists()
+    auth_status = "unknown"
+    with sync_playwright() as playwright:
+        context, browser, page = launch_download_all_browser(
+            playwright,
+            headless=headless,
+            use_persistent_session=True,
+        )
+        try:
+            page.goto(PRICELABS_BOOKING_INSIGHTS_URL, wait_until="domcontentloaded", timeout=120_000)
+            try:
+                page.wait_for_load_state("networkidle", timeout=30_000)
+            except Exception:
+                pass
+            auth_status = classify_auth_status(page)
+        finally:
+            context.close()
+            if browser is not None:
+                browser.close()
+
+    for line in auth_check_log_lines(
+        profile_path=PERSISTENT_SESSION_PROFILE_DIR,
+        profile_exists=profile_exists,
+        auth_status=auth_status,
+    ):
+        print(line)
+    return PERSISTENT_SESSION_PROFILE_DIR
 
 
 PROMOTION_FILES = (
@@ -2536,7 +2760,7 @@ def run_promote_to_raw(run_date: str) -> Path:
 
 
 def run(
-    run_date: str,
+    run_date: str | None,
     *,
     target: str | None = None,
     dry_run: bool = False,
@@ -2545,13 +2769,20 @@ def run(
     promote_to_raw: bool = False,
     download_all: bool = False,
     use_persistent_session: bool = False,
+    auth_check: bool = False,
+    use_local_credentials: bool = False,
 ) -> Path:
+    if auth_check:
+        return run_auth_check(headless=headless, use_persistent_session=use_persistent_session)
+    if run_date is None:
+        raise DownloadError("--run-date is required for this downloader mode.")
     if download_all:
         log_file = run_download_all(
             run_date,
             headless=headless,
             skip_login_pause=skip_login_pause,
             use_persistent_session=use_persistent_session,
+            use_local_credentials=use_local_credentials,
         )
         if promote_to_raw:
             return run_promote_to_raw(run_date)
@@ -2605,12 +2836,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             promote_to_raw=args.promote_to_raw,
             download_all=args.download_all,
             use_persistent_session=args.use_persistent_session,
+            auth_check=args.auth_check,
+            use_local_credentials=args.use_local_credentials,
         )
     except DownloadError as exc:
         print(f"PriceLabs downloader failed: {exc}", file=sys.stderr)
         return 1
 
-    if args.download_all and args.promote_to_raw:
+    if args.auth_check:
+        print("PriceLabs persistent auth check completed.")
+    elif args.download_all and args.promote_to_raw:
         print(f"PriceLabs downloader completed download-all and promoted staged files to raw. Log: {log_file}")
     elif args.download_all:
         print(f"PriceLabs downloader completed download-all. Log: {log_file}")

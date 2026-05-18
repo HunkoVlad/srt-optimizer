@@ -57,6 +57,8 @@ def test_weekly_with_pricelabs_downloads_wrapper_orders_safe_steps() -> None:
     assert "--promote-to-raw" in script
     assert "[switch]$UsePersistentSession" in script
     assert "--use-persistent-session" in script
+    assert "[switch]$UseLocalCredentials" in script
+    assert "--use-local-credentials" in script
     assert "--target $target" not in script
     assert '"future-export"' not in script
     assert '"settings-snapshot"' not in script
