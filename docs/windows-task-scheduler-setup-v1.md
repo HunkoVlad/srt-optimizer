@@ -15,7 +15,9 @@ The wrapper is responsible for:
 - Calling the main pipeline.
 - Safe email config summary without secrets.
 
-This setup does not add Playwright automation and does not automate PriceLabs downloads. Raw files remain the source of truth. The newer one-session command `.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD` should not be used from Windows Task Scheduler until that browser/login workflow is separately validated.
+This setup does not add Playwright automation and does not automate PriceLabs downloads. Raw files remain the source of truth. The newer one-session command `.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD -UseLocalCredentials` should not be used from Windows Task Scheduler until that browser/login workflow is separately validated.
+
+The local PriceLabs credential fallback uses `.local/pricelabs.env` for manual convenience only. Do not configure Task Scheduler to run the credential-based Playwright workflow until it is explicitly tested and approved.
 
 ## Recommended Schedule
 
@@ -204,5 +206,6 @@ Different Windows user account:
 - No automatic PriceLabs downloads in this step.
 - No email send mode change in this step.
 - No one-session Playwright workflow in Task Scheduler until separately validated.
+- No credential-based PriceLabs Playwright workflow in Task Scheduler until separately validated.
 - Keep scheduled testing draft-first.
 - Keep raw files as the source of truth.

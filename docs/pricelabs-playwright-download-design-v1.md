@@ -25,7 +25,7 @@ Excluded:
 
 - No scheduler integration yet.
 - No pipeline behavior changes yet.
-- No PriceLabs credential storage.
+- No committed or shared PriceLabs credential storage.
 - No changes to email behavior.
 
 ## Required PriceLabs Download Targets
@@ -74,7 +74,7 @@ Current one-session downloader flow:
 
 1. Create the run folder structure if missing.
 2. Launch Playwright with a controlled download directory.
-3. Use one headed/manual login and MFA checkpoint.
+3. Use local-only credential login fallback when explicitly requested, or manual login/MFA fallback.
 4. Download each required file to `downloads_staging/`.
 5. Normalize filenames in staging.
 6. Validate file presence.
@@ -84,6 +84,12 @@ Current one-session downloader flow:
 10. Exit with a clear success or failure status.
 
 The standard weekly workflow command is:
+
+```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD -UseLocalCredentials
+```
+
+Manual login command:
 
 ```powershell
 .\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
@@ -210,6 +216,29 @@ Expected behavior:
 - Do not silently continue with bad inputs.
 - Do not create misleading reports from invalid or missing files.
 
+## Login Options
+
+Manual login remains valid and is the safest fallback.
+
+Optional local credential fallback uses:
+
+```text
+.local/pricelabs.env
+```
+
+Format:
+
+```text
+PRICELABS_EMAIL=your_pricelabs_email
+PRICELABS_PASSWORD=your_pricelabs_password
+```
+
+This file must stay local and gitignored. Do not commit it, paste it into chat, or include real values in docs or logs. Avoid `git add .`; use explicit `git add <path>` commands.
+
+With `-UseLocalCredentials`, the downloader can fill the PriceLabs login form. MFA may still require manual completion in the opened browser.
+
+Persistent browser session support exists, but testing showed PriceLabs may still return to the login page. The local credential fallback is the preferred optional convenience path; manual login remains available.
+
 ## Manual Fallback
 
 Manual download remains valid.
@@ -255,11 +284,11 @@ Rules:
 
 - No credentials in Git.
 - No credentials in TOML.
-- No credentials in docs.
+- No real credentials in docs.
 - No credentials in logs.
-- Use environment variables or secure local auth/session storage later.
-- Saved browser state, if used later, must be gitignored.
-- MFA may require a headed/manual login flow in early implementation.
+- `.local/pricelabs.env` may contain local-only PriceLabs credentials and must remain gitignored.
+- Saved browser state, if used, must remain gitignored.
+- MFA may require headed/manual completion.
 
 The Gmail app password is unrelated to PriceLabs download automation and must remain environment-only. PriceLabs credentials, session details, cookies, and browser state must also remain outside Git/docs/logs/chat.
 
@@ -296,7 +325,7 @@ Step 29 - Download one PriceLabs file safely.
 Step 29c update: the future export download should use the PriceLabs UI flow, not a direct download URL. The expected path is:
 
 1. Open `https://app.pricelabs.co/customization`.
-2. Let the user complete headed/manual login or MFA if needed.
+2. Use local-only credential fallback if explicitly enabled, otherwise let the user complete headed/manual login or MFA if needed.
 3. Find the Lodgify account row or card.
 4. Open its three-dot menu.
 5. Click `Download CSV Prices`.

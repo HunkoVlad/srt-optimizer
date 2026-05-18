@@ -8,13 +8,14 @@ Operator checklist for the current V1 pipeline.
 - One listing only
 - One-session PriceLabs download-all workflow
 - Next 180 days only
-- One manual PriceLabs login/MFA checkpoint
+- Optional local PriceLabs credential login fallback; manual login remains available
 - Windows Task Scheduler should not use this Playwright workflow until separately validated
 - No dashboards
 
 ## Run Checklist
 
 - [ ] Confirm the machine can open a headed browser for PriceLabs.
+- [ ] For the preferred convenience path, create local credentials at `.local/pricelabs.env` using the safe format below.
 - [ ] Confirm no trusted raw files already exist for the same run date unless this is an intentional manual fallback run.
 - [ ] For development runs, keep email delivery in draft mode:
 
@@ -29,10 +30,17 @@ enabled = false
 - [ ] Run the standard weekly workflow from the repo root:
 
 ```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD -UseLocalCredentials
+```
+
+- [ ] If PriceLabs asks for MFA, complete MFA manually in the opened browser.
+- [ ] If not using local credentials, run the manual-login command instead:
+
+```powershell
 .\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
 ```
 
-- [ ] Complete the single manual PriceLabs login/MFA checkpoint in the opened browser.
+- [ ] Complete manual PriceLabs login/MFA in the opened browser when prompted.
 - [ ] Let the wrapper finish the full flow:
   - download all files into `downloads_staging/`
   - validate staged files
@@ -79,6 +87,49 @@ data/runs/<run_date>/logs/               preserved logs
 ```
 
 If the workflow fails, keep `downloads_staging/` for troubleshooting. If it succeeds, the wrapper cleans `downloads_staging/` after reports are generated.
+
+## PriceLabs Login Options
+
+Preferred optional convenience command:
+
+```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD -UseLocalCredentials
+```
+
+Manual-login command:
+
+```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
+```
+
+Local credential file path:
+
+```text
+.local/pricelabs.env
+```
+
+File format, with local values only:
+
+```text
+PRICELABS_EMAIL=your_pricelabs_email
+PRICELABS_PASSWORD=your_pricelabs_password
+```
+
+Safety rules:
+
+- `.local/` is ignored by Git.
+- Never commit, paste, or share PriceLabs credentials.
+- Never put PriceLabs credentials in TOML, docs, logs, or chat.
+- Avoid `git add .`; use explicit `git add <path>` commands.
+- The downloader logs only safe booleans about whether local credentials were requested/found/attempted.
+
+MFA behavior:
+
+- Local credentials can fill and submit the PriceLabs login form.
+- PriceLabs may still require MFA.
+- If MFA is required, complete it manually in the opened browser.
+
+Persistent browser session support exists, but testing showed PriceLabs may require login again even with a persistent profile. For now, `-UseLocalCredentials` is the preferred optional convenience path. Manual login remains the fallback.
 
 ## After The Run
 
@@ -230,7 +281,7 @@ format = "html"
 2. Run:
 
 ```powershell
-.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD -UseLocalCredentials
 ```
 
 3. Confirm `.md`, `.html`, and `.eml` outputs exist under `data/runs/<run_date>/analysis/`.

@@ -12,7 +12,7 @@ V1 scope is intentionally narrow:
 
 - PriceLabs only
 - One listing only
-- PriceLabs headed/manual login checkpoint for downloads
+- Optional local-only PriceLabs credential login fallback, with manual MFA/manual login fallback
 - Next 180 days only
 - Scheduler integration is not enabled for the Playwright workflow yet
 - No dashboards
@@ -60,13 +60,34 @@ data/runs/<run_date>/
 
 `downloads_staging/` is temporary. `raw/` is the trusted validated input layer. `analysis/` and `settings/` are generated and reproducible.
 
-The standard weekly command is:
+The standard weekly command with local credential fallback is:
+
+```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD -UseLocalCredentials
+```
+
+Manual login remains available:
 
 ```powershell
 .\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD
 ```
 
-That wrapper opens one PriceLabs browser session, waits for one manual login/MFA checkpoint, downloads the five staged inputs, validates them, promotes them to `raw/`, runs the weekly pipeline, and cleans `downloads_staging/` only after the full workflow succeeds.
+That wrapper opens one PriceLabs browser session, downloads the five staged inputs, validates them, promotes them to `raw/`, runs the weekly pipeline, and cleans `downloads_staging/` only after the full workflow succeeds. With `-UseLocalCredentials`, it can fill the PriceLabs login form from a local gitignored file. If MFA is required, complete MFA manually in the browser. Without `-UseLocalCredentials`, use the manual login flow.
+
+Local credential file, never committed:
+
+```text
+.local/pricelabs.env
+```
+
+Format:
+
+```text
+PRICELABS_EMAIL=your_pricelabs_email
+PRICELABS_PASSWORD=your_pricelabs_password
+```
+
+`.local/` is ignored by Git. Never paste credentials into chat, docs, logs, or Git. Avoid `git add .`; use explicit `git add <path>` commands so local-only files are not accidentally staged. Persistent browser session support exists, but testing showed PriceLabs may still require login, so `-UseLocalCredentials` is the preferred optional convenience path.
 
 Trusted raw input files after promotion:
 
@@ -83,7 +104,7 @@ Raw files should be retained with the run. Analysis outputs are snapshot-based a
 Preferred weekly command:
 
 ```powershell
-.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate 2026-05-03
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate 2026-05-03 -UseLocalCredentials
 ```
 
 Manual raw fallback remains available. If trusted raw files already exist, run:
