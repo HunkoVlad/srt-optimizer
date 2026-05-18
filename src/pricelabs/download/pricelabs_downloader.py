@@ -511,6 +511,9 @@ DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE = (
     "Please log in to PriceLabs manually in the opened browser. Complete MFA if required. "
     "The downloader will continue automatically when the logged-in PriceLabs page is visible."
 )
+HEADLESS_LOGIN_INTERACTIVE_REQUIRED_MESSAGE = (
+    "Headless login could not complete because interactive verification appears required."
+)
 
 
 def wait_for_download_all_login_ready(
@@ -518,11 +521,14 @@ def wait_for_download_all_login_ready(
     *,
     skip_login_pause: bool,
     use_local_credentials: bool = False,
+    headless: bool = False,
 ) -> None:
     if skip_login_pause:
         return
     if is_download_all_login_ready(page, timeout_ms=3_000):
         return
+    if headless and not use_local_credentials:
+        raise DownloadError("Headless mode requires --use-local-credentials; manual login is unavailable in headless mode.")
     if use_local_credentials:
         credentials = read_local_credentials()
         print(
@@ -535,9 +541,13 @@ def wait_for_download_all_login_ready(
                 )
             )
         )
+        if credentials is None and headless:
+            raise DownloadError("Headless login could not complete because local credentials were not found or incomplete.")
         if credentials is not None and attempt_local_credential_login(page, credentials):
             if is_download_all_login_ready(page, timeout_ms=10_000):
                 return
+            if headless:
+                raise DownloadError(HEADLESS_LOGIN_INTERACTIVE_REQUIRED_MESSAGE)
             print(
                 "\n".join(
                     credential_login_log_lines(
@@ -551,6 +561,8 @@ def wait_for_download_all_login_ready(
             print("Complete PriceLabs MFA manually in the opened browser. The downloader will continue after login.")
             wait_for_download_all_login_state(page, timeout_ms=DOWNLOAD_ALL_LOGIN_TIMEOUT_MS)
             return
+        if headless:
+            raise DownloadError(HEADLESS_LOGIN_INTERACTIVE_REQUIRED_MESSAGE)
     print(DOWNLOAD_ALL_LOGIN_CHECKPOINT_MESSAGE)
     wait_for_download_all_login_state(page, timeout_ms=DOWNLOAD_ALL_LOGIN_TIMEOUT_MS)
 
@@ -2541,8 +2553,8 @@ def run_download_all(
     use_persistent_session: bool = False,
     use_local_credentials: bool = False,
 ) -> Path:
-    if headless and not skip_login_pause:
-        raise DownloadError("Headless mode requires --skip-login-pause for download-all.")
+    if headless and not use_local_credentials:
+        raise DownloadError("Headless mode requires --use-local-credentials for download-all.")
 
     try:
         from playwright.sync_api import sync_playwright
@@ -2565,6 +2577,7 @@ def run_download_all(
                     page,
                     skip_login_pause=skip_login_pause,
                     use_local_credentials=use_local_credentials,
+                    headless=headless,
                 )
                 completed_targets = execute_download_all_sequence(context, page, staging_dir, run_date)
             except DownloadError as exc:

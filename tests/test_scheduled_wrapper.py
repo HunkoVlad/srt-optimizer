@@ -59,11 +59,25 @@ def test_weekly_with_pricelabs_downloads_wrapper_orders_safe_steps() -> None:
     assert "--use-persistent-session" in script
     assert "[switch]$UseLocalCredentials" in script
     assert "--use-local-credentials" in script
+    assert "[switch]$Headless" in script
+    assert "--headless" in script
+    assert "Headless mode requires -UseLocalCredentials" in script
     assert "--target $target" not in script
     assert '"future-export"' not in script
     assert '"settings-snapshot"' not in script
     assert '$env:PYTHONPATH = "src"' in script
     assert "Gmail/send mode is not changed by this wrapper." in script
+
+
+def test_weekly_with_pricelabs_downloads_wrapper_accepts_today_run_date() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "run_weekly_with_pricelabs_downloads.ps1"
+
+    script = script_path.read_text(encoding="utf-8")
+
+    assert '$RunDate -eq "today"' in script
+    assert 'Get-Date -Format "yyyy-MM-dd"' in script
+    assert "RunDate must use YYYY-MM-DD format or today." in script
 
 
 def test_weekly_with_pricelabs_downloads_cleans_staging_only_after_success() -> None:
@@ -85,3 +99,21 @@ def test_weekly_with_pricelabs_downloads_cleans_staging_only_after_success() -> 
     assert "logs" not in script[remove_position : remove_position + 120].lower()
     assert "analysis" not in script[remove_position : remove_position + 120].lower()
     assert "settings" not in script[remove_position : remove_position + 120].lower()
+
+
+def test_daily_pricelabs_task_scheduler_test_is_documented() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    scheduler_doc = (
+        repo_root / "docs" / "windows-task-scheduler-setup-v1.md"
+    ).read_text(encoding="utf-8")
+    runbook_doc = (repo_root / "docs" / "runbook-weekly-pricelabs.md").read_text(
+        encoding="utf-8"
+    )
+
+    for doc in (scheduler_doc, runbook_doc):
+        assert "Aloha Poconos PriceLabs Daily Test" in doc
+        assert "-RunDate today -UseLocalCredentials" in doc
+        assert "C:\\Users\\Volodymyr\\srt-optimizer" in doc
+        assert ".local/pricelabs.env" in doc
+        assert "MFA" in doc
+        assert "Gmail/send mode" in doc

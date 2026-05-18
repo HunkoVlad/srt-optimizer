@@ -131,6 +131,49 @@ MFA behavior:
 
 Persistent browser session support exists, but testing showed PriceLabs may require login again even with a persistent profile. For now, `-UseLocalCredentials` is the preferred optional convenience path. Manual login remains the fallback.
 
+## Temporary Daily Scheduler Test
+
+After the manual workflow works locally, test the Playwright wrapper from Windows Task Scheduler with a separate temporary daily task. Do not replace the existing scheduler task yet.
+
+Task name:
+
+```text
+Aloha Poconos PriceLabs Daily Test
+```
+
+Action values:
+
+Program/script:
+
+```text
+PowerShell
+```
+
+Arguments:
+
+```text
+-NoProfile -ExecutionPolicy Bypass -File "C:\Users\Volodymyr\srt-optimizer\scripts\run_weekly_with_pricelabs_downloads.ps1" -RunDate today -UseLocalCredentials
+```
+
+Start in:
+
+```text
+C:\Users\Volodymyr\srt-optimizer
+```
+
+Do not quote the `Start in` path.
+
+Scheduler test rules:
+
+- This is a temporary daily validation schedule, not the production weekly schedule.
+- Credentials stay in `.local/pricelabs.env`; do not store them in the task action.
+- PriceLabs MFA may still require manual completion and may block unattended execution.
+- Gmail/send mode is not changed by the wrapper.
+- Check Task Scheduler `Last Run Result` after each test.
+- Check logs under `data/runs/<today>/logs/`.
+- Disable or delete `Aloha Poconos PriceLabs Daily Test` after validation.
+- Move to a weekly trigger only after the daily test is stable and MFA behavior is understood.
+
 ## After The Run
 
 - [ ] Confirm `data/runs/<run_date>/standardized/future_daily_pricing_<run_date>.csv` was written.

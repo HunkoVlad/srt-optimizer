@@ -19,6 +19,67 @@ This setup does not add Playwright automation and does not automate PriceLabs do
 
 The local PriceLabs credential fallback uses `.local/pricelabs.env` for manual convenience only. Do not configure Task Scheduler to run the credential-based Playwright workflow until it is explicitly tested and approved.
 
+## Temporary Daily PriceLabs Workflow Test
+
+The Playwright weekly workflow can be tested from Windows Task Scheduler with a separate temporary daily task. Do not replace the existing `Aloha Poconos Weekly Revenue Pipeline` task yet, and do not enable this as the weekly production schedule until the browser/login behavior is separately validated.
+
+Task name:
+
+```text
+Aloha Poconos PriceLabs Daily Test
+```
+
+Recommended trigger:
+
+- Daily.
+- Temporary validation only.
+- Choose a time when the computer is awake and the user can complete MFA if PriceLabs asks.
+- Run only when the user is logged on for initial testing.
+
+Action values:
+
+Program/script:
+
+```text
+PowerShell
+```
+
+Arguments:
+
+```text
+-NoProfile -ExecutionPolicy Bypass -File "C:\Users\Volodymyr\srt-optimizer\scripts\run_weekly_with_pricelabs_downloads.ps1" -RunDate today -UseLocalCredentials
+```
+
+Start in:
+
+```text
+C:\Users\Volodymyr\srt-optimizer
+```
+
+Important: do not put quotes around the `Start in` path.
+
+Credential and MFA notes:
+
+- The task action does not store PriceLabs credentials.
+- PriceLabs credentials remain local-only in `.local/pricelabs.env`.
+- Do not paste credentials into Task Scheduler, docs, logs, Git, or chat.
+- PriceLabs may still require manual MFA, which can block unattended execution.
+- Gmail/send mode is unchanged by this wrapper; email delivery remains controlled by `config/email.toml`.
+
+Validation:
+
+- In Task Scheduler, check `Last Run Result` for `Aloha Poconos PriceLabs Daily Test`.
+- Check preserved logs under `data/runs/<today>/logs/`.
+- Confirm raw inputs were promoted under `data/runs/<today>/raw/`.
+- Confirm reports were generated under `data/runs/<today>/analysis/`.
+- If the task fails, keep `downloads_staging/` for troubleshooting.
+
+After validation:
+
+- Disable or delete `Aloha Poconos PriceLabs Daily Test`.
+- Switch to a weekly trigger only after the daily test proves reliable and MFA behavior is understood.
+- Keep the old scheduler task unchanged until this workflow is explicitly accepted as the replacement.
+
 ## Recommended Schedule
 
 Recommended timing: Monday morning after raw PriceLabs files are manually refreshed and placed in:

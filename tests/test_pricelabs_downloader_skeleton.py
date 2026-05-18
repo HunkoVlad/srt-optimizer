@@ -1518,6 +1518,31 @@ def test_download_all_mode_is_accepted_without_touching_raw(monkeypatch) -> None
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_headless_download_all_requires_local_credentials() -> None:
+    with pytest.raises(pricelabs_downloader.DownloadError, match="requires --use-local-credentials"):
+        pricelabs_downloader.run_download_all(
+            "2099-02-19",
+            headless=True,
+            use_local_credentials=False,
+        )
+
+
+def test_headless_download_all_flag_is_accepted_with_local_credentials() -> None:
+    args = pricelabs_downloader.parse_args(
+        [
+            "--run-date",
+            "2099-02-19",
+            "--download-all",
+            "--headless",
+            "--use-local-credentials",
+        ]
+    )
+
+    assert args.download_all is True
+    assert args.headless is True
+    assert args.use_local_credentials is True
+
+
 def test_persistent_session_flag_is_accepted_and_passed_to_download_all(monkeypatch) -> None:
     calls = []
 
@@ -1851,6 +1876,56 @@ def test_missing_local_credentials_falls_back_to_manual_login(monkeypatch, capsy
     assert "local_credentials_file_found=false" in output
     assert "credential_login_attempted=false" in output
     assert "Please log in to PriceLabs manually" in output
+
+
+def test_headless_missing_local_credentials_fails_without_manual_pause(monkeypatch, capsys) -> None:
+    input_called = False
+
+    def fake_input() -> str:
+        nonlocal input_called
+        input_called = True
+        return ""
+
+    class FakePage:
+        def wait_for_function(self, _script: str, timeout: int) -> None:
+            raise RuntimeError("not logged in")
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(pricelabs_downloader, "read_local_credentials", lambda: None)
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="local credentials were not found"):
+        pricelabs_downloader.wait_for_download_all_login_ready(
+            FakePage(),
+            skip_login_pause=False,
+            use_local_credentials=True,
+            headless=True,
+        )
+
+    output = capsys.readouterr().out
+    assert input_called is False
+    assert "Please log in to PriceLabs manually" not in output
+    assert "local_credentials_file_found=false" in output
+
+
+def test_headless_mfa_requirement_fails_clearly(monkeypatch) -> None:
+    class FakePage:
+        def wait_for_function(self, _script: str, timeout: int) -> None:
+            raise RuntimeError("not logged in")
+
+    monkeypatch.setattr(
+        pricelabs_downloader,
+        "read_local_credentials",
+        lambda: {"email": "owner@example.com", "password": "super-secret"},
+    )
+    monkeypatch.setattr(pricelabs_downloader, "attempt_local_credential_login", lambda _page, _credentials: True)
+
+    with pytest.raises(pricelabs_downloader.DownloadError, match="interactive verification appears required"):
+        pricelabs_downloader.wait_for_download_all_login_ready(
+            FakePage(),
+            skip_login_pause=False,
+            use_local_credentials=True,
+            headless=True,
+        )
 
 
 def test_local_credential_login_includes_pricelabs_sign_in_submit_selector(monkeypatch) -> None:

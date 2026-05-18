@@ -3,14 +3,18 @@ param(
     [string]$RunDate,
     [switch]$KeepStaging,
     [switch]$UsePersistentSession,
-    [switch]$UseLocalCredentials
+    [switch]$UseLocalCredentials,
+    [switch]$Headless
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-if ($RunDate -notmatch '^\d{4}-\d{2}-\d{2}$') {
-    Write-Error "RunDate must use YYYY-MM-DD format."
+if ($RunDate -eq "today") {
+    $RunDate = Get-Date -Format "yyyy-MM-dd"
+}
+elseif ($RunDate -notmatch '^\d{4}-\d{2}-\d{2}$') {
+    Write-Error "RunDate must use YYYY-MM-DD format or today."
     exit 1
 }
 
@@ -68,11 +72,18 @@ Write-WrapperLog "Run date: $RunDate"
 Write-WrapperLog "Project root: $projectRoot"
 Write-WrapperLog "Python executable: $pythonExe"
 Write-WrapperLog "Gmail/send mode is not changed by this wrapper."
+if ($Headless -and -not $UseLocalCredentials) {
+    Write-WrapperLog "Headless mode requires -UseLocalCredentials because manual login/MFA is unavailable in a hidden browser."
+    exit 1
+}
 if ($UsePersistentSession) {
     Write-WrapperLog "Using gitignored local PriceLabs browser profile for session reuse."
 }
 if ($UseLocalCredentials) {
     Write-WrapperLog "Using local PriceLabs credential login fallback if manual login is required; secrets are not logged."
+}
+if ($Headless) {
+    Write-WrapperLog "Running PriceLabs browser automation in optional headless mode."
 }
 
 Push-Location $projectRoot
@@ -86,6 +97,9 @@ try {
         }
         if ($UseLocalCredentials) {
             $downloadArgs += "--use-local-credentials"
+        }
+        if ($Headless) {
+            $downloadArgs += "--headless"
         }
         & $pythonExe @downloadArgs
     }
