@@ -15,13 +15,13 @@ The wrapper is responsible for:
 - Calling the main pipeline.
 - Safe email config summary without secrets.
 
-This setup does not add Playwright automation and does not automate PriceLabs downloads. Raw files remain the source of truth. The newer one-session command `.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD -UseLocalCredentials` should not be used from Windows Task Scheduler until that browser/login workflow is separately validated.
+This setup preserves the older safe scheduler wrapper and documents the newer PriceLabs Playwright workflow separately. Raw files remain the source of truth. The headless daily test for `.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate today -UseLocalCredentials -Headless` has been validated, but the weekly production switch should wait until scheduler timing, power, and MFA behavior are confirmed.
 
-The local PriceLabs credential fallback uses `.local/pricelabs.env` for manual convenience only. Do not configure Task Scheduler to run the credential-based Playwright workflow until it is explicitly tested and approved.
+The local PriceLabs credential fallback uses `.local/pricelabs.env`; credentials must not be stored in the scheduled task action.
 
 ## Temporary Daily PriceLabs Workflow Test
 
-The Playwright weekly workflow can be tested from Windows Task Scheduler with a separate temporary daily task. Do not replace the existing `Aloha Poconos Weekly Revenue Pipeline` task yet, and do not enable this as the weekly production schedule until the browser/login behavior is separately validated.
+The Playwright weekly workflow can be tested from Windows Task Scheduler with a separate temporary daily task. Do not replace the existing `Aloha Poconos Weekly Revenue Pipeline` task yet, and do not enable this as the weekly production schedule until the daily test, power behavior, and MFA behavior are validated.
 
 Task name:
 
@@ -33,8 +33,10 @@ Recommended trigger:
 
 - Daily.
 - Temporary validation only.
-- Choose a time when the computer is awake and the user can complete MFA if PriceLabs asks.
-- Run only when the user is logged on for initial testing.
+- Choose a time when the computer is awake and has internet access.
+- Headless mode can run while the screen is locked.
+- Sleep, hibernate, or powered-off state prevents the task from running.
+- Run only when the user is logged on for initial testing; use `Run whether user is logged on or not` only after headless validation.
 
 Action values:
 
@@ -47,7 +49,7 @@ PowerShell
 Arguments:
 
 ```text
--NoProfile -ExecutionPolicy Bypass -File "C:\Users\Volodymyr\srt-optimizer\scripts\run_weekly_with_pricelabs_downloads.ps1" -RunDate today -UseLocalCredentials
+-NoProfile -ExecutionPolicy Bypass -File "C:\Users\Volodymyr\srt-optimizer\scripts\run_weekly_with_pricelabs_downloads.ps1" -RunDate today -UseLocalCredentials -Headless
 ```
 
 Start in:
@@ -79,6 +81,41 @@ After validation:
 - Disable or delete `Aloha Poconos PriceLabs Daily Test`.
 - Switch to a weekly trigger only after the daily test proves reliable and MFA behavior is understood.
 - Keep the old scheduler task unchanged until this workflow is explicitly accepted as the replacement.
+
+## Power And Wake Requirements
+
+Task Scheduler can run the headless PriceLabs workflow while Windows is locked. It cannot run while the computer is asleep, hibernating, powered off, or offline.
+
+Recommended task settings for the daily test and any future weekly production task:
+
+- Enable `Wake the computer to run this task`.
+- Enable `Start only if the following network connection is available` if the machine has a reliable named network profile.
+- Use `Run whether user is logged on or not` only after the headless workflow has been validated under that option.
+- Set a reasonable stop limit so a stuck browser run does not continue indefinitely.
+
+Check current Windows power settings:
+
+```powershell
+powercfg /query
+```
+
+Optional plugged-in sleep prevention, only if acceptable:
+
+```powershell
+powercfg /change standby-timeout-ac 0
+powercfg /change hibernate-timeout-ac 0
+```
+
+These commands affect AC plugged-in behavior. They should not be used if the computer is expected to sleep automatically while plugged in.
+
+Confirm `WakeToRun` and network settings for the daily test task:
+
+```powershell
+(Get-ScheduledTask -TaskName "Aloha Poconos PriceLabs Daily Test").Settings |
+    Select-Object WakeToRun, RunOnlyIfNetworkAvailable
+```
+
+If the workflow is later moved to a weekly production task, repeat this check with the final weekly task name.
 
 ## Recommended Schedule
 
@@ -139,6 +176,9 @@ Manual testing with a fixed run date can still use:
 Recommended:
 
 - Do not require AC power unless the machine is a laptop and that behavior is wanted.
+- Enable `Wake the computer to run this task` for unattended runs.
+- Keep the machine awake during the scheduled window; locked is fine for headless mode, sleep/hibernate is not.
+- Use `Start only if network is available` if the network profile is reliable.
 - Allow task to be run on demand.
 - Stop task if it runs longer than a reasonable limit, such as 30 minutes.
 - If the task fails, allow retry once after a short delay.
@@ -263,10 +303,7 @@ Different Windows user account:
 
 ## Guardrails
 
-- No Playwright automation in this step.
-- No automatic PriceLabs downloads in this step.
 - No email send mode change in this step.
-- No one-session Playwright workflow in Task Scheduler until separately validated.
-- No credential-based PriceLabs Playwright workflow in Task Scheduler until separately validated.
+- Do not replace the old weekly task until the daily headless test is accepted as production-ready.
 - Keep scheduled testing draft-first.
 - Keep raw files as the source of truth.

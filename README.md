@@ -14,7 +14,7 @@ V1 scope is intentionally narrow:
 - One listing only
 - Optional local-only PriceLabs credential login fallback, with manual MFA/manual login fallback
 - Next 180 days only
-- Scheduler integration is not enabled for the Playwright workflow yet
+- Headless daily Task Scheduler test is validated; weekly production scheduling should be switched on only after power/wake settings are confirmed
 - No dashboards
 - No Airbnb
 
@@ -65,6 +65,14 @@ The standard weekly command with local credential fallback is:
 ```powershell
 .\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate YYYY-MM-DD -UseLocalCredentials
 ```
+
+Headless scheduler test command:
+
+```powershell
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate today -UseLocalCredentials -Headless
+```
+
+Headless mode can run while Windows is locked, but it cannot run if the computer is asleep, hibernating, powered off, or offline. Before moving from daily test to weekly production scheduling, enable Task Scheduler `Wake the computer to run this task` and confirm Windows power settings keep the machine awake during the scheduled window.
 
 Manual login remains available:
 
