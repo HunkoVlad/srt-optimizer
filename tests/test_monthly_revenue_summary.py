@@ -314,6 +314,33 @@ def sample_rows() -> list[dict[str, str]]:
     return rows
 
 
+def reason_row(
+    scope_name: str,
+    observed_issue: str,
+    likely_reason: str,
+    recommendation_allowed: str = "false",
+    recommendation_type: str = "monitor",
+    market_context: str = "market_normal",
+) -> dict[str, str]:
+    return {
+        "run_date": "2026-05-08",
+        "listing_id": "650255___717243",
+        "scope_type": "window",
+        "scope_name": scope_name,
+        "observed_issue": observed_issue,
+        "relevant_setting_change": "none",
+        "last_setting_change_date": "",
+        "setting_change_summary": "",
+        "performance_after_change": "neutral",
+        "market_context": market_context,
+        "likely_reason": likely_reason,
+        "confidence": "medium",
+        "recommendation_allowed": recommendation_allowed,
+        "recommendation_type": recommendation_type,
+        "explanation_note": "",
+    }
+
+
 def test_monthly_revenue_summary_markdown_content() -> None:
     markdown = build_markdown("2026-05-08", sample_rows())
 
@@ -451,6 +478,50 @@ def test_monthly_revenue_summary_markdown_content() -> None:
     assert "change min price" not in markdown.lower()
     assert "change los" not in markdown.lower()
     assert "change discounts" not in markdown.lower()
+
+
+def test_monthly_reason_review_reads_like_revenue_manager_decision() -> None:
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        [
+            reason_row(
+                "days_16_45",
+                "weak_pickup",
+                "market_weakness",
+                market_context="market_weak",
+            ),
+            reason_row(
+                "days_0_15",
+                "none",
+                "no_issue",
+                recommendation_type="no_change",
+            ),
+            reason_row(
+                "days_46_90",
+                "weak_pickup",
+                "insufficient_data",
+                recommendation_type="insufficient_data",
+            ),
+        ],
+    )
+
+    assert "## Reason Review" in markdown
+    assert (
+        "Days 16-45 show weak pickup, but market context is weak. "
+        "Recommendation gate: closed; a PriceLabs rule change is not justified yet. "
+        "Next action: monitor next run."
+    ) in markdown
+    assert (
+        "Days 0-15 show no material issue. Recommendation gate: closed; "
+        "no PriceLabs change recommended. Next action: no change."
+    ) in markdown
+    assert (
+        "Days 46-90 show weak pickup, but data is insufficient. "
+        "Recommendation gate: closed; no recommendation is allowed yet. "
+        "Next action: collect more data."
+    ) in markdown
+    assert "PriceLabs rule change justified now: yes" not in markdown
 
 
 def test_monthly_revenue_summary_cli_writes_file(tmp_path, monkeypatch) -> None:

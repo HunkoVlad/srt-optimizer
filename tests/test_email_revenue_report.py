@@ -199,6 +199,33 @@ def sample_rows() -> list[dict[str, str]]:
     ]
 
 
+def reason_row(
+    scope_name: str,
+    observed_issue: str,
+    likely_reason: str,
+    recommendation_allowed: str = "false",
+    recommendation_type: str = "monitor",
+    market_context: str = "market_normal",
+) -> dict[str, str]:
+    return {
+        "run_date": "2026-05-08",
+        "listing_id": "650255___717243",
+        "scope_type": "window",
+        "scope_name": scope_name,
+        "observed_issue": observed_issue,
+        "relevant_setting_change": "none",
+        "last_setting_change_date": "",
+        "setting_change_summary": "",
+        "performance_after_change": "neutral",
+        "market_context": market_context,
+        "likely_reason": likely_reason,
+        "confidence": "medium",
+        "recommendation_allowed": recommendation_allowed,
+        "recommendation_type": recommendation_type,
+        "explanation_note": "",
+    }
+
+
 def test_email_revenue_report_content() -> None:
     markdown = build_markdown("2026-05-08", sample_rows())
 
@@ -244,6 +271,41 @@ def test_email_revenue_report_content() -> None:
     )
     for phrase in prohibited:
         assert phrase not in markdown.lower()
+
+
+def test_email_reason_review_is_concise_and_gated() -> None:
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        [
+            reason_row(
+                "days_16_45",
+                "weak_pickup",
+                "listing_or_conversion_issue",
+                recommendation_type="investigate_listing",
+            ),
+            reason_row(
+                "days_46_90",
+                "weak_pickup",
+                "price_or_rule_issue",
+                recommendation_allowed="true",
+                recommendation_type="consider_pricelabs_rule_change",
+            ),
+        ],
+    )
+
+    assert "## Reason Review" in markdown
+    assert (
+        "Days 16-45 show weak pickup. Likely reason: listing/conversion issue. "
+        "Recommendation gate: closed; investigate listing/conversion before changing PriceLabs. "
+        "Next action: investigate listing/conversion before changing PriceLabs."
+    ) in markdown
+    assert (
+        "Days 46-90 show weak pickup. Likely reason: price/rule issue. "
+        "Recommendation gate: open; a PriceLabs rule change may be considered. "
+        "Next action: review the relevant PriceLabs rule area."
+    ) in markdown
+    assert "PriceLabs rule change justified now" not in markdown
 
 
 def test_email_revenue_report_cli_writes_file(tmp_path, monkeypatch) -> None:

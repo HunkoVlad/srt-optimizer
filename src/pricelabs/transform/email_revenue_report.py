@@ -13,6 +13,7 @@ from pricelabs.transform.monthly_revenue_summary import (
     is_historical_actual_row,
     read_monthly_rows,
     read_reason_rows,
+    reason_review_sentence,
     table_adr,
     table_booked_revenue,
     table_cleanings,
@@ -169,17 +170,11 @@ def reason_review_section(reason_rows: list[dict[str, str]]) -> list[str]:
         row
         for row in reason_rows
         if row.get("observed_issue", "") != "none"
-        or row.get("likely_reason", "") in {"insufficient_data", "settings_change_impact"}
+        or row.get("likely_reason", "") in {"no_issue", "insufficient_data", "settings_change_impact"}
     ]
     selected = issue_rows[:2] or reason_rows[:1]
     for row in selected:
-        allowed = "yes" if row.get("recommendation_allowed", "").lower() == "true" else "no"
-        lines.append(
-            "- "
-            f"{row.get('scope_name', '')}: {row.get('observed_issue', 'none')} likely "
-            f"{row.get('likely_reason', 'insufficient_data')}; "
-            f"PriceLabs rule change justified now: {allowed} ({row.get('recommendation_type', 'monitor')})."
-        )
+        lines.append(f"- {reason_review_sentence(row)}")
     lines.append("")
     return lines
 

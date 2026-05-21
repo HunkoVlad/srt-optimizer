@@ -525,14 +525,100 @@ def build_recommendation_review(rows: list[dict[str, str]]) -> list[str]:
     ]
 
 
+def reason_scope_text(row: dict[str, str]) -> str:
+    scope_name = row.get("scope_name", "").strip()
+    if scope_name.startswith("days_"):
+        parts = scope_name.split("_")
+        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+            return f"Days {parts[1]}-{parts[2]}"
+    if scope_name:
+        return scope_name
+    scope_type = row.get("scope_type", "").strip()
+    return scope_type or "Review scope"
+
+
+def reason_issue_text(issue: str) -> str:
+    if issue == "none":
+        return "no material issue"
+    return issue.replace("_", " ")
+
+
+def reason_next_action(row: dict[str, str]) -> str:
+    recommendation_type = row.get("recommendation_type", "monitor")
+    if recommendation_type == "investigate_listing":
+        return "investigate listing/conversion before changing PriceLabs"
+    if recommendation_type == "consider_pricelabs_rule_change":
+        return "review the relevant PriceLabs rule area"
+    if recommendation_type == "no_change":
+        return "no change"
+    if recommendation_type == "insufficient_data":
+        return "collect more data"
+    return "monitor next run"
+
+
+def reason_review_sentence(row: dict[str, str]) -> str:
+    scope = reason_scope_text(row)
+    issue = row.get("observed_issue", "none") or "none"
+    likely_reason = row.get("likely_reason", "insufficient_data") or "insufficient_data"
+    allowed = row.get("recommendation_allowed", "").lower() == "true"
+    gate = "open" if allowed else "closed"
+    next_action = reason_next_action(row)
+
+    if likely_reason == "no_issue" or issue == "none":
+        return (
+            f"{scope} show no material issue. Recommendation gate: closed; "
+            f"no PriceLabs change recommended. Next action: {next_action}."
+        )
+    if likely_reason == "market_weakness":
+        return (
+            f"{scope} show {reason_issue_text(issue)}, but market context is weak. "
+            "Recommendation gate: closed; a PriceLabs rule change is not justified yet. "
+            f"Next action: {next_action}."
+        )
+    if likely_reason == "insufficient_data":
+        return (
+            f"{scope} show {reason_issue_text(issue)}, but data is insufficient. "
+            "Recommendation gate: closed; no recommendation is allowed yet. "
+            f"Next action: {next_action}."
+        )
+    if likely_reason == "listing_or_conversion_issue":
+        return (
+            f"{scope} show {reason_issue_text(issue)}. Likely reason: listing/conversion issue. "
+            "Recommendation gate: closed; investigate listing/conversion before changing PriceLabs. "
+            f"Next action: {next_action}."
+        )
+    if likely_reason == "price_or_rule_issue":
+        gate_text = (
+            "a PriceLabs rule change may be considered"
+            if allowed
+            else "PriceLabs rule change is not justified yet"
+        )
+        return (
+            f"{scope} show {reason_issue_text(issue)}. Likely reason: price/rule issue. "
+            f"Recommendation gate: {gate}; {gate_text}. Next action: {next_action}."
+        )
+    if likely_reason == "settings_change_impact":
+        gate_text = (
+            "review the setting impact before another rule change"
+            if allowed
+            else "evaluate the prior setting change impact before changing again"
+        )
+        return (
+            f"{scope} show {reason_issue_text(issue)} after a settings change. "
+            f"Recommendation gate: {gate}; {gate_text}. Next action: {next_action}."
+        )
+    return (
+        f"{scope} show {reason_issue_text(issue)}. Likely reason: {likely_reason.replace('_', ' ')}. "
+        f"Recommendation gate: {gate}; next action: {next_action}."
+    )
+
+
 def build_reason_review(reason_rows: list[dict[str, str]]) -> list[str]:
     lines = ["## Reason Review", ""]
     if not reason_rows:
         lines.extend(
             [
-                "- What happened: reason review was not available.",
-                "- Likely why: insufficient_data.",
-                "- PriceLabs rule change justified now: no.",
+                "- Reason review was not available. Recommendation gate: closed; no PriceLabs change recommended.",
                 "",
             ]
         )
@@ -542,21 +628,11 @@ def build_reason_review(reason_rows: list[dict[str, str]]) -> list[str]:
         row
         for row in reason_rows
         if row.get("observed_issue", "") != "none"
-        or row.get("likely_reason", "") in {"insufficient_data", "settings_change_impact"}
+        or row.get("likely_reason", "") in {"no_issue", "insufficient_data", "settings_change_impact"}
     ]
     selected = issue_rows[:3] or reason_rows[:1]
     for row in selected:
-        allowed = "yes" if row.get("recommendation_allowed", "").lower() == "true" else "no"
-        lines.extend(
-            [
-                f"- What happened: {row.get('scope_type', '')} {row.get('scope_name', '')} shows {row.get('observed_issue', 'none')}.",
-                f"- Likely why: {row.get('likely_reason', 'insufficient_data')} ({row.get('market_context', 'insufficient_data')}).",
-                f"- PriceLabs rule change justified now: {allowed}; {row.get('recommendation_type', 'monitor')}.",
-            ]
-        )
-        note = row.get("explanation_note", "").strip()
-        if note:
-            lines.append(f"- Note: {note}")
+        lines.append(f"- {reason_review_sentence(row)}")
     lines.append("")
     return lines
 

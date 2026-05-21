@@ -188,8 +188,10 @@ def test_reports_include_reason_review_section() -> None:
 
     assert "## Reason Review" in monthly_lines
     assert "## Reason Review" in email_lines
-    assert any("PriceLabs rule change justified now" in line for line in monthly_lines)
-    assert any("PriceLabs rule change justified now" in line for line in email_lines)
+    assert any("Recommendation gate: open" in line for line in monthly_lines)
+    assert any("a PriceLabs rule change may be considered" in line for line in monthly_lines)
+    assert any("Recommendation gate: open" in line for line in email_lines)
+    assert any("a PriceLabs rule change may be considered" in line for line in email_lines)
 
 
 def write_csv(path: Path, rows: list[dict[str, str]]) -> None:

@@ -101,7 +101,7 @@ def test_weekly_with_pricelabs_downloads_cleans_staging_only_after_success() -> 
     assert "settings" not in script[remove_position : remove_position + 120].lower()
 
 
-def test_daily_pricelabs_task_scheduler_test_is_documented() -> None:
+def test_pricelabs_production_scheduler_task_is_documented() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     scheduler_doc = (
         repo_root / "docs" / "windows-task-scheduler-setup-v1.md"
@@ -111,8 +111,8 @@ def test_daily_pricelabs_task_scheduler_test_is_documented() -> None:
     )
 
     for doc in (scheduler_doc, runbook_doc):
-        assert "Aloha Poconos PriceLabs Daily Test" in doc
-        assert "-RunDate today -UseLocalCredentials" in doc
+        assert "Aloha Poconos Weekly PriceLabs Headless Pipeline" in doc
+        assert "-RunDate today -UseLocalCredentials -Headless" in doc
         assert "C:\\Users\\Volodymyr\\srt-optimizer" in doc
         assert ".local/pricelabs.env" in doc
         assert "MFA" in doc
