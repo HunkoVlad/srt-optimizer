@@ -444,7 +444,55 @@ def rule_areas_text(rule_areas: tuple[str, ...]) -> str:
     return "; ".join(rule_areas)
 
 
-def recommendation_for_row(row: dict[str, str]) -> str:
+def reason_window_for_month_row(row: dict[str, str]) -> tuple[str, ...]:
+    bucket = row.get("month_time_bucket", "")
+    if bucket == "current_month":
+        return ("days_0_15",)
+    if bucket == "next_month":
+        return ("days_16_45", "days_16_30")
+    if bucket in {"future_month", "far_future_month"}:
+        return ("days_46_90", "days_31_60", "days_61_90")
+    return ()
+
+
+def reason_for_month_row(row: dict[str, str], reason_rows: list[dict[str, str]]) -> dict[str, str] | None:
+    window_names = reason_window_for_month_row(row)
+    for window_name in window_names:
+        match = next((reason for reason in reason_rows if reason.get("scope_name") == window_name), None)
+        if match:
+            return match
+    return None
+
+
+def gated_recommendation_for_row(row: dict[str, str], reason_row: dict[str, str] | None) -> str | None:
+    if not reason_row:
+        return None
+    allowed = reason_row.get("recommendation_allowed", "").lower() == "true"
+    likely_reason = reason_row.get("likely_reason", "")
+    month = row["stay_month"]
+    if allowed and likely_reason == "price_or_rule_issue":
+        return None
+    if likely_reason == "market_weakness":
+        return (
+            f"- {month}: Monitor; market context is weak and no PriceLabs rule change is justified yet. "
+            "Revisit rule areas only if weakness persists after market context improves."
+        )
+    if likely_reason == "insufficient_data":
+        return f"- {month}: Monitor; no recommendation because data is insufficient."
+    if likely_reason == "listing_or_conversion_issue":
+        return f"- {month}: Investigate listing/conversion before changing PriceLabs rules."
+    if likely_reason == "settings_change_impact":
+        return f"- {month}: Evaluate the prior setting change impact before changing PriceLabs rules again."
+    if not allowed:
+        return f"- {month}: Monitor; Reason Review gate is closed, so no PriceLabs rule change is recommended."
+    return None
+
+
+def recommendation_for_row(row: dict[str, str], reason_row: dict[str, str] | None = None) -> str:
+    gated = gated_recommendation_for_row(row, reason_row)
+    if gated:
+        return gated
+
     month = row["stay_month"]
     bucket = row["month_time_bucket"]
     revenue_status = row["revenue_pace_status"]
@@ -495,32 +543,37 @@ def recommendation_rows(rows: list[dict[str, str]], action_level: str) -> list[d
     ]
 
 
-def build_recommendation_lines(rows: list[dict[str, str]], action_level: str) -> list[str]:
+def build_recommendation_lines(
+    rows: list[dict[str, str]],
+    action_level: str,
+    reason_rows: list[dict[str, str]] | None = None,
+) -> list[str]:
     rows_for_action = recommendation_rows(rows, action_level)
     if not rows_for_action:
         return ["- None."]
-    return [recommendation_for_row(row) for row in rows_for_action]
+    reason_rows = reason_rows or []
+    return [recommendation_for_row(row, reason_for_month_row(row, reason_rows)) for row in rows_for_action]
 
 
-def build_recommendation_review(rows: list[dict[str, str]]) -> list[str]:
+def build_recommendation_review(rows: list[dict[str, str]], reason_rows: list[dict[str, str]] | None = None) -> list[str]:
     return [
         "## Recommendation Review",
         "",
         "### Critical Now",
         "",
-        *build_recommendation_lines(rows, "critical_now"),
+        *build_recommendation_lines(rows, "critical_now", reason_rows),
         "",
         "### Advisory",
         "",
-        *build_recommendation_lines(rows, "advisory"),
+        *build_recommendation_lines(rows, "advisory", reason_rows),
         "",
         "### Protect / No Change",
         "",
-        *build_recommendation_lines(rows, "protect"),
+        *build_recommendation_lines(rows, "protect", reason_rows),
         "",
         "### Monitor",
         "",
-        *build_recommendation_lines(rows, "monitor"),
+        *build_recommendation_lines(rows, "monitor", reason_rows),
         "",
     ]
 
@@ -687,7 +740,7 @@ def build_markdown(run_date: str, rows: list[dict[str, str]], reason_rows: list[
     lines.extend(["", *build_executive_decision_view(sorted_rows)])
     lines.extend(build_interpretation(sorted_rows))
     lines.extend(build_reason_review(reason_rows or []))
-    lines.extend(build_recommendation_review(sorted_rows))
+    lines.extend(build_recommendation_review(sorted_rows, reason_rows or []))
     lines.extend(build_booking_source_mix(sorted_rows))
     lines.extend(
         [

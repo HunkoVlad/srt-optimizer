@@ -308,6 +308,30 @@ def test_email_reason_review_is_concise_and_gated() -> None:
     assert "PriceLabs rule change justified now" not in markdown
 
 
+def test_email_recommendation_review_respects_closed_reason_gate() -> None:
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        [
+            reason_row(
+                "days_16_45",
+                "weak_pickup",
+                "listing_or_conversion_issue",
+                recommendation_allowed="false",
+                recommendation_type="investigate_listing",
+            )
+        ],
+    )
+
+    assert "## Reason Review" in markdown
+    assert "## Recommendation Review" in markdown
+    assert "- 2026-06: Investigate listing/conversion before changing PriceLabs rules." in markdown
+    assert (
+        "- 2026-06: Monitor next-month conversion risk while protecting premium positioning. "
+        "Rule areas to review:"
+    ) not in markdown
+
+
 def test_email_revenue_report_cli_writes_file(tmp_path, monkeypatch) -> None:
     rolling_file = tmp_path / "rolling_13_month_revenue_view_2026-05-08.csv"
     summary_file = tmp_path / "monthly_revenue_summary_2026-05-08.md"

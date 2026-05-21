@@ -524,6 +524,52 @@ def test_monthly_reason_review_reads_like_revenue_manager_decision() -> None:
     assert "PriceLabs rule change justified now: yes" not in markdown
 
 
+def test_recommendation_review_respects_reason_gate() -> None:
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        [
+            reason_row(
+                "days_16_45",
+                "weak_pickup",
+                "market_weakness",
+                recommendation_allowed="false",
+                recommendation_type="monitor",
+                market_context="market_weak",
+            )
+        ],
+    )
+
+    assert "## Recommendation Review" in markdown
+    assert (
+        "- 2026-06: Monitor; market context is weak and no PriceLabs rule change is justified yet. "
+        "Revisit rule areas only if weakness persists after market context improves."
+    ) in markdown
+    assert (
+        "- 2026-06: Monitor next-month conversion risk while protecting premium positioning. "
+        "Rule areas to review:"
+    ) not in markdown
+
+
+def test_price_or_rule_issue_allows_rule_area_recommendation() -> None:
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        [
+            reason_row(
+                "days_16_45",
+                "weak_pickup",
+                "price_or_rule_issue",
+                recommendation_allowed="true",
+                recommendation_type="consider_pricelabs_rule_change",
+            )
+        ],
+    )
+
+    assert "- 2026-06: Monitor next-month conversion risk while protecting premium positioning." in markdown
+    assert "Rule areas to review: Booking Recency Factor; minimum stay rules; 1-night LOS premium." in markdown
+
+
 def test_monthly_revenue_summary_cli_writes_file(tmp_path, monkeypatch) -> None:
     rolling_file = tmp_path / "rolling_13_month_revenue_view_2026-05-08.csv"
     output_file = tmp_path / "monthly_revenue_summary_2026-05-08.md"

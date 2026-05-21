@@ -144,7 +144,7 @@ def key_snapshot_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return [by_month[month] for month in sorted(by_month)]
 
 
-def recommendation_section(rows: list[dict[str, str]]) -> list[str]:
+def recommendation_section(rows: list[dict[str, str]], reason_rows: list[dict[str, str]] | None = None) -> list[str]:
     lines = ["## Recommendation Review", ""]
     recommendation_rows = action_rows(rows, "critical_now") + action_rows(rows, "advisory") + protected_rows(rows)
     if not recommendation_rows:
@@ -153,7 +153,7 @@ def recommendation_section(rows: list[dict[str, str]]) -> list[str]:
         return lines
 
     for action_level in ("critical_now", "advisory", "protect"):
-        for line in build_recommendation_lines(rows, action_level):
+        for line in build_recommendation_lines(rows, action_level, reason_rows or []):
             if line != "- None.":
                 lines.append(line)
     lines.append("")
@@ -226,7 +226,7 @@ def build_markdown(run_date: str, rows: list[dict[str, str]], reason_rows: list[
         ]
     )
     lines.extend(reason_review_section(reason_rows or []))
-    lines.extend(recommendation_section(sorted_rows))
+    lines.extend(recommendation_section(sorted_rows, reason_rows or []))
     lines.extend(booking_source_notes(sorted_rows))
     lines.extend(
         [
