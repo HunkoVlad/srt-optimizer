@@ -9,7 +9,7 @@ Operator checklist for the current V1 pipeline.
 - One-session PriceLabs download-all workflow
 - Next 180 days only
 - Optional local PriceLabs credential login fallback; manual login remains available
-- Headless Windows Task Scheduler daily test is validated; switch to weekly production only after scheduler timing and power settings are confirmed
+- Weekly headless Windows Task Scheduler workflow is validated
 - No dashboards
 
 ## Run Checklist
@@ -131,28 +131,36 @@ MFA behavior:
 
 Persistent browser session support exists, but testing showed PriceLabs may require login again even with a persistent profile. For now, `-UseLocalCredentials` is the preferred optional convenience path. Manual login remains the fallback.
 
-## Temporary Daily Scheduler Test
+## Production Weekly Scheduler
 
-After the manual workflow works locally, test the Playwright wrapper from Windows Task Scheduler with a separate temporary daily task. The headless daily test can run while the computer is locked, but the computer must be awake and online. Do not replace the existing scheduler task until the daily test and power settings are validated.
+The headless PriceLabs workflow now runs successfully from Windows Task Scheduler. It can run while the computer is locked, but the computer must be awake and online.
 
 Task name:
 
 ```text
-Aloha Poconos PriceLabs Daily Test
+Aloha Poconos Weekly PriceLabs Headless Pipeline
 ```
+
+The previous manual/raw scheduler task should remain disabled:
+
+```text
+Aloha Poconos Weekly Revenue Pipeline
+```
+
+If the current Task Scheduler task still has a test name such as `Aloha Poconos PriceLabs Daily Headless Test`, rename or recreate it as `Aloha Poconos Weekly PriceLabs Headless Pipeline` for production clarity.
 
 Action values:
 
 Program/script:
 
 ```text
-PowerShell
+PowerShell.exe
 ```
 
 Arguments:
 
 ```text
--NoProfile -ExecutionPolicy Bypass -File "C:\Users\Volodymyr\srt-optimizer\scripts\run_weekly_with_pricelabs_downloads.ps1" -RunDate today -UseLocalCredentials
+-NoProfile -ExecutionPolicy Bypass -File "C:\Users\Volodymyr\srt-optimizer\scripts\run_weekly_with_pricelabs_downloads.ps1" -RunDate today -UseLocalCredentials -Headless
 ```
 
 Start in:
@@ -163,23 +171,25 @@ C:\Users\Volodymyr\srt-optimizer
 
 Do not quote the `Start in` path.
 
-Scheduler test rules:
+Weekly trigger:
 
-- This is a temporary daily validation schedule, not the production weekly schedule.
+- Monday 9:00 AM.
+- Repeat every 1 week.
+
+Scheduler rules:
+
 - Credentials stay in `.local/pricelabs.env`; do not store them in the task action.
 - PriceLabs MFA may still require manual completion and may block unattended execution.
 - Locked screen is OK for headless mode.
 - Sleep, hibernate, or powered-off state is not OK.
 - The computer must be awake and have internet access during the scheduled window.
 - Gmail/send mode is not changed by the wrapper.
-- Check Task Scheduler `Last Run Result` after each test.
+- Check Task Scheduler `Last Run Result` after each run.
 - Check logs under `data/runs/<today>/logs/`.
-- Disable or delete `Aloha Poconos PriceLabs Daily Test` after validation.
-- Move to a weekly trigger only after the daily test is stable and MFA behavior is understood.
 
 ## Scheduler Power Requirements
 
-Before moving the daily test to a weekly production trigger, confirm Windows power and Task Scheduler settings:
+For the production weekly trigger, confirm Windows power and Task Scheduler settings:
 
 - Enable `Wake the computer to run this task`.
 - Optionally enable `Start only if the following network connection is available`.
@@ -204,11 +214,23 @@ These commands affect AC plugged-in behavior. Do not apply them if the machine s
 Confirm Task Scheduler wake settings:
 
 ```powershell
-(Get-ScheduledTask -TaskName "Aloha Poconos PriceLabs Daily Test").Settings |
+(Get-ScheduledTask -TaskName "Aloha Poconos Weekly PriceLabs Headless Pipeline").Settings |
     Select-Object WakeToRun, RunOnlyIfNetworkAvailable
 ```
 
-If the task is later converted to weekly production, run the same check against the final weekly task name.
+Confirm the last scheduled run succeeded:
+
+```powershell
+Get-ScheduledTaskInfo -TaskName "Aloha Poconos Weekly PriceLabs Headless Pipeline"
+```
+
+Expected validation:
+
+- `LastTaskResult = 0`.
+- `data/runs/<run_date>/raw/` has all 5 trusted inputs.
+- `data/runs/<run_date>/downloads_staging/` is absent after success.
+- `data/runs/<run_date>/analysis/` has report files.
+- `data/runs/<run_date>/settings/` has normalized settings files.
 
 ## After The Run
 

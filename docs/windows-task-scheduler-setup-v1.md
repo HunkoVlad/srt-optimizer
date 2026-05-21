@@ -15,35 +15,42 @@ The wrapper is responsible for:
 - Calling the main pipeline.
 - Safe email config summary without secrets.
 
-This setup preserves the older safe scheduler wrapper and documents the newer PriceLabs Playwright workflow separately. Raw files remain the source of truth. The headless daily test for `.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate today -UseLocalCredentials -Headless` has been validated, but the weekly production switch should wait until scheduler timing, power, and MFA behavior are confirmed.
+This setup preserves the older safe scheduler wrapper for reference and documents the production PriceLabs Playwright workflow. Raw files remain the source of truth. The headless PriceLabs task has been validated from Windows Task Scheduler with `LastTaskResult = 0`.
 
 The local PriceLabs credential fallback uses `.local/pricelabs.env`; credentials must not be stored in the scheduled task action.
 
-## Temporary Daily PriceLabs Workflow Test
+## Production Weekly PriceLabs Headless Task
 
-The Playwright weekly workflow can be tested from Windows Task Scheduler with a separate temporary daily task. Do not replace the existing `Aloha Poconos Weekly Revenue Pipeline` task yet, and do not enable this as the weekly production schedule until the daily test, power behavior, and MFA behavior are validated.
+The production task should use a clear weekly name. If the active task still has a test name such as `Aloha Poconos PriceLabs Daily Headless Test`, rename or recreate it as the production task below.
 
 Task name:
 
 ```text
-Aloha Poconos PriceLabs Daily Test
+Aloha Poconos Weekly PriceLabs Headless Pipeline
 ```
 
-Recommended trigger:
+The older manual/raw task should remain disabled:
 
-- Daily.
-- Temporary validation only.
+```text
+Aloha Poconos Weekly Revenue Pipeline
+```
+
+Trigger:
+
+- Weekly.
+- Monday 9:00 AM.
+- Repeat every 1 week.
 - Choose a time when the computer is awake and has internet access.
 - Headless mode can run while the screen is locked.
 - Sleep, hibernate, or powered-off state prevents the task from running.
-- Run only when the user is logged on for initial testing; use `Run whether user is logged on or not` only after headless validation.
+- Use `Run whether user is logged on or not` only after validating it under the same Windows account.
 
 Action values:
 
 Program/script:
 
 ```text
-PowerShell
+PowerShell.exe
 ```
 
 Arguments:
@@ -70,23 +77,31 @@ Credential and MFA notes:
 
 Validation:
 
-- In Task Scheduler, check `Last Run Result` for `Aloha Poconos PriceLabs Daily Test`.
+- In Task Scheduler, check `Last Run Result` for `Aloha Poconos Weekly PriceLabs Headless Pipeline`.
+- Confirm `LastTaskResult = 0` with:
+
+```powershell
+Get-ScheduledTaskInfo -TaskName "Aloha Poconos Weekly PriceLabs Headless Pipeline"
+```
+
 - Check preserved logs under `data/runs/<today>/logs/`.
 - Confirm raw inputs were promoted under `data/runs/<today>/raw/`.
+- Confirm all 5 trusted raw inputs exist:
+  - `priceLabs_future_export.csv`
+  - `price_occ.csv`
+  - `monthly_trends.csv`
+  - `bookings_report.xlsx`
+  - `pricelabs_settings_snapshot_from_ui.json`
+- Confirm `downloads_staging/` is absent after success.
 - Confirm reports were generated under `data/runs/<today>/analysis/`.
+- Confirm settings files were generated under `data/runs/<today>/settings/`.
 - If the task fails, keep `downloads_staging/` for troubleshooting.
-
-After validation:
-
-- Disable or delete `Aloha Poconos PriceLabs Daily Test`.
-- Switch to a weekly trigger only after the daily test proves reliable and MFA behavior is understood.
-- Keep the old scheduler task unchanged until this workflow is explicitly accepted as the replacement.
 
 ## Power And Wake Requirements
 
 Task Scheduler can run the headless PriceLabs workflow while Windows is locked. It cannot run while the computer is asleep, hibernating, powered off, or offline.
 
-Recommended task settings for the daily test and any future weekly production task:
+Recommended task settings for the production weekly task:
 
 - Enable `Wake the computer to run this task`.
 - Enable `Start only if the following network connection is available` if the machine has a reliable named network profile.
@@ -108,42 +123,38 @@ powercfg /change hibernate-timeout-ac 0
 
 These commands affect AC plugged-in behavior. They should not be used if the computer is expected to sleep automatically while plugged in.
 
-Confirm `WakeToRun` and network settings for the daily test task:
+Confirm `WakeToRun` and network settings for the weekly task:
 
 ```powershell
-(Get-ScheduledTask -TaskName "Aloha Poconos PriceLabs Daily Test").Settings |
+(Get-ScheduledTask -TaskName "Aloha Poconos Weekly PriceLabs Headless Pipeline").Settings |
     Select-Object WakeToRun, RunOnlyIfNetworkAvailable
 ```
 
-If the workflow is later moved to a weekly production task, repeat this check with the final weekly task name.
-
 ## Recommended Schedule
 
-Recommended timing: Monday morning after raw PriceLabs files are manually refreshed and placed in:
+Recommended timing for the production headless workflow:
+
+- Monday 9:00 AM.
+- Weekly, interval 1.
+- The wrapper downloads, validates, promotes raw inputs, runs the pipeline, and cleans staging after success.
+
+## Legacy Manual Raw Scheduler Task
+
+The old manual/raw scheduler task is retained only as a disabled fallback/reference.
+
+Name:
 
 ```text
-data/runs/<run_date>/raw/
+Aloha Poconos Weekly Revenue Pipeline
 ```
 
-If raw files are not present, the wrapper should fail safely and log the missing files.
+Status:
 
-Do not hard-code this timing as mandatory. Choose a weekly time after raw files are normally available.
+```text
+Disabled
+```
 
-## Task Scheduler Settings
-
-### General
-
-- Name: `Aloha Poconos Weekly Revenue Pipeline`
-- Run only when user is logged on, at least for initial testing.
-- Configure for Windows 10/11.
-
-### Trigger
-
-- Weekly.
-- Monday morning.
-- Time chosen by user after raw files are normally available.
-
-### Action
+Original action:
 
 Program/script:
 
@@ -163,7 +174,7 @@ Start in:
 C:\Users\Volodymyr\srt-optimizer
 ```
 
-Important: the first Task Scheduler version should not pass `RunDate`. The wrapper should default to today’s date.
+Note: this legacy task is disabled. It is kept only as a manual/raw fallback reference.
 
 Manual testing with a fixed run date can still use:
 
@@ -185,28 +196,22 @@ Recommended:
 
 ## Manual Validation Steps
 
-### A. Confirm Local Manual Wrapper Works
+### A. Confirm Production Wrapper Works
 
 ```powershell
-.\scripts\run_scheduled_weekly_pipeline.ps1 -RunDate 2026-05-08
+.\scripts\run_weekly_with_pricelabs_downloads.ps1 -RunDate today -UseLocalCredentials -Headless
 ```
 
-### B. Prepare A Test Run Folder
+### B. Confirm Raw Inputs
 
-Create a new run folder for a test date only if raw files are copied there:
-
-```text
-data/runs/<test_date>/raw/
-```
-
-Required raw files:
+The successful production wrapper run should promote these files:
 
 ```text
-priceLabs_future_export.csv
-price_occ.csv
-monthly_trends.csv
-bookings_report.xlsx
-pricelabs_settings_snapshot_from_ui.json
+data/runs/<today>/raw/priceLabs_future_export.csv
+data/runs/<today>/raw/price_occ.csv
+data/runs/<today>/raw/monthly_trends.csv
+data/runs/<today>/raw/bookings_report.xlsx
+data/runs/<today>/raw/pricelabs_settings_snapshot_from_ui.json
 ```
 
 Optional/deprecated for the current monthly reporting flow:
@@ -217,22 +222,31 @@ kpis_on_the_books.xlsx
 
 `monthly_trends.csv` is required because it is the monthly revenue, occupancy, and ADR truth source. `bookings_report.xlsx` is required because it supplies reservation-level cleaning, length-of-stay, and booking-window metrics. `pricelabs_settings_manual_input.json` is deprecated/manual fallback only and is not the primary settings source when the UI snapshot exists.
 
-### C. Run The Task Manually
+### C. Run The Scheduler Task Manually
 
 Use Task Scheduler’s `Run` action for the task.
 
-### D. Check The Log
+### D. Check Last Run Result
 
-```text
-data/runs/<today>/logs/scheduled_pipeline_<today>.log
+```powershell
+Get-ScheduledTaskInfo -TaskName "Aloha Poconos Weekly PriceLabs Headless Pipeline"
 ```
 
-### E. Confirm Outputs
+Expected: `LastTaskResult = 0`.
+
+### E. Check The Log
+
+```text
+data/runs/<today>/logs/
+```
+
+### F. Confirm Outputs
 
 ```text
 data/runs/<today>/analysis/email_revenue_report_<today>.html
 data/runs/<today>/analysis/email_revenue_report_<today>.md
 data/runs/<today>/analysis/monthly_revenue_summary_<today>.md
+data/runs/<today>/settings/pricelabs_settings_snapshot_<today>.json
 ```
 
 ## Failure Validation
@@ -304,6 +318,6 @@ Different Windows user account:
 ## Guardrails
 
 - No email send mode change in this step.
-- Do not replace the old weekly task until the daily headless test is accepted as production-ready.
+- Keep `Aloha Poconos Weekly Revenue Pipeline` disabled unless intentionally falling back to manual/raw inputs.
 - Keep scheduled testing draft-first.
 - Keep raw files as the source of truth.
