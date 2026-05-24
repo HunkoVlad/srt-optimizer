@@ -80,6 +80,21 @@ def test_weekly_with_pricelabs_downloads_wrapper_accepts_today_run_date() -> Non
     assert "RunDate must use YYYY-MM-DD format or today." in script
 
 
+def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "run_weekly_pipeline.ps1").read_text(encoding="utf-8")
+
+    combined_position = script.index('"analysis.combined_market_listing_signal"')
+    email_position = script.index('"pricelabs.transform.email_revenue_report"')
+
+    assert combined_position < email_position
+    assert '"-m", "analysis.combined_market_listing_signal"' in script
+    assert '"-m", "pricelabs.transform.email_revenue_report"' in script
+    assert '$combinedMarketListingSignalFile = Join-Path $analysisDir "combined_market_listing_signal_$RunDate.csv"' in script
+    assert '"--combined-signal-file", $combinedMarketListingSignalFile' in script
+    assert "combined_market_listing_signal output path:" in script
+
+
 def test_weekly_with_pricelabs_downloads_cleans_staging_only_after_success() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     script_path = repo_root / "scripts" / "run_weekly_with_pricelabs_downloads.ps1"

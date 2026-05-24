@@ -133,6 +133,7 @@ $settingsSnapshotFile = Join-Path $settingsDir "pricelabs_settings_snapshot_$Run
 $settingsChangesFile = Join-Path $settingsDir "pricelabs_settings_changes_$RunDate.csv"
 $signalReviewFile = Join-Path $analysisDir "future_signal_change_review_$RunDate.csv"
 $performanceReasonReviewFile = Join-Path $analysisDir "performance_reason_review_$RunDate.csv"
+$combinedMarketListingSignalFile = Join-Path $analysisDir "combined_market_listing_signal_$RunDate.csv"
 $runtimeConfig = Join-Path $settingsDir "pricelabs_transform_config.toml"
 
 @"
@@ -277,6 +278,17 @@ Invoke-PythonStep "Performance reason review" @(
     "--output-file", $performanceReasonReviewFile
 )
 
+Invoke-PythonStep "combined_market_listing_signal" @(
+    "-m", "analysis.combined_market_listing_signal",
+    "--run-date", $RunDate,
+    "--run-dir", $runRoot,
+    "--future-file", $enrichedFile,
+    "--rolling-file", $rollingRevenueViewFile,
+    "--future-window-signals-file", $signalsFile,
+    "--output-file", $combinedMarketListingSignalFile
+)
+Write-Host "combined_market_listing_signal output path: $combinedMarketListingSignalFile"
+
 Invoke-PythonStep "Monthly revenue summary" @(
     "-m", "pricelabs.transform.monthly_revenue_summary",
     "--run-date", $RunDate,
@@ -291,6 +303,7 @@ Invoke-PythonStep "Email revenue report" @(
     "--rolling-file", $rollingRevenueViewFile,
     "--summary-file", $monthlyRevenueSummaryFile,
     "--reason-review-file", $performanceReasonReviewFile,
+    "--combined-signal-file", $combinedMarketListingSignalFile,
     "--output-file", $emailRevenueReportFile
 )
 

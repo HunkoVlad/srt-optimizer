@@ -226,6 +226,34 @@ def reason_row(
     }
 
 
+def combined_signal_row(
+    category: str = "outperformance_pricing_efficiency_investigation",
+    market: str = "down",
+    listing: str = "above_similar",
+) -> dict[str, str]:
+    return {
+        "run_date": "2026-05-08",
+        "window_name": "weekly",
+        "window_start": "2026-05-01",
+        "window_end": "2026-05-08",
+        "market_health_signal": market,
+        "listing_airbnb_signal": listing,
+        "revenue_pace_signal": "weak",
+        "occupancy_gap_signal": "behind",
+        "cleaning_efficiency_signal": "inefficient",
+        "combined_signal_category": category,
+        "investigation_priority": "medium",
+        "explanation": "Listing signals are stronger than a soft market; investigate pricing efficiency before any rule change.",
+        "allowed_recommendation_scope": "pricelabs_rule_review_only_if_core_metrics_support_it",
+        "data_quality_status": "complete",
+        "notes": "Airbnb can raise investigation priority, not recommend changes.",
+        "average_overall_conversion_rate": "1.65",
+        "first_page_search_impression_rate": "55.6",
+        "search_to_listing_conversion_rate": "35.99",
+        "listing_to_booking_conversion_rate": "3.98",
+    }
+
+
 def test_email_revenue_report_content() -> None:
     markdown = build_markdown("2026-05-08", sample_rows())
 
@@ -233,6 +261,7 @@ def test_email_revenue_report_content() -> None:
     assert "## Executive Snapshot" in markdown
     assert "## What Needs Attention" in markdown
     assert "## What To Protect" in markdown
+    assert "## Market vs Listing Signal" in markdown
     assert "## Recommendation Review" in markdown
     assert "## Booking Source Notes" in markdown
     assert "## Data Notes" in markdown
@@ -271,6 +300,98 @@ def test_email_revenue_report_content() -> None:
     )
     for phrase in prohibited:
         assert phrase not in markdown.lower()
+
+
+def test_email_includes_market_vs_listing_signal_when_combined_csv_exists() -> None:
+    markdown = build_markdown("2026-05-08", sample_rows(), combined_signal_rows=[combined_signal_row()])
+
+    assert "## Market vs Listing Signal" in markdown
+    assert (
+        "Market/listing signal: Outperformance / pricing-efficiency review. "
+        "Airbnb diagnostics are above similar listings, but PriceLabs core metrics show weak revenue pace, "
+        "behind-market occupancy, and inefficient cleaning performance. This should be treated as a high-priority "
+        "pricing-efficiency review, not an automatic discount signal. Protect premium positioning and avoid filling "
+        "gaps with low-value turnovers unless PriceLabs revenue pace and booking-window data justify it."
+    ) in markdown
+    assert "Investigation priority: medium." in markdown
+    assert "Data quality status: complete." in markdown
+    assert "Average overall conversion rate: 1.65%." in markdown
+    assert "First-page search impression rate: 55.6%." in markdown
+    assert "Search-to-listing conversion rate: 35.99%." in markdown
+    assert "Listing-to-booking conversion rate: 3.98%." in markdown
+
+
+def test_email_handles_missing_combined_signal_gracefully() -> None:
+    markdown = build_markdown("2026-05-08", sample_rows(), combined_signal_rows=[])
+
+    assert "## Market vs Listing Signal" in markdown
+    assert "Combined market/listing signal unavailable for this run." in markdown
+
+
+def test_airbnb_only_signal_does_not_create_pricelabs_recommendation() -> None:
+    signal = combined_signal_row(category="insufficient_data", market="unknown", listing="down")
+    signal.update(
+        {
+            "allowed_recommendation_scope": "none",
+            "explanation": "PriceLabs market/revenue context is missing.",
+            "data_quality_status": "missing_pricelabs_context",
+        }
+    )
+    markdown = build_markdown("2026-05-08", sample_rows(), combined_signal_rows=[signal])
+
+    assert "PriceLabs market/revenue context is missing." in markdown
+    assert "Airbnb diagnostics can raise investigation priority" in markdown
+    assert "Airbnb rule" not in markdown
+    assert "automatic discount signal" not in markdown
+    assert "Pricing efficiency risk:" not in markdown
+
+
+def test_market_vs_listing_section_does_not_add_forbidden_airbnb_truth_fields() -> None:
+    markdown = build_markdown("2026-05-08", sample_rows(), combined_signal_rows=[combined_signal_row()])
+    section = markdown.split("## Market vs Listing Signal", 1)[1].split("## Recommendation Review", 1)[0]
+    forbidden = (
+        "lower price",
+        "raise price",
+        "manual override",
+        "airbnb booked nights",
+        "airbnb booking totals",
+        "airbnb cleaning count",
+        "airbnb monthly revenue pace",
+        "manual calendar",
+    )
+
+    for phrase in forbidden:
+        assert phrase not in section.lower()
+
+
+def test_recommendation_review_includes_pricing_efficiency_risk_context() -> None:
+    markdown = build_markdown("2026-05-08", sample_rows(), combined_signal_rows=[combined_signal_row()])
+    recommendation_section = markdown.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+
+    assert (
+        "Pricing efficiency risk: PriceLabs core metrics show weak revenue pace, behind-market occupancy, and inefficient cleaning performance. "
+        "Treat this as investigation context only; no rule change is recommended unless existing PriceLabs recommendation logic supports it."
+    ) in recommendation_section
+    assert recommendation_section.index("Pricing efficiency risk:") < recommendation_section.index("- 2026-06:")
+    assert "- 2026-06: Monitor" in recommendation_section
+    forbidden = (
+        "lower prices",
+        "discount",
+        "reduce base price",
+        "change pricelabs rule",
+        "adjust minimum price",
+    )
+    for phrase in forbidden:
+        assert phrase not in recommendation_section.lower()
+
+
+def test_recommendation_review_omits_pricing_efficiency_risk_for_incomplete_core_data() -> None:
+    signal = combined_signal_row()
+    signal["data_quality_status"] = "partial"
+    markdown = build_markdown("2026-05-08", sample_rows(), combined_signal_rows=[signal])
+    recommendation_section = markdown.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+
+    assert "Pricing efficiency risk:" not in recommendation_section
 
 
 def test_email_reason_review_is_concise_and_gated() -> None:
@@ -362,3 +483,146 @@ def test_email_revenue_report_cli_writes_file(tmp_path, monkeypatch) -> None:
     assert run() == 0
     assert output_file.exists()
     assert "Aloha Poconos Weekly Revenue Snapshot" in output_file.read_text(encoding="utf-8")
+
+
+def test_email_revenue_report_cli_defaults_to_per_run_analysis_paths(tmp_path, monkeypatch) -> None:
+    run_date = "2026-05-08"
+    monkeypatch.chdir(tmp_path)
+    analysis_dir = tmp_path / "data" / "runs" / run_date / "analysis"
+    rolling_file = analysis_dir / f"rolling_13_month_revenue_view_{run_date}.csv"
+    summary_file = analysis_dir / f"monthly_revenue_summary_{run_date}.md"
+    reason_file = analysis_dir / f"performance_reason_review_{run_date}.csv"
+    combined_file = analysis_dir / f"combined_market_listing_signal_{run_date}.csv"
+    output_file = analysis_dir / f"email_revenue_report_{run_date}.md"
+
+    analysis_dir.mkdir(parents=True)
+    with rolling_file.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=sample_rows()[0].keys())
+        writer.writeheader()
+        writer.writerows(sample_rows())
+    summary_file.write_text("# Monthly Revenue Summary - 2026-05-08\n", encoding="utf-8")
+    with reason_file.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=reason_row("days_0_15", "none", "no_issue").keys())
+        writer.writeheader()
+        writer.writerow(reason_row("days_0_15", "none", "no_issue"))
+    with combined_file.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=combined_signal_row().keys())
+        writer.writeheader()
+        writer.writerow(combined_signal_row())
+
+    monkeypatch.setattr(sys, "argv", ["email_revenue_report", "--run-date", run_date])
+
+    assert run() == 0
+    markdown = output_file.read_text(encoding="utf-8")
+    assert "## Reason Review" in markdown
+    assert "## Market vs Listing Signal" in markdown
+    assert "## Recommendation Review" in markdown
+    assert markdown.index("## Reason Review") < markdown.index("## Market vs Listing Signal") < markdown.index("## Recommendation Review")
+    assert "Outperformance / pricing-efficiency review" in markdown
+
+
+def test_email_revenue_report_cli_reads_combined_signal_from_output_analysis_dir(tmp_path, monkeypatch) -> None:
+    run_date = "2026-05-08"
+    analysis_dir = tmp_path / "data" / "runs" / run_date / "analysis"
+    rolling_file = analysis_dir / f"rolling_13_month_revenue_view_{run_date}.csv"
+    summary_file = analysis_dir / f"monthly_revenue_summary_{run_date}.md"
+    output_file = analysis_dir / f"email_revenue_report_{run_date}.md"
+    combined_file = analysis_dir / f"combined_market_listing_signal_{run_date}.csv"
+
+    analysis_dir.mkdir(parents=True)
+    with rolling_file.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=sample_rows()[0].keys())
+        writer.writeheader()
+        writer.writerows(sample_rows())
+    summary_file.write_text("# Monthly Revenue Summary - 2026-05-08\n", encoding="utf-8")
+    with combined_file.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=combined_signal_row().keys())
+        writer.writeheader()
+        writer.writerow(combined_signal_row())
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "email_revenue_report",
+            "--run-date",
+            run_date,
+            "--rolling-file",
+            str(rolling_file),
+            "--summary-file",
+            str(summary_file),
+            "--output-file",
+            str(output_file),
+        ],
+    )
+
+    assert run() == 0
+    markdown = output_file.read_text(encoding="utf-8")
+    assert "## Market vs Listing Signal" in markdown
+    assert markdown.index("## Market vs Listing Signal") < markdown.index("## Recommendation Review")
+    assert "Outperformance / pricing-efficiency review" in markdown
+
+
+def test_email_revenue_report_cli_combined_signal_override_and_missing_default(tmp_path, monkeypatch) -> None:
+    run_date = "2026-05-08"
+    rolling_file = tmp_path / f"rolling_13_month_revenue_view_{run_date}.csv"
+    summary_file = tmp_path / f"monthly_revenue_summary_{run_date}.md"
+    output_file = tmp_path / f"email_revenue_report_{run_date}.md"
+    override_file = tmp_path / "override_combined_signal.csv"
+
+    with rolling_file.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=sample_rows()[0].keys())
+        writer.writeheader()
+        writer.writerows(sample_rows())
+    summary_file.write_text("# Monthly Revenue Summary - 2026-05-08\n", encoding="utf-8")
+    with override_file.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=combined_signal_row().keys())
+        writer.writeheader()
+        writer.writerow(combined_signal_row(category="market_softness", market="down", listing="down"))
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "email_revenue_report",
+            "--run-date",
+            run_date,
+            "--rolling-file",
+            str(rolling_file),
+            "--summary-file",
+            str(summary_file),
+            "--output-file",
+            str(output_file),
+            "--combined-signal-file",
+            str(override_file),
+        ],
+    )
+
+    assert run() == 0
+    markdown = output_file.read_text(encoding="utf-8")
+    assert "Market/listing signal: Market softness." in markdown
+
+    output_file.unlink()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "email_revenue_report",
+            "--run-date",
+            run_date,
+            "--rolling-file",
+            str(rolling_file),
+            "--summary-file",
+            str(summary_file),
+            "--output-file",
+            str(output_file),
+        ],
+    )
+
+    assert run() == 0
+    markdown = output_file.read_text(encoding="utf-8")
+    assert "## Market vs Listing Signal" in markdown
+    assert "Combined market/listing signal unavailable for this run." in markdown
+    assert "## Recommendation Review" in markdown
+    assert "- 2026-06: Monitor" in markdown
+    assert "Pricing efficiency risk:" not in markdown

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 import sys
 
@@ -42,6 +43,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reason-review-file",
         help="Optional performance reason review CSV. Defaults to analysis/performance_reason_review_<run-date>.csv.",
+    )
+    parser.add_argument(
+        "--combined-signal-file",
+        help="Optional combined market/listing signal CSV. Defaults to analysis/combined_market_listing_signal_<run-date>.csv.",
     )
     return parser.parse_args()
 
@@ -144,8 +149,31 @@ def key_snapshot_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return [by_month[month] for month in sorted(by_month)]
 
 
-def recommendation_section(rows: list[dict[str, str]], reason_rows: list[dict[str, str]] | None = None) -> list[str]:
+def has_pricing_efficiency_risk(signal_rows: list[dict[str, str]] | None) -> bool:
+    if not signal_rows:
+        return False
+    row = signal_rows[0]
+    return (
+        row.get("revenue_pace_signal", "") == "weak"
+        and row.get("occupancy_gap_signal", "") == "behind"
+        and row.get("cleaning_efficiency_signal", "") == "inefficient"
+        and row.get("data_quality_status", "") == "complete"
+    )
+
+
+def recommendation_section(
+    rows: list[dict[str, str]],
+    reason_rows: list[dict[str, str]] | None = None,
+    combined_signal_rows: list[dict[str, str]] | None = None,
+) -> list[str]:
     lines = ["## Recommendation Review", ""]
+    if has_pricing_efficiency_risk(combined_signal_rows):
+        lines.extend(
+            [
+                "- Pricing efficiency risk: PriceLabs core metrics show weak revenue pace, behind-market occupancy, and inefficient cleaning performance. Treat this as investigation context only; no rule change is recommended unless existing PriceLabs recommendation logic supports it.",
+                "",
+            ]
+        )
     recommendation_rows = action_rows(rows, "critical_now") + action_rows(rows, "advisory") + protected_rows(rows)
     if not recommendation_rows:
         lines.append("- None.")
@@ -179,6 +207,135 @@ def reason_review_section(reason_rows: list[dict[str, str]]) -> list[str]:
     return lines
 
 
+def read_combined_signal_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
+def default_combined_signal_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"combined_market_listing_signal_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "analysis" / f"combined_market_listing_signal_{run_date}.csv"
+
+
+def default_output_path(run_date: str) -> Path:
+    return Path("data") / "runs" / run_date / "analysis" / f"email_revenue_report_{run_date}.md"
+
+
+def default_analysis_input_path(run_date: str, output_path: Path, filename: str) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / filename
+    return Path("data") / "runs" / run_date / "analysis" / filename
+
+
+def display_category(value: str) -> str:
+    labels = {
+        "healthy_alignment": "Healthy alignment",
+        "market_softness": "Market softness",
+        "listing_specific_investigation": "Listing-specific investigation",
+        "outperformance_pricing_efficiency_investigation": "Outperformance / pricing-efficiency review",
+        "urgent_revenue_occupancy_gap": "Urgent revenue / occupancy gap",
+        "insufficient_data": "Insufficient data",
+    }
+    return labels.get(value, (value or "unknown").replace("_", " ").capitalize())
+
+
+def display_signal(value: str) -> str:
+    labels = {
+        "above_similar": "above similar listings",
+        "above_similar_listings": "above similar listings",
+        "below_similar": "below similar listings",
+        "below_similar_listings": "below similar listings",
+        "above_market": "above market",
+        "market_soft": "soft",
+        "down": "soft",
+        "up": "up",
+        "stable": "stable",
+    }
+    return labels.get(value, (value or "unknown").replace("_", " "))
+
+
+def display_signal_value(key: str, value: str) -> str:
+    if not value:
+        return "unknown"
+    percent_keys = {
+        "average_overall_conversion_rate",
+        "first_page_search_impression_rate",
+        "search_to_listing_conversion_rate",
+        "listing_to_booking_conversion_rate",
+    }
+    if key in percent_keys and not value.endswith("%"):
+        return f"{value}%"
+    return value
+
+
+def market_vs_listing_signal_section(signal_rows: list[dict[str, str]] | None) -> list[str]:
+    lines = ["## Market vs Listing Signal", ""]
+    if not signal_rows:
+        lines.append("- Combined market/listing signal unavailable for this run.")
+        lines.append("")
+        return lines
+
+    row = signal_rows[0]
+    category = row.get("combined_signal_category", "")
+    market = row.get("market_health_signal", "") or "unknown"
+    listing = row.get("listing_airbnb_signal", "") or "unknown"
+    explanation = row.get("explanation", "") or "Combined signal explanation unavailable."
+
+    if category == "outperformance_pricing_efficiency_investigation":
+        if (
+            market == "down"
+            and listing in {"above_similar", "above_similar_listings"}
+            and row.get("revenue_pace_signal", "") == "weak"
+            and row.get("occupancy_gap_signal", "") == "behind"
+            and row.get("cleaning_efficiency_signal", "") == "inefficient"
+        ):
+            lines.append(
+                "- Market/listing signal: Outperformance / pricing-efficiency review. "
+                "Airbnb diagnostics are above similar listings, but PriceLabs core metrics show weak revenue pace, "
+                "behind-market occupancy, and inefficient cleaning performance. This should be treated as a high-priority "
+                "pricing-efficiency review, not an automatic discount signal. Protect premium positioning and avoid filling "
+                "gaps with low-value turnovers unless PriceLabs revenue pace and booking-window data justify it."
+            )
+        else:
+            lines.append(
+                "- Market/listing signal: Outperformance / pricing-efficiency review. "
+                f"Airbnb listing signals are {display_signal(listing)} while broader market context is {display_signal(market)}. "
+                "This is positive, but may indicate pricing power. Review PriceLabs revenue pace, ADR, open ask, "
+                "booking pace, and cleaning efficiency before any rule change."
+            )
+    else:
+        lines.append(
+            f"- Market/listing signal: {display_category(category)}. "
+            f"Market health: {display_signal(market)}; listing Airbnb signal: {display_signal(listing)}. {explanation}"
+        )
+    metric_lines = [
+        (key, label)
+        for key, label in (
+            ("average_overall_conversion_rate", "Average overall conversion rate"),
+            ("first_page_search_impression_rate", "First-page search impression rate"),
+            ("search_to_listing_conversion_rate", "Search-to-listing conversion rate"),
+            ("listing_to_booking_conversion_rate", "Listing-to-booking conversion rate"),
+        )
+        if row.get(key, "")
+    ]
+    lines.extend(
+        [
+            f"- Investigation priority: {row.get('investigation_priority', '') or 'unknown'}.",
+            f"- Revenue pace signal: {row.get('revenue_pace_signal', '') or 'unknown'}.",
+            f"- Occupancy gap signal: {row.get('occupancy_gap_signal', '') or 'unknown'}.",
+            f"- Cleaning efficiency signal: {row.get('cleaning_efficiency_signal', '') or 'unknown'}.",
+            *[f"- {label}: {display_signal_value(key, row.get(key, ''))}." for key, label in metric_lines],
+            f"- Data quality status: {row.get('data_quality_status', '') or 'unknown'}.",
+            "- Airbnb diagnostics can raise investigation priority, but PriceLabs remains the source of truth for revenue, occupancy, ADR, booked nights, booking totals, cleaning count, and monthly revenue pace.",
+            "",
+        ]
+    )
+    return lines
+
+
 def booking_source_notes(rows: list[dict[str, str]]) -> list[str]:
     lines = ["## Booking Source Notes", ""]
     source_rows = [
@@ -195,7 +352,12 @@ def booking_source_notes(rows: list[dict[str, str]]) -> list[str]:
     return lines
 
 
-def build_markdown(run_date: str, rows: list[dict[str, str]], reason_rows: list[dict[str, str]] | None = None) -> str:
+def build_markdown(
+    run_date: str,
+    rows: list[dict[str, str]],
+    reason_rows: list[dict[str, str]] | None = None,
+    combined_signal_rows: list[dict[str, str]] | None = None,
+) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
         f"Subject: Aloha Poconos Weekly Revenue Snapshot — {run_date}",
@@ -226,7 +388,8 @@ def build_markdown(run_date: str, rows: list[dict[str, str]], reason_rows: list[
         ]
     )
     lines.extend(reason_review_section(reason_rows or []))
-    lines.extend(recommendation_section(sorted_rows, reason_rows or []))
+    lines.extend(market_vs_listing_signal_section(combined_signal_rows))
+    lines.extend(recommendation_section(sorted_rows, reason_rows or [], combined_signal_rows))
     lines.extend(booking_source_notes(sorted_rows))
     lines.extend(
         [
@@ -304,17 +467,31 @@ def write_markdown(path: Path, content: str) -> None:
 
 def run() -> int:
     args = parse_args()
-    rolling_path = Path(args.rolling_file or f"analysis/rolling_13_month_revenue_view_{args.run_date}.csv")
-    summary_path = Path(args.summary_file or f"analysis/monthly_revenue_summary_{args.run_date}.md")
-    output_path = Path(args.output_file or f"analysis/email_revenue_report_{args.run_date}.md")
-    reason_path = Path(args.reason_review_file or f"analysis/performance_reason_review_{args.run_date}.csv")
+    output_path = Path(args.output_file) if args.output_file else default_output_path(args.run_date)
+    rolling_path = Path(args.rolling_file) if args.rolling_file else default_analysis_input_path(
+        args.run_date, output_path, f"rolling_13_month_revenue_view_{args.run_date}.csv"
+    )
+    summary_path = Path(args.summary_file) if args.summary_file else default_analysis_input_path(
+        args.run_date, output_path, f"monthly_revenue_summary_{args.run_date}.md"
+    )
+    reason_path = Path(args.reason_review_file) if args.reason_review_file else default_analysis_input_path(
+        args.run_date, output_path, f"performance_reason_review_{args.run_date}.csv"
+    )
+    combined_signal_path = Path(args.combined_signal_file) if args.combined_signal_file else default_combined_signal_path(args.run_date, output_path)
 
     if not summary_path.exists():
         raise FileNotFoundError(f"Monthly revenue summary markdown does not exist: {summary_path}")
 
+    print(f"Email revenue report rolling input: {rolling_path}")
+    print(f"Email revenue report summary input: {summary_path}")
+    print(f"Email revenue report reason review input: {reason_path}")
+    print(f"Email revenue report combined signal input: {combined_signal_path}")
+    print(f"Email revenue report output: {output_path}")
+
     rows = read_monthly_rows(rolling_path)
     reason_rows = read_reason_rows(reason_path)
-    write_markdown(output_path, build_markdown(args.run_date, rows, reason_rows))
+    combined_signal_rows = read_combined_signal_rows(combined_signal_path)
+    write_markdown(output_path, build_markdown(args.run_date, rows, reason_rows, combined_signal_rows))
     print(f"Wrote {output_path}")
     return 0
 

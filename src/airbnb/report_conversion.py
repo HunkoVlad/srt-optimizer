@@ -22,7 +22,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--run-dir", help="Run directory. Defaults to data/runs/<run-date>.")
     parser.add_argument("--summary-file", help="Weekly Airbnb conversion summary CSV.")
     parser.add_argument("--daily-file", help="Daily Airbnb week-over-week CSV.")
+    parser.add_argument("--daily-average-file", help="Daily Airbnb weekly-average deviation CSV.")
     parser.add_argument("--history-file", help="Airbnb retained weekly history comparison CSV.")
+    parser.add_argument("--similar-summary-file", help="Airbnb similar-listing summary CSV.")
+    parser.add_argument("--similar-daily-file", help="Airbnb daily similar-listing comparison CSV.")
     parser.add_argument("--output-file", help="Markdown report output path.")
     return parser.parse_args(argv)
 
@@ -37,6 +40,18 @@ def default_daily_path(run_dir: Path, run_date: str) -> Path:
 
 def default_history_path(run_dir: Path, run_date: str) -> Path:
     return run_dir / "analysis" / f"airbnb_weekly_history_comparison_{run_date}.csv"
+
+
+def default_daily_average_path(run_dir: Path, run_date: str) -> Path:
+    return run_dir / "analysis" / f"airbnb_daily_week_average_deviation_{run_date}.csv"
+
+
+def default_similar_summary_path(run_dir: Path, run_date: str) -> Path:
+    return run_dir / "analysis" / f"airbnb_similar_listing_summary_{run_date}.csv"
+
+
+def default_similar_daily_path(run_dir: Path, run_date: str) -> Path:
+    return run_dir / "analysis" / f"airbnb_daily_similar_listing_comparison_{run_date}.csv"
 
 
 def default_output_path(run_dir: Path, run_date: str) -> Path:
@@ -122,8 +137,8 @@ def weekly_signal_lines(row: dict[str, str], history_rows: list[dict[str, str]] 
     lines = []
     for label, value_key, change_key in fields:
         value = row.get(value_key, "") or "-"
-        change = row.get(change_key, "") if change_key else ""
         history_row = history.get(value_key, {})
+        change = history_row.get("change_vs_previous_week", "") or (row.get(change_key, "") if change_key else "")
         last_4_week_avg = history_row.get("last_4_week_avg", "") or "-"
         change_vs_last_4_week_avg = history_row.get("change_vs_last_4_week_avg", "") or "-"
         lines.append(f"| {label} | {value} | {change or '-'} | {last_4_week_avg} | {change_vs_last_4_week_avg} |")
@@ -145,11 +160,82 @@ def neutral_note(row: dict[str, str]) -> str:
     return "Airbnb conversion signals are available for the selected week; PriceLabs market context is required before assigning cause."
 
 
+def average_deviation_extremes(rows: list[dict[str, str]], metric_page: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    metric_rows = [
+        row
+        for row in rows
+        if row.get("airbnb_metric_page") == metric_page and numeric(row.get("difference_vs_week_avg", "")) is not None
+    ]
+    sorted_rows = sorted(metric_rows, key=lambda row: numeric(row.get("difference_vs_week_avg", "")) or 0)
+    below = [row for row in sorted_rows if (numeric(row.get("difference_vs_week_avg", "")) or 0) < 0][:3]
+    above = [row for row in reversed(sorted_rows) if (numeric(row.get("difference_vs_week_avg", "")) or 0) > 0][:3]
+    return below, above
+
+
+def format_average_deviation(row: dict[str, str]) -> str:
+    pct = row.get("percent_difference_vs_week_avg", "")
+    pct_text = f" ({pct}%)" if pct else ""
+    return (
+        f"{row.get('report_date', '-')} {row.get('weekday', '')}: "
+        f"{row.get('daily_value', '-')} vs avg {row.get('current_week_avg', '-')} "
+        f"({row.get('difference_vs_week_avg', '-')}{pct_text})"
+    ).strip()
+
+
+def similar_summary_lines(rows: list[dict[str, str]]) -> list[str]:
+    lines = []
+    for row in rows:
+        if row.get("data_quality_status") not in {"parsed", "partial"}:
+            continue
+        if not row.get("current_value") and not row.get("similar_listing_value"):
+            continue
+        label = row.get("metric_name", row.get("airbnb_metric_page", "-"))
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    label,
+                    row.get("current_value", "") or "-",
+                    row.get("similar_listing_value", "") or "-",
+                    row.get("difference_vs_similar_listings", "") or "-",
+                    row.get("percent_difference_vs_similar_listings", "") or "-",
+                ]
+            )
+            + " |"
+        )
+    return lines
+
+
+def similar_daily_extremes(rows: list[dict[str, str]], metric_page: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    metric_rows = [
+        row
+        for row in rows
+        if row.get("airbnb_metric_page") == metric_page and numeric(row.get("difference_vs_similar_listings", "")) is not None
+    ]
+    sorted_rows = sorted(metric_rows, key=lambda row: numeric(row.get("difference_vs_similar_listings", "")) or 0)
+    below = [row for row in sorted_rows if (numeric(row.get("difference_vs_similar_listings", "")) or 0) < 0][:3]
+    above = [row for row in reversed(sorted_rows) if (numeric(row.get("difference_vs_similar_listings", "")) or 0) > 0][:3]
+    return below, above
+
+
+def format_similar_daily(row: dict[str, str]) -> str:
+    pct = row.get("percent_difference_vs_similar_listings", "")
+    pct_text = f" ({pct}%)" if pct else ""
+    return (
+        f"{row.get('report_date', '-')} {row.get('weekday', '')}: "
+        f"{row.get('your_value', '-')} vs similar {row.get('similar_listing_value', '-')} "
+        f"({row.get('difference_vs_similar_listings', '-')}{pct_text})"
+    ).strip()
+
+
 def render_report(
     run_date: str,
     summary_rows: list[dict[str, str]],
     daily_rows: list[dict[str, str]],
     history_rows: list[dict[str, str]] | None = None,
+    daily_average_rows: list[dict[str, str]] | None = None,
+    similar_summary_rows: list[dict[str, str]] | None = None,
+    similar_daily_rows: list[dict[str, str]] | None = None,
 ) -> str:
     row = dict(weekly_row(summary_rows))
     context = history_context(history_rows or [])
@@ -188,11 +274,49 @@ def render_report(
             lines.append("- Largest improvements:")
             lines.extend(f"  - {format_change(item)}" for item in improvements) if improvements else lines.append("  - None")
         lines.append("")
+    lines.append("## Daily Movement vs Weekly Average")
+    lines.append("")
+    for metric_page in ("page_views", "wishlist_additions", "booking_conversion"):
+        below, above = average_deviation_extremes(daily_average_rows or [], metric_page)
+        lines.append(f"### {metric_page}")
+        if not below and not above:
+            lines.append("- Daily weekly-average deviation rows are unavailable.")
+        else:
+            lines.append("- Largest below-average days:")
+            lines.extend(f"  - {format_average_deviation(item)}" for item in below) if below else lines.append("  - None")
+            lines.append("- Largest above-average days:")
+            lines.extend(f"  - {format_average_deviation(item)}" for item in above) if above else lines.append("  - None")
+        lines.append("")
+    lines.append("## Similar Listings Benchmark")
+    lines.append("")
+    summary_lines = similar_summary_lines(similar_summary_rows or [])
+    if summary_lines:
+        lines.append("| Signal | Your Value | Similar Listings | Difference | % Difference |")
+        lines.append("| --- | ---: | ---: | ---: | ---: |")
+        lines.extend(summary_lines)
+    else:
+        lines.append("- Similar-listing benchmark rows are unavailable.")
+    lines.append("")
+    lines.append("## Daily Similar Listings Movement")
+    lines.append("")
+    for metric_page in ("page_views", "wishlist_additions", "booking_conversion"):
+        below, above = similar_daily_extremes(similar_daily_rows or [], metric_page)
+        lines.append(f"### {metric_page}")
+        if not below and not above:
+            lines.append("- Daily similar-listing comparison rows are unavailable.")
+        else:
+            lines.append("- Largest days below similar listings:")
+            lines.extend(f"  - {format_similar_daily(item)}" for item in below) if below else lines.append("  - None")
+            lines.append("- Largest days above similar listings:")
+            lines.extend(f"  - {format_similar_daily(item)}" for item in above) if above else lines.append("  - None")
+        lines.append("")
     lines.extend(
         [
             "## Neutral Diagnostic Notes",
             "",
             f"- {neutral_note(row)}",
+            "- These daily deviations show intra-week movement only. PriceLabs market context is required before assigning cause.",
+            "- Similar listings data is an Airbnb diagnostic benchmark only. Do not infer revenue performance, occupancy, ADR, or PriceLabs rule changes from this data alone.",
             "- Do not infer a pricing issue or market cause from Airbnb data alone.",
             "- PriceLabs market context is required before assigning cause.",
             "",
@@ -226,15 +350,29 @@ def run(
     run_dir: Path | None = None,
     summary_file: Path | None = None,
     daily_file: Path | None = None,
+    daily_average_file: Path | None = None,
     history_file: Path | None = None,
+    similar_summary_file: Path | None = None,
+    similar_daily_file: Path | None = None,
     output_file: Path | None = None,
 ) -> Path:
     resolved_run_dir = run_dir or Path("data") / "runs" / run_date
     resolved_summary = summary_file or default_summary_path(resolved_run_dir, run_date)
     resolved_daily = daily_file or default_daily_path(resolved_run_dir, run_date)
+    resolved_daily_average = daily_average_file or default_daily_average_path(resolved_run_dir, run_date)
     resolved_history = history_file or default_history_path(resolved_run_dir, run_date)
+    resolved_similar_summary = similar_summary_file or default_similar_summary_path(resolved_run_dir, run_date)
+    resolved_similar_daily = similar_daily_file or default_similar_daily_path(resolved_run_dir, run_date)
     resolved_output = output_file or default_output_path(resolved_run_dir, run_date)
-    text = render_report(run_date, read_required_summary(resolved_summary, run_date), read_csv(resolved_daily), read_csv(resolved_history))
+    text = render_report(
+        run_date,
+        read_required_summary(resolved_summary, run_date),
+        read_csv(resolved_daily),
+        read_csv(resolved_history),
+        read_csv(resolved_daily_average),
+        read_csv(resolved_similar_summary),
+        read_csv(resolved_similar_daily),
+    )
     write_report(resolved_output, text)
     return resolved_output
 
@@ -246,7 +384,10 @@ def main(argv: list[str] | None = None) -> int:
         run_dir=Path(args.run_dir) if args.run_dir else None,
         summary_file=Path(args.summary_file) if args.summary_file else None,
         daily_file=Path(args.daily_file) if args.daily_file else None,
+        daily_average_file=Path(args.daily_average_file) if args.daily_average_file else None,
         history_file=Path(args.history_file) if args.history_file else None,
+        similar_summary_file=Path(args.similar_summary_file) if args.similar_summary_file else None,
+        similar_daily_file=Path(args.similar_daily_file) if args.similar_daily_file else None,
         output_file=Path(args.output_file) if args.output_file else None,
     )
     print(f"Wrote {output}")
