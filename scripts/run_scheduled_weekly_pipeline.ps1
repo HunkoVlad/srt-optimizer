@@ -74,7 +74,6 @@ Write-Log "Raw folder: $rawDir"
 $requiredRawFiles = @(
     (Join-Path $rawDir "priceLabs_future_export.csv"),
     (Join-Path $rawDir "price_occ.csv"),
-    (Join-Path $rawDir "pricelabs_settings_manual_input.json"),
     (Join-Path $rawDir "monthly_trends.csv"),
     (Join-Path $rawDir "bookings_report.xlsx")
 )
@@ -137,7 +136,9 @@ if ($exitCode -eq 0) {
         (Join-Path $runRoot "standardized\future_daily_pricing_$RunDate.csv"),
         (Join-Path $runRoot "analysis\future_daily_pricing_enriched_$RunDate.csv"),
         (Join-Path $runRoot "analysis\monthly_revenue_summary_$RunDate.md"),
+        (Join-Path $runRoot "analysis\diagnostic_issue_tracker_$RunDate.csv"),
         (Join-Path $runRoot "analysis\email_revenue_report_$RunDate.md"),
+        (Join-Path $runRoot "analysis\evidence_bundle_$RunDate\evidence_manifest_$RunDate.json"),
         (Join-Path $runRoot "analysis\email_revenue_report_$RunDate.html"),
         (Join-Path $runRoot "analysis\email_revenue_report_$RunDate.eml")
     )

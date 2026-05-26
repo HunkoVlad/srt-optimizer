@@ -48,6 +48,14 @@ def parse_args() -> argparse.Namespace:
         "--combined-signal-file",
         help="Optional combined market/listing signal CSV. Defaults to analysis/combined_market_listing_signal_<run-date>.csv.",
     )
+    parser.add_argument(
+        "--airbnb-summary-file",
+        help="Optional Airbnb weekly conversion summary CSV. Defaults to analysis/airbnb_weekly_conversion_summary_<run-date>.csv.",
+    )
+    parser.add_argument(
+        "--diagnostic-issue-file",
+        help="Optional diagnostic issue tracker CSV. Defaults to analysis/diagnostic_issue_tracker_<run-date>.csv.",
+    )
     return parser.parse_args()
 
 
@@ -214,10 +222,36 @@ def read_combined_signal_rows(path: Path) -> list[dict[str, str]]:
         return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
 
 
+def read_airbnb_summary_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
+def read_diagnostic_issue_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
 def default_combined_signal_path(run_date: str, output_path: Path) -> Path:
     if output_path.parent.name == "analysis":
         return output_path.parent / f"combined_market_listing_signal_{run_date}.csv"
     return Path("data") / "runs" / run_date / "analysis" / f"combined_market_listing_signal_{run_date}.csv"
+
+
+def default_airbnb_summary_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"airbnb_weekly_conversion_summary_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "analysis" / f"airbnb_weekly_conversion_summary_{run_date}.csv"
+
+
+def default_diagnostic_issue_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"diagnostic_issue_tracker_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "analysis" / f"diagnostic_issue_tracker_{run_date}.csv"
 
 
 def default_output_path(run_date: str) -> Path:
@@ -336,6 +370,82 @@ def market_vs_listing_signal_section(signal_rows: list[dict[str, str]] | None) -
     return lines
 
 
+def airbnb_funnel_signals_section(summary_rows: list[dict[str, str]] | None) -> list[str]:
+    lines = ["## Airbnb Funnel Signals", ""]
+    if not summary_rows:
+        lines.extend(
+            [
+                "- Airbnb funnel diagnostics unavailable for this run.",
+                "- Airbnb funnel signals are diagnostic only. PriceLabs remains the source of truth for revenue, occupancy, ADR, booked nights, booking totals, cleaning count, and monthly revenue pace.",
+                "",
+            ]
+        )
+        return lines
+
+    row = summary_rows[0]
+    signals = (
+        ("page_views", "Page views"),
+        ("first_page_search_impressions", "First-page search impressions"),
+        ("wishlist_additions", "Wishlist additions"),
+        ("average_overall_conversion_rate", "Average overall conversion rate"),
+        ("first_page_search_impression_rate", "First-page search impression rate"),
+        ("search_to_listing_conversion_rate", "Search-to-listing conversion rate"),
+        ("listing_to_booking_conversion_rate", "Listing-to-booking conversion rate"),
+    )
+    window_start = row.get("metric_window_start", "") or "unknown"
+    window_end = row.get("metric_window_end", "") or "unknown"
+    lines.append(f"- Metric window: {window_start} to {window_end}.")
+    for key, label in signals:
+        lines.append(f"- {label}: {display_signal_value(key, row.get(key, ''))}.")
+    lines.extend(
+        [
+            "- Airbnb funnel signals are diagnostic only. PriceLabs remains the source of truth for revenue, occupancy, ADR, booked nights, booking totals, cleaning count, and monthly revenue pace.",
+            "",
+        ]
+    )
+    return lines
+
+
+def display_severity(value: str) -> str:
+    return (value or "unknown").replace("_", " ").capitalize()
+
+
+def sentence(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    return text if text.endswith((".", "!", "?")) else f"{text}."
+
+
+def open_diagnostic_issues_section(issue_rows: list[dict[str, str]] | None) -> list[str]:
+    lines = ["## Open Diagnostic Issues", ""]
+    if issue_rows is None:
+        lines.append("- No diagnostic issue tracker available for this run.")
+        lines.append("")
+        return lines
+
+    active_statuses = {"open", "improving", "monitoring"}
+    active_rows = [row for row in issue_rows if row.get("status", "").strip().lower() in active_statuses]
+    if not active_rows:
+        lines.append("- No active diagnostic issues.")
+        lines.append("")
+        return lines
+
+    for row in active_rows:
+        title = row.get("issue_title", "") or row.get("issue_id", "Diagnostic issue").replace("_", " ")
+        lines.append(f"- {display_severity(row.get('severity', ''))}: {sentence(title)}")
+        lines.append(f"  First seen: {row.get('first_seen_run_date', '') or 'unknown'}. Weeks open: {row.get('weeks_open', '') or 'unknown'}.")
+        evidence = row.get("evidence_summary", "") or "Evidence summary unavailable."
+        lines.append(f"  Evidence: {sentence(evidence)}")
+        investigation = row.get("recommended_investigation", "") or "Investigation guidance unavailable."
+        lines.append(f"  Investigation: {sentence(investigation)}")
+        guardrail = row.get("blocked_recommendation_reason", "") or "Diagnostic issue context cannot create PriceLabs rule recommendations."
+        lines.append(f"  Guardrail: {sentence(guardrail)}")
+    lines.append("- Diagnostic issues are informational only. PriceLabs remains the source of truth for revenue, occupancy, ADR, booked nights, booking totals, cleaning count, and monthly revenue pace.")
+    lines.append("")
+    return lines
+
+
 def booking_source_notes(rows: list[dict[str, str]]) -> list[str]:
     lines = ["## Booking Source Notes", ""]
     source_rows = [
@@ -357,6 +467,9 @@ def build_markdown(
     rows: list[dict[str, str]],
     reason_rows: list[dict[str, str]] | None = None,
     combined_signal_rows: list[dict[str, str]] | None = None,
+    airbnb_summary_rows: list[dict[str, str]] | None = None,
+    diagnostic_issue_rows: list[dict[str, str]] | None = None,
+    diagnostic_issue_tracker_available: bool = False,
 ) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
@@ -389,6 +502,8 @@ def build_markdown(
     )
     lines.extend(reason_review_section(reason_rows or []))
     lines.extend(market_vs_listing_signal_section(combined_signal_rows))
+    lines.extend(airbnb_funnel_signals_section(airbnb_summary_rows))
+    lines.extend(open_diagnostic_issues_section(diagnostic_issue_rows if diagnostic_issue_tracker_available else None))
     lines.extend(recommendation_section(sorted_rows, reason_rows or [], combined_signal_rows))
     lines.extend(booking_source_notes(sorted_rows))
     lines.extend(
@@ -478,6 +593,8 @@ def run() -> int:
         args.run_date, output_path, f"performance_reason_review_{args.run_date}.csv"
     )
     combined_signal_path = Path(args.combined_signal_file) if args.combined_signal_file else default_combined_signal_path(args.run_date, output_path)
+    airbnb_summary_path = Path(args.airbnb_summary_file) if args.airbnb_summary_file else default_airbnb_summary_path(args.run_date, output_path)
+    diagnostic_issue_path = Path(args.diagnostic_issue_file) if args.diagnostic_issue_file else default_diagnostic_issue_path(args.run_date, output_path)
 
     if not summary_path.exists():
         raise FileNotFoundError(f"Monthly revenue summary markdown does not exist: {summary_path}")
@@ -486,12 +603,27 @@ def run() -> int:
     print(f"Email revenue report summary input: {summary_path}")
     print(f"Email revenue report reason review input: {reason_path}")
     print(f"Email revenue report combined signal input: {combined_signal_path}")
+    print(f"Email revenue report Airbnb summary input: {airbnb_summary_path}")
+    print(f"Email revenue report diagnostic issue input: {diagnostic_issue_path}")
     print(f"Email revenue report output: {output_path}")
 
     rows = read_monthly_rows(rolling_path)
     reason_rows = read_reason_rows(reason_path)
     combined_signal_rows = read_combined_signal_rows(combined_signal_path)
-    write_markdown(output_path, build_markdown(args.run_date, rows, reason_rows, combined_signal_rows))
+    airbnb_summary_rows = read_airbnb_summary_rows(airbnb_summary_path)
+    diagnostic_issue_rows = read_diagnostic_issue_rows(diagnostic_issue_path)
+    write_markdown(
+        output_path,
+        build_markdown(
+            args.run_date,
+            rows,
+            reason_rows,
+            combined_signal_rows,
+            airbnb_summary_rows,
+            diagnostic_issue_rows,
+            diagnostic_issue_path.exists(),
+        ),
+    )
     print(f"Wrote {output_path}")
     return 0
 

@@ -33,8 +33,11 @@ def test_scheduled_wrapper_reports_new_required_raw_files_when_missing() -> None
         assert result.returncode != 0
         assert log_file.exists()
         log_text = log_file.read_text(encoding="utf-8")
+        assert "priceLabs_future_export.csv" in log_text
+        assert "price_occ.csv" in log_text
         assert "monthly_trends.csv" in log_text
         assert "bookings_report.xlsx" in log_text
+        assert "pricelabs_settings_manual_input.json" not in log_text
         assert "Pipeline not executed because required inputs are incomplete." in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -84,15 +87,27 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     repo_root = Path(__file__).resolve().parents[1]
     script = (repo_root / "run_weekly_pipeline.ps1").read_text(encoding="utf-8")
 
+    airbnb_position = script.index('"airbnb.run_diagnostics"')
     combined_position = script.index('"analysis.combined_market_listing_signal"')
+    diagnostic_position = script.index('"analysis.diagnostic_issue_tracker"')
     email_position = script.index('"pricelabs.transform.email_revenue_report"')
+    evidence_position = script.index('"pricelabs.transform.evidence_bundle"')
+    html_position = script.index('"pricelabs.transform.email_html_report"')
+    draft_position = script.index('"pricelabs.transform.email_draft_file"')
 
-    assert combined_position < email_position
+    assert airbnb_position < combined_position < diagnostic_position < email_position < evidence_position < html_position < draft_position
+    assert '"-m", "airbnb.run_diagnostics"' in script
     assert '"-m", "analysis.combined_market_listing_signal"' in script
+    assert '"-m", "analysis.diagnostic_issue_tracker"' in script
     assert '"-m", "pricelabs.transform.email_revenue_report"' in script
+    assert '"-m", "pricelabs.transform.evidence_bundle"' in script
     assert '$combinedMarketListingSignalFile = Join-Path $analysisDir "combined_market_listing_signal_$RunDate.csv"' in script
+    assert '$diagnosticIssueTrackerFile = Join-Path $analysisDir "diagnostic_issue_tracker_$RunDate.csv"' in script
     assert '"--combined-signal-file", $combinedMarketListingSignalFile' in script
+    assert '"--diagnostic-issue-file", $diagnosticIssueTrackerFile' in script
     assert "combined_market_listing_signal output path:" in script
+    assert "diagnostic_issue_tracker output path:" in script
+    assert "evidence_bundle manifest path:" in script
 
 
 def test_weekly_with_pricelabs_downloads_cleans_staging_only_after_success() -> None:
@@ -132,3 +147,30 @@ def test_pricelabs_production_scheduler_task_is_documented() -> None:
         assert ".local/pricelabs.env" in doc
         assert "MFA" in doc
         assert "Gmail/send mode" in doc
+
+
+def test_scheduled_wrapper_checks_evidence_bundle_manifest_output() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts" / "run_scheduled_weekly_pipeline.ps1").read_text(encoding="utf-8")
+
+    assert 'analysis\\evidence_bundle_$RunDate\\evidence_manifest_$RunDate.json' in script
+    assert 'analysis\\diagnostic_issue_tracker_$RunDate.csv' in script
+    assert 'analysis\\email_revenue_report_$RunDate.md' in script
+    assert script.index('analysis\\diagnostic_issue_tracker_$RunDate.csv') < script.index('analysis\\email_revenue_report_$RunDate.md')
+    assert script.index('analysis\\email_revenue_report_$RunDate.md') < script.index(
+        'analysis\\evidence_bundle_$RunDate\\evidence_manifest_$RunDate.json'
+    )
+
+
+def test_scheduled_wrapper_required_raw_inputs_match_current_pricelabs_sources() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts" / "run_scheduled_weekly_pipeline.ps1").read_text(encoding="utf-8")
+    required_block = script.split("$requiredRawFiles = @(", 1)[1].split("\n)", 1)[0]
+
+    assert "priceLabs_future_export.csv" in required_block
+    assert "price_occ.csv" in required_block
+    assert "monthly_trends.csv" in required_block
+    assert "bookings_report.xlsx" in required_block
+    assert "pricelabs_settings_manual_input.json" not in required_block
+    assert "pricelabs_settings_snapshot_from_ui.json" not in required_block
+    assert "airbnb_" not in required_block

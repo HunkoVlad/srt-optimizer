@@ -82,11 +82,25 @@ def core_specs(run_date: str) -> list[EvidenceSpec]:
             "combined_market_listing_signal",
             "core",
         ),
+        EvidenceSpec(
+            f"analysis/diagnostic_issue_tracker_{run_date}.csv",
+            "diagnostic_issue_tracker",
+            False,
+            "open_diagnostic_issue_history",
+            "combined",
+        ),
     ]
 
 
 def high_priority_specs(run_date: str) -> list[EvidenceSpec]:
     return [
+        EvidenceSpec(
+            f"analysis/airbnb_conversion_diagnostic_report_{run_date}.md",
+            "airbnb_diagnostic",
+            False,
+            "airbnb_funnel_diagnostic_report",
+            "diagnostic",
+        ),
         EvidenceSpec(
             f"analysis/airbnb_weekly_history_comparison_{run_date}.csv",
             "airbnb_diagnostic",

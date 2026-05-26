@@ -254,6 +254,62 @@ def combined_signal_row(
     }
 
 
+def airbnb_summary_row() -> dict[str, str]:
+    return {
+        "run_date": "2026-05-08",
+        "metric_window_start": "2026-05-17",
+        "metric_window_end": "2026-05-24",
+        "airbnb_data_quality_status": "complete",
+        "comparison_type": "previous_week",
+        "comparison_window_start": "2026-05-10",
+        "comparison_window_end": "2026-05-17",
+        "page_views": "335",
+        "first_page_search_impressions": "3535",
+        "wishlist_additions": "36",
+        "average_overall_conversion_rate": "0.14%",
+        "first_page_search_impression_rate": "60.9%",
+        "search_to_listing_conversion_rate": "9.48%",
+        "listing_to_booking_conversion_rate": "1.49%",
+        "page_views_change_vs_previous_week": "159",
+        "wishlist_additions_change_vs_previous_week": "8",
+        "first_page_search_impressions_change_vs_previous_week": "",
+        "overall_conversion_change_vs_previous_week": "",
+        "search_to_listing_change_vs_previous_week": "",
+        "listing_to_booking_change_vs_previous_week": "",
+        "has_recent_history_baseline": "true",
+        "has_similar_listing_benchmark": "true",
+        "diagnostic_confidence": "high",
+        "parsed_metric_pages": "booking_conversion;page_views;wishlist_additions",
+        "missing_metric_pages": "",
+        "diagnostic_summary": "Airbnb conversion signals are available for the selected week.",
+        "notes": "Airbnb diagnostic only.",
+    }
+
+
+def diagnostic_issue_row(status: str = "open") -> dict[str, str]:
+    return {
+        "issue_id": "airbnb_visibility_up_conversion_down",
+        "issue_title": "Airbnb visibility up, conversion down",
+        "first_seen_run_date": "2026-05-25",
+        "last_seen_run_date": "2026-05-25",
+        "status": status,
+        "severity": "high",
+        "source_type": "airbnb_diagnostic",
+        "signal_type": "visibility_up_conversion_down",
+        "current_value": "3535",
+        "previous_value": "489",
+        "wow_change": "3046",
+        "four_week_average": "654",
+        "weeks_open": "1",
+        "evidence_summary": "First-page search impressions increased sharply: 3535 vs 489. Conversion weakened / remained weak.",
+        "suspected_cause": "listing competitiveness / value perception / booking friction",
+        "recommended_investigation": "Review listing against competitors before changing PriceLabs rules.",
+        "blocked_recommendation_reason": "Airbnb diagnostic signal alone cannot create PriceLabs rule recommendation.",
+        "resolution_rule": "Keep open until conversion improves for 2 consecutive runs; V1 does not auto-resolve.",
+        "notes": "Diagnostic issue only; no recommendation action is created.",
+    }
+
+
 def test_email_revenue_report_content() -> None:
     markdown = build_markdown("2026-05-08", sample_rows())
 
@@ -262,6 +318,8 @@ def test_email_revenue_report_content() -> None:
     assert "## What Needs Attention" in markdown
     assert "## What To Protect" in markdown
     assert "## Market vs Listing Signal" in markdown
+    assert "## Airbnb Funnel Signals" in markdown
+    assert "## Open Diagnostic Issues" in markdown
     assert "## Recommendation Review" in markdown
     assert "## Booking Source Notes" in markdown
     assert "## Data Notes" in markdown
@@ -300,6 +358,95 @@ def test_email_revenue_report_content() -> None:
     )
     for phrase in prohibited:
         assert phrase not in markdown.lower()
+
+
+def test_airbnb_funnel_section_includes_count_and_rate_separately() -> None:
+    markdown = build_markdown("2026-05-08", sample_rows(), airbnb_summary_rows=[airbnb_summary_row()])
+    section = markdown.split("## Airbnb Funnel Signals", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "- Metric window: 2026-05-17 to 2026-05-24." in section
+    assert "- Page views: 335." in section
+    assert "- First-page search impressions: 3535." in section
+    assert "- First-page search impression rate: 60.9%." in section
+    assert "- Average overall conversion rate: 0.14%." in section
+    assert "- Search-to-listing conversion rate: 9.48%." in section
+    assert "- Listing-to-booking conversion rate: 1.49%." in section
+    assert "First-page search impressions: 3535%." not in section
+
+
+def test_airbnb_funnel_section_handles_missing_summary() -> None:
+    markdown = build_markdown("2026-05-08", sample_rows(), airbnb_summary_rows=[])
+    section = markdown.split("## Airbnb Funnel Signals", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Airbnb funnel diagnostics unavailable for this run." in section
+    assert "Airbnb funnel signals are diagnostic only." in section
+    assert "- 2026-06: Monitor" in markdown
+
+
+def test_airbnb_funnel_section_does_not_change_recommendation_logic() -> None:
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        combined_signal_rows=[combined_signal_row()],
+        airbnb_summary_rows=[airbnb_summary_row()],
+    )
+    recommendation_section = markdown.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+
+    assert "- 2026-06: Monitor" in recommendation_section
+    assert "Airbnb Funnel Signals" not in recommendation_section
+    assert "lower price" not in recommendation_section.lower()
+    assert "raise price" not in recommendation_section.lower()
+
+
+def test_open_diagnostic_issues_section_appears_when_open_issue_exists() -> None:
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        diagnostic_issue_rows=[diagnostic_issue_row()],
+        diagnostic_issue_tracker_available=True,
+    )
+    section = markdown.split("## Open Diagnostic Issues", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "High: Airbnb visibility up, conversion down." in section
+    assert "First seen: 2026-05-25. Weeks open: 1." in section
+    assert "Evidence: First-page search impressions increased sharply: 3535 vs 489. Conversion weakened / remained weak." in section
+    assert "Investigation: Review listing against competitors before changing PriceLabs rules." in section
+    assert "Guardrail: Airbnb diagnostic signal alone cannot create PriceLabs rule recommendation." in section
+    assert "Diagnostic issues are informational only." in section
+
+
+def test_open_diagnostic_issues_section_handles_missing_tracker() -> None:
+    markdown = build_markdown("2026-05-08", sample_rows())
+    section = markdown.split("## Open Diagnostic Issues", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "No diagnostic issue tracker available for this run." in section
+
+
+def test_open_diagnostic_issues_section_omits_resolved_only_tracker() -> None:
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        diagnostic_issue_rows=[diagnostic_issue_row(status="resolved")],
+        diagnostic_issue_tracker_available=True,
+    )
+    section = markdown.split("## Open Diagnostic Issues", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "No active diagnostic issues." in section
+    assert "Airbnb visibility up, conversion down" not in section
+
+
+def test_open_diagnostic_issues_do_not_change_recommendation_review() -> None:
+    without_issue = build_markdown("2026-05-08", sample_rows())
+    with_issue = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        diagnostic_issue_rows=[diagnostic_issue_row()],
+        diagnostic_issue_tracker_available=True,
+    )
+
+    without_recommendations = without_issue.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    with_recommendations = with_issue.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    assert with_recommendations == without_recommendations
 
 
 def test_email_includes_market_vs_listing_signal_when_combined_csv_exists() -> None:

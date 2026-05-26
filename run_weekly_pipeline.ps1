@@ -127,6 +127,7 @@ $monthlyRevenueSummaryFile = Join-Path $analysisDir "monthly_revenue_summary_$Ru
 $emailRevenueReportFile = Join-Path $analysisDir "email_revenue_report_$RunDate.md"
 $emailHtmlReportFile = Join-Path $analysisDir "email_revenue_report_$RunDate.html"
 $emailDraftFile = Join-Path $analysisDir "email_revenue_report_$RunDate.eml"
+$evidenceBundleManifestFile = Join-Path (Join-Path $analysisDir "evidence_bundle_$RunDate") "evidence_manifest_$RunDate.json"
 $summaryFile = Join-Path $analysisDir "future_window_summary_$RunDate.csv"
 $signalsFile = Join-Path $analysisDir "future_window_signals_$RunDate.csv"
 $settingsSnapshotFile = Join-Path $settingsDir "pricelabs_settings_snapshot_$RunDate.json"
@@ -134,6 +135,7 @@ $settingsChangesFile = Join-Path $settingsDir "pricelabs_settings_changes_$RunDa
 $signalReviewFile = Join-Path $analysisDir "future_signal_change_review_$RunDate.csv"
 $performanceReasonReviewFile = Join-Path $analysisDir "performance_reason_review_$RunDate.csv"
 $combinedMarketListingSignalFile = Join-Path $analysisDir "combined_market_listing_signal_$RunDate.csv"
+$diagnosticIssueTrackerFile = Join-Path $analysisDir "diagnostic_issue_tracker_$RunDate.csv"
 $runtimeConfig = Join-Path $settingsDir "pricelabs_transform_config.toml"
 
 @"
@@ -278,6 +280,12 @@ Invoke-PythonStep "Performance reason review" @(
     "--output-file", $performanceReasonReviewFile
 )
 
+Invoke-PythonStep "Airbnb diagnostics" @(
+    "-m", "airbnb.run_diagnostics",
+    "--run-date", $RunDate,
+    "--run-dir", $runRoot
+)
+
 Invoke-PythonStep "combined_market_listing_signal" @(
     "-m", "analysis.combined_market_listing_signal",
     "--run-date", $RunDate,
@@ -288,6 +296,13 @@ Invoke-PythonStep "combined_market_listing_signal" @(
     "--output-file", $combinedMarketListingSignalFile
 )
 Write-Host "combined_market_listing_signal output path: $combinedMarketListingSignalFile"
+
+Invoke-PythonStep "diagnostic_issue_tracker" @(
+    "-m", "analysis.diagnostic_issue_tracker",
+    "--run-date", $RunDate,
+    "--run-dir", $runRoot
+)
+Write-Host "diagnostic_issue_tracker output path: $diagnosticIssueTrackerFile"
 
 Invoke-PythonStep "Monthly revenue summary" @(
     "-m", "pricelabs.transform.monthly_revenue_summary",
@@ -304,8 +319,16 @@ Invoke-PythonStep "Email revenue report" @(
     "--summary-file", $monthlyRevenueSummaryFile,
     "--reason-review-file", $performanceReasonReviewFile,
     "--combined-signal-file", $combinedMarketListingSignalFile,
+    "--diagnostic-issue-file", $diagnosticIssueTrackerFile,
     "--output-file", $emailRevenueReportFile
 )
+
+Invoke-PythonStep "Email evidence bundle" @(
+    "-m", "pricelabs.transform.evidence_bundle",
+    "--run-date", $RunDate,
+    "--run-dir", $runRoot
+)
+Write-Host "evidence_bundle manifest path: $evidenceBundleManifestFile"
 
 Invoke-PythonStep "Email HTML report" @(
     "-m", "pricelabs.transform.email_html_report",
