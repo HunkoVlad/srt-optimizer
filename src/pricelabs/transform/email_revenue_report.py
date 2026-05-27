@@ -56,6 +56,14 @@ def parse_args() -> argparse.Namespace:
         "--diagnostic-issue-file",
         help="Optional diagnostic issue tracker CSV. Defaults to analysis/diagnostic_issue_tracker_<run-date>.csv.",
     )
+    parser.add_argument(
+        "--listing-review-file",
+        help="Optional listing competitor review CSV. Defaults to analysis/listing_competitor_review_<run-date>.csv.",
+    )
+    parser.add_argument(
+        "--competitor-list-file",
+        help="Optional PriceLabs competitor list CSV. Defaults to raw/pricelabs_competitor_list_<run-date>.csv.",
+    )
     return parser.parse_args()
 
 
@@ -236,6 +244,13 @@ def read_diagnostic_issue_rows(path: Path) -> list[dict[str, str]]:
         return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
 
 
+def read_listing_review_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
 def default_combined_signal_path(run_date: str, output_path: Path) -> Path:
     if output_path.parent.name == "analysis":
         return output_path.parent / f"combined_market_listing_signal_{run_date}.csv"
@@ -252,6 +267,25 @@ def default_diagnostic_issue_path(run_date: str, output_path: Path) -> Path:
     if output_path.parent.name == "analysis":
         return output_path.parent / f"diagnostic_issue_tracker_{run_date}.csv"
     return Path("data") / "runs" / run_date / "analysis" / f"diagnostic_issue_tracker_{run_date}.csv"
+
+
+def default_listing_review_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"listing_competitor_review_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "analysis" / f"listing_competitor_review_{run_date}.csv"
+
+
+def default_listing_review_markdown_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"listing_competitor_review_{run_date}.md"
+    return Path("data") / "runs" / run_date / "analysis" / f"listing_competitor_review_{run_date}.md"
+
+
+def default_competitor_list_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        run_dir = output_path.parent.parent
+        return run_dir / "raw" / f"pricelabs_competitor_list_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "raw" / f"pricelabs_competitor_list_{run_date}.csv"
 
 
 def default_output_path(run_date: str) -> Path:
@@ -446,6 +480,59 @@ def open_diagnostic_issues_section(issue_rows: list[dict[str, str]] | None) -> l
     return lines
 
 
+def listing_review_needed_section(
+    run_date: str,
+    review_rows: list[dict[str, str]] | None,
+    *,
+    full_review_available: bool = False,
+    competitor_list_available: bool = False,
+) -> list[str]:
+    lines = ["## Listing Review Needed", ""]
+    if not review_rows:
+        lines.append("- No active listing-side review is needed for this run.")
+        lines.append("")
+        return lines
+
+    focus_order = [
+        "search_card_appeal",
+        "cover_photo_first_five_photos",
+        "title_description_opening",
+        "amenities_presentation",
+        "guest_fit_sleeping_capacity",
+        "trust_review_signals",
+        "booking_friction_risks",
+        "competitor_comparison",
+    ]
+    label_map = {
+        "search_card_appeal": "search card appeal",
+        "cover_photo_first_five_photos": "cover/first photos",
+        "title_description_opening": "title/opening copy",
+        "amenities_presentation": "amenities presentation",
+        "guest_fit_sleeping_capacity": "guest fit",
+        "trust_review_signals": "trust signals",
+        "booking_friction_risks": "booking friction",
+        "competitor_comparison": "competitor comparison",
+    }
+    available = {row.get("review_area", "") for row in review_rows}
+    focus_labels = [label_map[area] for area in focus_order if area in available]
+    if not focus_labels:
+        focus_labels = ["listing presentation", "booking friction", "competitor comparison"]
+
+    lines.extend(
+        [
+            "- Listing-side review is recommended because an open diagnostic issue shows Airbnb visibility increased sharply while conversion weakened or remained weak.",
+            f"- Focus review areas: {', '.join(focus_labels)}.",
+            "- Guardrail: This is diagnostic only and does not create a PriceLabs rule recommendation.",
+        ]
+    )
+    if full_review_available:
+        lines.append(f"- Full review: see listing_competitor_review_{run_date}.md in the evidence bundle.")
+    if competitor_list_available:
+        lines.append(f"- Competitor set: see pricelabs_competitor_list_{run_date}.csv in the evidence bundle.")
+    lines.append("")
+    return lines
+
+
 def booking_source_notes(rows: list[dict[str, str]]) -> list[str]:
     lines = ["## Booking Source Notes", ""]
     source_rows = [
@@ -470,6 +557,10 @@ def build_markdown(
     airbnb_summary_rows: list[dict[str, str]] | None = None,
     diagnostic_issue_rows: list[dict[str, str]] | None = None,
     diagnostic_issue_tracker_available: bool = False,
+    listing_review_rows: list[dict[str, str]] | None = None,
+    listing_review_available: bool = False,
+    listing_review_markdown_available: bool = False,
+    competitor_list_available: bool = False,
 ) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
@@ -504,6 +595,14 @@ def build_markdown(
     lines.extend(market_vs_listing_signal_section(combined_signal_rows))
     lines.extend(airbnb_funnel_signals_section(airbnb_summary_rows))
     lines.extend(open_diagnostic_issues_section(diagnostic_issue_rows if diagnostic_issue_tracker_available else None))
+    lines.extend(
+        listing_review_needed_section(
+            run_date,
+            listing_review_rows if listing_review_available else None,
+            full_review_available=listing_review_markdown_available,
+            competitor_list_available=competitor_list_available,
+        )
+    )
     lines.extend(recommendation_section(sorted_rows, reason_rows or [], combined_signal_rows))
     lines.extend(booking_source_notes(sorted_rows))
     lines.extend(
@@ -595,6 +694,9 @@ def run() -> int:
     combined_signal_path = Path(args.combined_signal_file) if args.combined_signal_file else default_combined_signal_path(args.run_date, output_path)
     airbnb_summary_path = Path(args.airbnb_summary_file) if args.airbnb_summary_file else default_airbnb_summary_path(args.run_date, output_path)
     diagnostic_issue_path = Path(args.diagnostic_issue_file) if args.diagnostic_issue_file else default_diagnostic_issue_path(args.run_date, output_path)
+    listing_review_path = Path(args.listing_review_file) if args.listing_review_file else default_listing_review_path(args.run_date, output_path)
+    listing_review_markdown_path = default_listing_review_markdown_path(args.run_date, output_path)
+    competitor_list_path = Path(args.competitor_list_file) if args.competitor_list_file else default_competitor_list_path(args.run_date, output_path)
 
     if not summary_path.exists():
         raise FileNotFoundError(f"Monthly revenue summary markdown does not exist: {summary_path}")
@@ -605,6 +707,9 @@ def run() -> int:
     print(f"Email revenue report combined signal input: {combined_signal_path}")
     print(f"Email revenue report Airbnb summary input: {airbnb_summary_path}")
     print(f"Email revenue report diagnostic issue input: {diagnostic_issue_path}")
+    print(f"Email revenue report listing review input: {listing_review_path}")
+    print(f"Email revenue report listing review markdown: {listing_review_markdown_path}")
+    print(f"Email revenue report competitor list input: {competitor_list_path}")
     print(f"Email revenue report output: {output_path}")
 
     rows = read_monthly_rows(rolling_path)
@@ -612,6 +717,7 @@ def run() -> int:
     combined_signal_rows = read_combined_signal_rows(combined_signal_path)
     airbnb_summary_rows = read_airbnb_summary_rows(airbnb_summary_path)
     diagnostic_issue_rows = read_diagnostic_issue_rows(diagnostic_issue_path)
+    listing_review_rows = read_listing_review_rows(listing_review_path)
     write_markdown(
         output_path,
         build_markdown(
@@ -622,6 +728,10 @@ def run() -> int:
             airbnb_summary_rows,
             diagnostic_issue_rows,
             diagnostic_issue_path.exists(),
+            listing_review_rows,
+            listing_review_path.exists(),
+            listing_review_markdown_path.exists(),
+            competitor_list_path.exists(),
         ),
     )
     print(f"Wrote {output_path}")

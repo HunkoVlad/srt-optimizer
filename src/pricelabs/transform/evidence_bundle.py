@@ -89,6 +89,34 @@ def core_specs(run_date: str) -> list[EvidenceSpec]:
             "open_diagnostic_issue_history",
             "combined",
         ),
+        EvidenceSpec(
+            f"analysis/listing_competitor_review_{run_date}.md",
+            "listing_competitor_review",
+            False,
+            "listing_side_investigation",
+            "diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/listing_competitor_review_{run_date}.csv",
+            "listing_competitor_review",
+            False,
+            "listing_side_investigation",
+            "diagnostic",
+        ),
+        EvidenceSpec(
+            f"raw/pricelabs_competitor_list_{run_date}.csv",
+            "listing_competitor_review",
+            False,
+            "manually_selected_pricelabs_competitor_set",
+            "diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/pricelabs_competitor_calendar_{run_date}.csv",
+            "competitor_calendar",
+            False,
+            "pricelabs_competitor_price_min_stay_availability_context_90_day",
+            "diagnostic",
+        ),
     ]
 
 

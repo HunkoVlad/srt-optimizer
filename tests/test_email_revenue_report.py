@@ -310,6 +310,20 @@ def diagnostic_issue_row(status: str = "open") -> dict[str, str]:
     }
 
 
+def listing_review_row(review_area: str = "search_card_appeal") -> dict[str, str]:
+    return {
+        "run_date": "2026-05-25",
+        "issue_id": "airbnb_visibility_up_conversion_down",
+        "review_area": review_area,
+        "current_observation": "Airbnb visibility increased sharply, so the search card should be reviewed.",
+        "risk_level": "high",
+        "suggested_investigation": "Compare listing presentation against similar listings.",
+        "suggested_test": "Test cover photo or title/opening value emphasis.",
+        "price_rule_change_allowed": "false",
+        "notes": "V1 template-based listing-side review.",
+    }
+
+
 def test_email_revenue_report_content() -> None:
     markdown = build_markdown("2026-05-08", sample_rows())
 
@@ -320,6 +334,7 @@ def test_email_revenue_report_content() -> None:
     assert "## Market vs Listing Signal" in markdown
     assert "## Airbnb Funnel Signals" in markdown
     assert "## Open Diagnostic Issues" in markdown
+    assert "## Listing Review Needed" in markdown
     assert "## Recommendation Review" in markdown
     assert "## Booking Source Notes" in markdown
     assert "## Data Notes" in markdown
@@ -446,6 +461,118 @@ def test_open_diagnostic_issues_do_not_change_recommendation_review() -> None:
 
     without_recommendations = without_issue.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
     with_recommendations = with_issue.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    assert with_recommendations == without_recommendations
+
+
+def test_listing_review_needed_section_appears_when_active_review_exists() -> None:
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        listing_review_rows=[
+            listing_review_row("search_card_appeal"),
+            listing_review_row("cover_photo_first_five_photos"),
+            listing_review_row("title_description_opening"),
+            listing_review_row("amenities_presentation"),
+            listing_review_row("guest_fit_sleeping_capacity"),
+            listing_review_row("trust_review_signals"),
+            listing_review_row("booking_friction_risks"),
+            listing_review_row("competitor_comparison"),
+        ],
+        listing_review_available=True,
+    )
+    section = markdown.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Listing-side review is recommended because an open diagnostic issue shows Airbnb visibility increased sharply while conversion weakened or remained weak." in section
+    assert "Focus review areas: search card appeal, cover/first photos, title/opening copy, amenities presentation, guest fit, trust signals, booking friction, competitor comparison." in section
+    assert "This is diagnostic only and does not create a PriceLabs rule recommendation." in section
+
+
+def test_listing_review_needed_section_references_full_review_when_markdown_exists() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_review_rows=[listing_review_row()],
+        listing_review_available=True,
+        listing_review_markdown_available=True,
+    )
+    section = markdown.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Full review: see listing_competitor_review_2026-05-25.md in the evidence bundle." in section
+
+
+def test_listing_review_needed_section_references_competitor_list_when_exists() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_review_rows=[listing_review_row()],
+        listing_review_available=True,
+        competitor_list_available=True,
+    )
+    section = markdown.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Competitor set: see pricelabs_competitor_list_2026-05-25.csv in the evidence bundle." in section
+
+
+def test_listing_review_needed_section_does_not_reference_missing_full_review() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_review_rows=[listing_review_row()],
+        listing_review_available=True,
+        listing_review_markdown_available=False,
+    )
+    section = markdown.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Full review:" not in section
+    assert "listing_competitor_review_2026-05-25.md" not in section
+    assert "Competitor set:" not in section
+    assert "pricelabs_competitor_list_2026-05-25.csv" not in section
+
+
+def test_listing_review_needed_section_handles_missing_or_empty_review() -> None:
+    missing = build_markdown("2026-05-08", sample_rows())
+    empty = build_markdown("2026-05-08", sample_rows(), listing_review_rows=[], listing_review_available=True)
+
+    missing_section = missing.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
+    empty_section = empty.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "No active listing-side review is needed for this run." in missing_section
+    assert "No active listing-side review is needed for this run." in empty_section
+
+
+def test_listing_review_needed_does_not_change_recommendation_review() -> None:
+    without_review = build_markdown("2026-05-08", sample_rows())
+    with_review = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        listing_review_rows=[listing_review_row()],
+        listing_review_available=True,
+    )
+
+    without_recommendations = without_review.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    with_recommendations = with_review.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    assert with_recommendations == without_recommendations
+
+
+def test_listing_review_evidence_reference_does_not_change_recommendation_review() -> None:
+    without_reference = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_review_rows=[listing_review_row()],
+        listing_review_available=True,
+        listing_review_markdown_available=False,
+    )
+    with_reference = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_review_rows=[listing_review_row()],
+        listing_review_available=True,
+        listing_review_markdown_available=True,
+        competitor_list_available=True,
+    )
+
+    without_recommendations = without_reference.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    with_recommendations = with_reference.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
     assert with_recommendations == without_recommendations
 
 

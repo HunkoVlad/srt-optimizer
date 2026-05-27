@@ -90,23 +90,44 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     airbnb_position = script.index('"airbnb.run_diagnostics"')
     combined_position = script.index('"analysis.combined_market_listing_signal"')
     diagnostic_position = script.index('"analysis.diagnostic_issue_tracker"')
+    competitor_calendar_position = script.index('"pricelabs.transform.competitor_calendar"')
+    listing_review_position = script.index('"analysis.listing_competitor_review"')
     email_position = script.index('"pricelabs.transform.email_revenue_report"')
     evidence_position = script.index('"pricelabs.transform.evidence_bundle"')
     html_position = script.index('"pricelabs.transform.email_html_report"')
     draft_position = script.index('"pricelabs.transform.email_draft_file"')
 
-    assert airbnb_position < combined_position < diagnostic_position < email_position < evidence_position < html_position < draft_position
+    assert (
+        airbnb_position
+        < combined_position
+        < diagnostic_position
+        < competitor_calendar_position
+        < listing_review_position
+        < email_position
+        < evidence_position
+        < html_position
+        < draft_position
+    )
     assert '"-m", "airbnb.run_diagnostics"' in script
     assert '"-m", "analysis.combined_market_listing_signal"' in script
     assert '"-m", "analysis.diagnostic_issue_tracker"' in script
+    assert '"-m", "pricelabs.transform.competitor_calendar"' in script
+    assert '"-m", "analysis.listing_competitor_review"' in script
     assert '"-m", "pricelabs.transform.email_revenue_report"' in script
     assert '"-m", "pricelabs.transform.evidence_bundle"' in script
     assert '$combinedMarketListingSignalFile = Join-Path $analysisDir "combined_market_listing_signal_$RunDate.csv"' in script
     assert '$diagnosticIssueTrackerFile = Join-Path $analysisDir "diagnostic_issue_tracker_$RunDate.csv"' in script
+    assert '$pricelabsCompetitorCalendarFile = Join-Path $analysisDir "pricelabs_competitor_calendar_$RunDate.csv"' in script
+    assert '$pricelabsCompetitorListFile = Join-Path $rawDir "pricelabs_competitor_list_$RunDate.csv"' in script
+    assert '$listingCompetitorReviewFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.md"' in script
+    assert '$listingCompetitorReviewCsvFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.csv"' in script
     assert '"--combined-signal-file", $combinedMarketListingSignalFile' in script
     assert '"--diagnostic-issue-file", $diagnosticIssueTrackerFile' in script
+    assert '"--listing-review-file", $listingCompetitorReviewCsvFile' in script
     assert "combined_market_listing_signal output path:" in script
     assert "diagnostic_issue_tracker output path:" in script
+    assert "pricelabs_competitor_calendar output path:" in script
+    assert "listing_competitor_review output path:" in script
     assert "evidence_bundle manifest path:" in script
 
 
@@ -155,8 +176,14 @@ def test_scheduled_wrapper_checks_evidence_bundle_manifest_output() -> None:
 
     assert 'analysis\\evidence_bundle_$RunDate\\evidence_manifest_$RunDate.json' in script
     assert 'analysis\\diagnostic_issue_tracker_$RunDate.csv' in script
+    assert 'raw\\pricelabs_competitor_list_$RunDate.csv' in script
+    assert 'analysis\\pricelabs_competitor_calendar_$RunDate.csv' in script
+    assert 'analysis\\listing_competitor_review_$RunDate.md' in script
+    assert 'analysis\\listing_competitor_review_$RunDate.csv' in script
     assert 'analysis\\email_revenue_report_$RunDate.md' in script
-    assert script.index('analysis\\diagnostic_issue_tracker_$RunDate.csv') < script.index('analysis\\email_revenue_report_$RunDate.md')
+    assert script.index('analysis\\diagnostic_issue_tracker_$RunDate.csv') < script.index('analysis\\pricelabs_competitor_calendar_$RunDate.csv')
+    assert script.index('analysis\\pricelabs_competitor_calendar_$RunDate.csv') < script.index('analysis\\listing_competitor_review_$RunDate.md')
+    assert script.index('analysis\\listing_competitor_review_$RunDate.csv') < script.index('analysis\\email_revenue_report_$RunDate.md')
     assert script.index('analysis\\email_revenue_report_$RunDate.md') < script.index(
         'analysis\\evidence_bundle_$RunDate\\evidence_manifest_$RunDate.json'
     )
@@ -173,4 +200,5 @@ def test_scheduled_wrapper_required_raw_inputs_match_current_pricelabs_sources()
     assert "bookings_report.xlsx" in required_block
     assert "pricelabs_settings_manual_input.json" not in required_block
     assert "pricelabs_settings_snapshot_from_ui.json" not in required_block
+    assert "Competitor Calendar.csv" not in required_block
     assert "airbnb_" not in required_block

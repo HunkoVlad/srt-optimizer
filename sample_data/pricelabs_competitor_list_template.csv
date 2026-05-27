@@ -1,0 +1,2 @@
+competitor_name,airbnb_url,bedrooms,rating,review_count,cleaning_fee,airbnb_service_fee_type,notes,sample_date,competitor_price,competitor_min_stay,visible_total_price_notes
+Aloha competitor example,https://www.airbnb.com/rooms/example,3,4.95,120,0,split,Replace this row with the manually selected PriceLabs Competitor Calendar listing.,,,,

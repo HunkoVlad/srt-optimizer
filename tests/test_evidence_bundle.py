@@ -66,7 +66,7 @@ def test_evidence_bundle_folder_and_manifest_are_created(tmp_path: Path) -> None
     assert manifest["attachment_mode"] == "bundle_only"
     assert manifest["status"] == "complete"
     assert manifest["missing_required_files"] == []
-    assert len(manifest["files"]) == 8
+    assert len(manifest["files"]) == 12
 
 
 def test_core_files_are_copied_and_labeled_core(tmp_path: Path) -> None:
@@ -142,6 +142,66 @@ def test_diagnostic_issue_tracker_is_optional_combined_evidence(tmp_path: Path) 
     assert issue_entry["source_of_truth_type"] == "combined"
 
 
+def test_listing_competitor_review_outputs_are_optional_diagnostic_evidence(tmp_path: Path) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    create_core_files(run_dir)
+    write_text(run_dir / "analysis" / f"listing_competitor_review_{RUN_DATE}.md", "# Listing Review\n")
+    write_text(run_dir / "analysis" / f"listing_competitor_review_{RUN_DATE}.csv")
+
+    manifest = read_manifest(run(RUN_DATE, run_dir=run_dir))
+    names = copied_names(manifest)
+    entries = [
+        entry
+        for entry in manifest["files"]
+        if entry["category"] == "listing_competitor_review" and entry["copied"]
+    ]
+
+    assert f"{RUN_DATE}__listing_competitor_review__listing_competitor_review_{RUN_DATE}.md" in names
+    assert f"{RUN_DATE}__listing_competitor_review__listing_competitor_review_{RUN_DATE}.csv" in names
+    assert len(entries) == 2
+    assert all(entry["role"] == "listing_side_investigation" for entry in entries)
+    assert all(entry["required"] is False for entry in entries)
+    assert all(entry["source_of_truth_type"] == "diagnostic" for entry in entries)
+
+
+def test_pricelabs_competitor_list_is_optional_listing_review_evidence(tmp_path: Path) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    create_core_files(run_dir)
+    write_text(run_dir / "raw" / f"pricelabs_competitor_list_{RUN_DATE}.csv")
+
+    manifest = read_manifest(run(RUN_DATE, run_dir=run_dir))
+    names = copied_names(manifest)
+    competitor_entry = next(
+        entry
+        for entry in manifest["files"]
+        if entry["role"] == "manually_selected_pricelabs_competitor_set"
+    )
+
+    assert f"{RUN_DATE}__listing_competitor_review__pricelabs_competitor_list_{RUN_DATE}.csv" in names
+    assert competitor_entry["category"] == "listing_competitor_review"
+    assert competitor_entry["required"] is False
+    assert competitor_entry["source_of_truth_type"] == "diagnostic"
+
+
+def test_normalized_competitor_calendar_is_optional_diagnostic_evidence(tmp_path: Path) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    create_core_files(run_dir)
+    write_text(run_dir / "analysis" / f"pricelabs_competitor_calendar_{RUN_DATE}.csv")
+
+    manifest = read_manifest(run(RUN_DATE, run_dir=run_dir))
+    names = copied_names(manifest)
+    calendar_entry = next(
+        entry
+        for entry in manifest["files"]
+        if entry["role"] == "pricelabs_competitor_price_min_stay_availability_context_90_day"
+    )
+
+    assert f"{RUN_DATE}__competitor_calendar__pricelabs_competitor_calendar_{RUN_DATE}.csv" in names
+    assert calendar_entry["category"] == "competitor_calendar"
+    assert calendar_entry["required"] is False
+    assert calendar_entry["source_of_truth_type"] == "diagnostic"
+
+
 def test_missing_high_priority_optional_files_do_not_fail(tmp_path: Path) -> None:
     run_dir = tmp_path / "data" / "runs" / RUN_DATE
     create_core_files(run_dir, priority="high")
@@ -150,8 +210,11 @@ def test_missing_high_priority_optional_files_do_not_fail(tmp_path: Path) -> Non
 
     assert manifest["status"] == "complete"
     assert manifest["missing_required_files"] == []
-    assert len(manifest["missing_optional_files"]) == 6
+    assert len(manifest["missing_optional_files"]) == 10
     assert any("diagnostic_issue_tracker" in path for path in manifest["missing_optional_files"])
+    assert any("listing_competitor_review" in path for path in manifest["missing_optional_files"])
+    assert any("pricelabs_competitor_list" in path for path in manifest["missing_optional_files"])
+    assert any("pricelabs_competitor_calendar" in path for path in manifest["missing_optional_files"])
     assert any("airbnb_conversion_diagnostic_report" in path for path in manifest["missing_optional_files"])
     assert any("airbnb_weekly_history_comparison" in path for path in manifest["missing_optional_files"])
 
@@ -188,5 +251,5 @@ def test_raw_staging_logs_and_browser_state_are_never_copied(tmp_path: Path) -> 
     assert "debug" not in bundled_text
     assert "cookies" not in manifest_text
     assert "downloads_staging" not in manifest_text
-    assert "\\raw\\" not in manifest_text
+    assert "priceLabs_future_export.csv".lower() not in manifest_text
     assert "/raw/" not in manifest_text

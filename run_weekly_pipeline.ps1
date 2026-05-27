@@ -136,6 +136,10 @@ $signalReviewFile = Join-Path $analysisDir "future_signal_change_review_$RunDate
 $performanceReasonReviewFile = Join-Path $analysisDir "performance_reason_review_$RunDate.csv"
 $combinedMarketListingSignalFile = Join-Path $analysisDir "combined_market_listing_signal_$RunDate.csv"
 $diagnosticIssueTrackerFile = Join-Path $analysisDir "diagnostic_issue_tracker_$RunDate.csv"
+$pricelabsCompetitorCalendarFile = Join-Path $analysisDir "pricelabs_competitor_calendar_$RunDate.csv"
+$pricelabsCompetitorListFile = Join-Path $rawDir "pricelabs_competitor_list_$RunDate.csv"
+$listingCompetitorReviewFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.md"
+$listingCompetitorReviewCsvFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.csv"
 $runtimeConfig = Join-Path $settingsDir "pricelabs_transform_config.toml"
 
 @"
@@ -304,6 +308,21 @@ Invoke-PythonStep "diagnostic_issue_tracker" @(
 )
 Write-Host "diagnostic_issue_tracker output path: $diagnosticIssueTrackerFile"
 
+Invoke-PythonStep "PriceLabs competitor calendar" @(
+    "-m", "pricelabs.transform.competitor_calendar",
+    "--run-date", $RunDate
+)
+Write-Host "pricelabs_competitor_list output path: $pricelabsCompetitorListFile"
+Write-Host "pricelabs_competitor_calendar output path: $pricelabsCompetitorCalendarFile"
+
+Invoke-PythonStep "listing_competitor_review" @(
+    "-m", "analysis.listing_competitor_review",
+    "--run-date", $RunDate,
+    "--run-dir", $runRoot
+)
+Write-Host "listing_competitor_review output path: $listingCompetitorReviewFile"
+Write-Host "listing_competitor_review CSV output path: $listingCompetitorReviewCsvFile"
+
 Invoke-PythonStep "Monthly revenue summary" @(
     "-m", "pricelabs.transform.monthly_revenue_summary",
     "--run-date", $RunDate,
@@ -320,6 +339,7 @@ Invoke-PythonStep "Email revenue report" @(
     "--reason-review-file", $performanceReasonReviewFile,
     "--combined-signal-file", $combinedMarketListingSignalFile,
     "--diagnostic-issue-file", $diagnosticIssueTrackerFile,
+    "--listing-review-file", $listingCompetitorReviewCsvFile,
     "--output-file", $emailRevenueReportFile
 )
 
