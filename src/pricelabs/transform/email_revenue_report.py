@@ -7,6 +7,7 @@ import csv
 from pathlib import Path
 import sys
 
+from analysis.listing_competitor_review import build_competitor_calendar_context
 from pricelabs.transform.monthly_revenue_summary import (
     build_recommendation_lines,
     format_currency,
@@ -63,6 +64,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--competitor-list-file",
         help="Optional PriceLabs competitor list CSV. Defaults to raw/pricelabs_competitor_list_<run-date>.csv.",
+    )
+    parser.add_argument(
+        "--competitor-calendar-file",
+        help="Optional normalized PriceLabs competitor calendar CSV. Defaults to analysis/pricelabs_competitor_calendar_<run-date>.csv.",
+    )
+    parser.add_argument(
+        "--listing-change-log-file",
+        help="Optional listing change log CSV. Defaults to data/history/listing_change_log.csv.",
     )
     return parser.parse_args()
 
@@ -251,6 +260,20 @@ def read_listing_review_rows(path: Path) -> list[dict[str, str]]:
         return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
 
 
+def read_competitor_calendar_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
+def read_listing_change_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
 def default_combined_signal_path(run_date: str, output_path: Path) -> Path:
     if output_path.parent.name == "analysis":
         return output_path.parent / f"combined_market_listing_signal_{run_date}.csv"
@@ -281,11 +304,41 @@ def default_listing_review_markdown_path(run_date: str, output_path: Path) -> Pa
     return Path("data") / "runs" / run_date / "analysis" / f"listing_competitor_review_{run_date}.md"
 
 
+def default_listing_state_snapshot_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"listing_state_snapshot_{run_date}.md"
+    return Path("data") / "runs" / run_date / "analysis" / f"listing_state_snapshot_{run_date}.md"
+
+
+def default_listing_visual_snapshot_paths(run_date: str, output_path: Path) -> list[Path]:
+    analysis_dir = output_path.parent if output_path.parent.name == "analysis" else Path("data") / "runs" / run_date / "analysis"
+    return [
+        analysis_dir / f"listing_search_card_{run_date}.png",
+        analysis_dir / f"listing_page_top_{run_date}.png",
+        analysis_dir / f"listing_first_5_photos_{run_date}.png",
+    ]
+
+
 def default_competitor_list_path(run_date: str, output_path: Path) -> Path:
     if output_path.parent.name == "analysis":
         run_dir = output_path.parent.parent
         return run_dir / "raw" / f"pricelabs_competitor_list_{run_date}.csv"
     return Path("data") / "runs" / run_date / "raw" / f"pricelabs_competitor_list_{run_date}.csv"
+
+
+def default_competitor_calendar_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"pricelabs_competitor_calendar_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "analysis" / f"pricelabs_competitor_calendar_{run_date}.csv"
+
+
+def default_listing_change_log_path(output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        try:
+            return output_path.parents[3] / "history" / "listing_change_log.csv"
+        except IndexError:
+            pass
+    return Path("data") / "history" / "listing_change_log.csv"
 
 
 def default_output_path(run_date: str) -> Path:
@@ -444,6 +497,18 @@ def display_severity(value: str) -> str:
     return (value or "unknown").replace("_", " ").capitalize()
 
 
+def diagnostic_issue_label(row: dict[str, str]) -> str:
+    status = row.get("status", "").strip().lower()
+    title = row.get("issue_title", "") or row.get("issue_id", "Diagnostic issue").replace("_", " ")
+    if status == "open":
+        return f"{display_severity(row.get('severity', ''))}/Open: {sentence(title)}"
+    if status == "improving":
+        return f"Improving: {sentence(title)}"
+    if status == "monitoring":
+        return f"Monitoring: {sentence(title)}"
+    return f"{display_severity(row.get('severity', ''))}: {sentence(title)}"
+
+
 def sentence(value: str) -> str:
     text = (value or "").strip()
     if not text:
@@ -451,7 +516,7 @@ def sentence(value: str) -> str:
     return text if text.endswith((".", "!", "?")) else f"{text}."
 
 
-def open_diagnostic_issues_section(issue_rows: list[dict[str, str]] | None) -> list[str]:
+def open_diagnostic_issues_section(issue_rows: list[dict[str, str]] | None, *, run_date: str = "") -> list[str]:
     lines = ["## Open Diagnostic Issues", ""]
     if issue_rows is None:
         lines.append("- No diagnostic issue tracker available for this run.")
@@ -463,20 +528,41 @@ def open_diagnostic_issues_section(issue_rows: list[dict[str, str]] | None) -> l
     if not active_rows:
         lines.append("- No active diagnostic issues.")
         lines.append("")
-        return lines
+    else:
+        for row in active_rows:
+            lines.append(f"- {diagnostic_issue_label(row)}")
+            lines.append(f"  First seen: {row.get('first_seen_run_date', '') or 'unknown'}. Weeks open: {row.get('weeks_open', '') or 'unknown'}.")
+            evidence = row.get("evidence_summary", "") or "Evidence summary unavailable."
+            lines.append(f"  Evidence: {sentence(evidence)}")
+            if row.get("status", "").strip().lower() == "improving":
+                resolution_rule = row.get("resolution_rule", "") or "Keep monitoring until conversion improves for 2 consecutive runs."
+                lines.append(f"  Next check: {sentence(resolution_rule)}")
+            else:
+                investigation = row.get("recommended_investigation", "") or "Investigation guidance unavailable."
+                lines.append(f"  Investigation: {sentence(investigation)}")
+            guardrail = row.get("blocked_recommendation_reason", "") or "Diagnostic issue context cannot create PriceLabs rule recommendations."
+            lines.append(f"  Guardrail: {sentence(guardrail)}")
+        lines.append("- Diagnostic issues are informational only. PriceLabs remains the source of truth for revenue, occupancy, ADR, booked nights, booking totals, cleaning count, and monthly revenue pace.")
+        lines.append("")
 
-    for row in active_rows:
-        title = row.get("issue_title", "") or row.get("issue_id", "Diagnostic issue").replace("_", " ")
-        lines.append(f"- {display_severity(row.get('severity', ''))}: {sentence(title)}")
-        lines.append(f"  First seen: {row.get('first_seen_run_date', '') or 'unknown'}. Weeks open: {row.get('weeks_open', '') or 'unknown'}.")
-        evidence = row.get("evidence_summary", "") or "Evidence summary unavailable."
-        lines.append(f"  Evidence: {sentence(evidence)}")
-        investigation = row.get("recommended_investigation", "") or "Investigation guidance unavailable."
-        lines.append(f"  Investigation: {sentence(investigation)}")
-        guardrail = row.get("blocked_recommendation_reason", "") or "Diagnostic issue context cannot create PriceLabs rule recommendations."
-        lines.append(f"  Guardrail: {sentence(guardrail)}")
-    lines.append("- Diagnostic issues are informational only. PriceLabs remains the source of truth for revenue, occupancy, ADR, booked nights, booking totals, cleaning count, and monthly revenue pace.")
-    lines.append("")
+    resolved_rows = [
+        row
+        for row in issue_rows
+        if row.get("status", "").strip().lower() == "resolved"
+        and (not run_date or row.get("last_seen_run_date", "") == run_date)
+    ]
+    if resolved_rows:
+        lines.extend(["## Recently Resolved Diagnostic Issues", ""])
+        for row in resolved_rows:
+            title = row.get("issue_title", "") or row.get("issue_id", "Diagnostic issue").replace("_", " ")
+            lines.append(f"- Resolved: {sentence(title)}")
+            lines.append(
+                f"  First seen: {row.get('first_seen_run_date', '') or 'unknown'}. "
+                f"Resolved on: {row.get('last_seen_run_date', '') or 'unknown'}."
+            )
+            resolution_rule = row.get("resolution_rule", "") or "Resolution rule unavailable."
+            lines.append(f"  Resolution rule: {sentence(resolution_rule)}")
+        lines.append("")
     return lines
 
 
@@ -485,7 +571,10 @@ def listing_review_needed_section(
     review_rows: list[dict[str, str]] | None,
     *,
     full_review_available: bool = False,
+    listing_snapshot_available: bool = False,
+    visual_baseline_available: bool = False,
     competitor_list_available: bool = False,
+    competitor_calendar_context: dict[str, str] | None = None,
 ) -> list[str]:
     lines = ["## Listing Review Needed", ""]
     if not review_rows:
@@ -527,8 +616,61 @@ def listing_review_needed_section(
     )
     if full_review_available:
         lines.append(f"- Full review: see listing_competitor_review_{run_date}.md in the evidence bundle.")
+    if listing_snapshot_available:
+        lines.append(f"- Listing snapshot: see listing_state_snapshot_{run_date}.md in the evidence bundle.")
+    if visual_baseline_available:
+        lines.append("- Visual baseline files are included in the evidence bundle when available.")
     if competitor_list_available:
         lines.append(f"- Competitor set: see pricelabs_competitor_list_{run_date}.csv in the evidence bundle.")
+    if competitor_calendar_context:
+        lines.append(
+            "- Competitor context: selected PriceLabs comps show median average price of "
+            f"${competitor_calendar_context['competitor_median_average_price']}, "
+            f"median minimum stay of {competitor_calendar_context['competitor_median_min_stay']} nights, "
+            f"and median available date count of {competitor_calendar_context['competitor_median_available_date_count']} "
+            "across the 90-day window."
+        )
+        lines.append(
+            "- Subject listing metrics are intentionally excluded from this competitor context because PriceLabs core outputs "
+            "remain the source of truth for Aloha Poconos pricing, availability, revenue pace, and cleaning context."
+        )
+    lines.append("")
+    return lines
+
+
+def active_listing_changes_section(
+    run_date: str,
+    change_rows: list[dict[str, str]] | None,
+    *,
+    change_log_available: bool = False,
+    visual_baseline_available: bool = False,
+) -> list[str]:
+    if not change_log_available:
+        return []
+
+    active_rows = [
+        row
+        for row in change_rows or []
+        if row.get("status", "").strip().lower() == "active"
+    ]
+    if not active_rows:
+        return []
+
+    lines = ["## Active Listing Tests", ""]
+    for row in active_rows:
+        lines.append(f"- Active test: {row.get('change_type', '') or 'listing change'}.")
+        lines.append(f"  Related issue: {row.get('related_issue_id', '') or 'unknown'}.")
+        lines.append(f"  Change date: {row.get('change_date', '') or 'unknown'}.")
+        lines.append(f"  Expected effect: {row.get('expected_effect', '') or 'not specified'}.")
+        review_after = row.get("review_after_run_date", "") or "not specified"
+        lines.append(f"  Review after: {review_after}.")
+        due_this_run = review_after != "not specified" and review_after <= run_date
+        lines.append(f"  Review due this run: {'Yes' if due_this_run else 'No'}.")
+        lines.append(
+            "  Guardrail: Do not make additional listing or pricing changes until this test has at least one full Airbnb diagnostic cycle, unless urgent risk appears."
+        )
+    if visual_baseline_available:
+        lines.append("- Current visual baseline files are included in the evidence bundle.")
     lines.append("")
     return lines
 
@@ -560,7 +702,13 @@ def build_markdown(
     listing_review_rows: list[dict[str, str]] | None = None,
     listing_review_available: bool = False,
     listing_review_markdown_available: bool = False,
+    listing_snapshot_available: bool = False,
+    listing_visual_baseline_available: bool = False,
     competitor_list_available: bool = False,
+    competitor_calendar_rows: list[dict[str, str]] | None = None,
+    competitor_calendar_available: bool = False,
+    listing_change_rows: list[dict[str, str]] | None = None,
+    listing_change_log_available: bool = False,
 ) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
@@ -594,13 +742,26 @@ def build_markdown(
     lines.extend(reason_review_section(reason_rows or []))
     lines.extend(market_vs_listing_signal_section(combined_signal_rows))
     lines.extend(airbnb_funnel_signals_section(airbnb_summary_rows))
-    lines.extend(open_diagnostic_issues_section(diagnostic_issue_rows if diagnostic_issue_tracker_available else None))
+    lines.extend(open_diagnostic_issues_section(diagnostic_issue_rows if diagnostic_issue_tracker_available else None, run_date=run_date))
     lines.extend(
         listing_review_needed_section(
             run_date,
             listing_review_rows if listing_review_available else None,
             full_review_available=listing_review_markdown_available,
+            listing_snapshot_available=listing_snapshot_available,
+            visual_baseline_available=listing_visual_baseline_available,
             competitor_list_available=competitor_list_available,
+            competitor_calendar_context=build_competitor_calendar_context(competitor_calendar_rows or [])
+            if listing_review_available and competitor_calendar_available
+            else None,
+        )
+    )
+    lines.extend(
+        active_listing_changes_section(
+            run_date,
+            listing_change_rows,
+            change_log_available=listing_change_log_available,
+            visual_baseline_available=listing_visual_baseline_available,
         )
     )
     lines.extend(recommendation_section(sorted_rows, reason_rows or [], combined_signal_rows))
@@ -696,7 +857,11 @@ def run() -> int:
     diagnostic_issue_path = Path(args.diagnostic_issue_file) if args.diagnostic_issue_file else default_diagnostic_issue_path(args.run_date, output_path)
     listing_review_path = Path(args.listing_review_file) if args.listing_review_file else default_listing_review_path(args.run_date, output_path)
     listing_review_markdown_path = default_listing_review_markdown_path(args.run_date, output_path)
+    listing_state_snapshot_path = default_listing_state_snapshot_path(args.run_date, output_path)
+    listing_visual_snapshot_paths = default_listing_visual_snapshot_paths(args.run_date, output_path)
     competitor_list_path = Path(args.competitor_list_file) if args.competitor_list_file else default_competitor_list_path(args.run_date, output_path)
+    competitor_calendar_path = Path(args.competitor_calendar_file) if args.competitor_calendar_file else default_competitor_calendar_path(args.run_date, output_path)
+    listing_change_log_path = Path(args.listing_change_log_file) if args.listing_change_log_file else default_listing_change_log_path(output_path)
 
     if not summary_path.exists():
         raise FileNotFoundError(f"Monthly revenue summary markdown does not exist: {summary_path}")
@@ -709,7 +874,10 @@ def run() -> int:
     print(f"Email revenue report diagnostic issue input: {diagnostic_issue_path}")
     print(f"Email revenue report listing review input: {listing_review_path}")
     print(f"Email revenue report listing review markdown: {listing_review_markdown_path}")
+    print(f"Email revenue report listing state snapshot: {listing_state_snapshot_path}")
     print(f"Email revenue report competitor list input: {competitor_list_path}")
+    print(f"Email revenue report competitor calendar input: {competitor_calendar_path}")
+    print(f"Email revenue report listing change log input: {listing_change_log_path}")
     print(f"Email revenue report output: {output_path}")
 
     rows = read_monthly_rows(rolling_path)
@@ -718,6 +886,8 @@ def run() -> int:
     airbnb_summary_rows = read_airbnb_summary_rows(airbnb_summary_path)
     diagnostic_issue_rows = read_diagnostic_issue_rows(diagnostic_issue_path)
     listing_review_rows = read_listing_review_rows(listing_review_path)
+    competitor_calendar_rows = read_competitor_calendar_rows(competitor_calendar_path)
+    listing_change_rows = read_listing_change_rows(listing_change_log_path)
     write_markdown(
         output_path,
         build_markdown(
@@ -731,7 +901,13 @@ def run() -> int:
             listing_review_rows,
             listing_review_path.exists(),
             listing_review_markdown_path.exists(),
+            listing_state_snapshot_path.exists(),
+            any(path.exists() for path in listing_visual_snapshot_paths),
             competitor_list_path.exists(),
+            competitor_calendar_rows,
+            competitor_calendar_path.exists(),
+            listing_change_rows,
+            listing_change_log_path.exists(),
         ),
     )
     print(f"Wrote {output_path}")

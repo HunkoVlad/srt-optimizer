@@ -6,6 +6,7 @@ import argparse
 import csv
 from datetime import date
 from pathlib import Path
+import re
 import sys
 
 
@@ -37,7 +38,7 @@ ISSUE_TITLE = "Airbnb visibility up, conversion down"
 BLOCKED_REASON = "Airbnb diagnostic signal alone cannot create PriceLabs rule recommendation."
 SUSPECTED_CAUSE = "listing competitiveness / value perception / booking friction"
 RECOMMENDED_INVESTIGATION = "Review listing against competitors before changing PriceLabs rules."
-RESOLUTION_RULE = "Keep open until conversion improves for 2 consecutive runs; V1 does not auto-resolve."
+RESOLUTION_RULE = "Resolve after conversion improves for 2 consecutive runs."
 RELEVANT_RULE_CHANGE_TOKENS = (
     "base_price",
     "minimum_price",
@@ -117,6 +118,21 @@ def conversion_weakened(metric_rows: dict[str, dict[str, str]]) -> tuple[bool, l
     return bool(weakened), weakened
 
 
+def conversion_improved(metric_rows: dict[str, dict[str, str]]) -> tuple[bool, list[str]]:
+    # Conservative V1 resolution signal: at least 2 conversion metrics improve week over week.
+    improved: list[str] = []
+    for metric in CONVERSION_METRICS:
+        row = metric_rows.get(metric, {})
+        change = parse_number(row.get("change_vs_previous_week", ""))
+        current = parse_number(row.get("current_value", ""))
+        previous = parse_number(row.get("previous_week_value", ""))
+        if change is not None and change > 0:
+            improved.append(metric)
+        elif current is not None and previous is not None and current > previous:
+            improved.append(metric)
+    return len(improved) >= 2, improved
+
+
 def visibility_up_more_than_3x(row: dict[str, str]) -> bool:
     current = parse_number(row.get("current_value", ""))
     previous = parse_number(row.get("previous_week_value", ""))
@@ -147,6 +163,40 @@ def increment_weeks_open(existing: dict[str, str] | None) -> str:
         return "1"
     value = parse_number(existing.get("weeks_open", ""))
     return str(int(value or 0) + 1)
+
+
+def improvement_streak(row: dict[str, str] | None) -> int:
+    if not row:
+        return 0
+    notes = row.get("notes", "")
+    match = re.search(r"improvement_streak=(\d+)", notes)
+    if not match:
+        return 0
+    return int(match.group(1))
+
+
+def copy_existing_issue(
+    run_date: str,
+    existing: dict[str, str],
+    *,
+    status: str,
+    notes: str,
+    metric_rows: dict[str, dict[str, str]] | None = None,
+) -> dict[str, str]:
+    row = {column: existing.get(column, "") for column in COLUMNS}
+    row["last_seen_run_date"] = run_date
+    row["weeks_open"] = increment_weeks_open(existing)
+    row["status"] = status
+    row["resolution_rule"] = RESOLUTION_RULE
+    row["notes"] = notes
+    if metric_rows:
+        impression_row = metric_rows.get("first_page_search_impressions", {})
+        if impression_row:
+            row["current_value"] = impression_row.get("current_value", row["current_value"])
+            row["previous_value"] = impression_row.get("previous_week_value", row["previous_value"])
+            row["wow_change"] = impression_row.get("change_vs_previous_week", row["wow_change"])
+            row["four_week_average"] = impression_row.get("last_4_week_avg", row["four_week_average"])
+    return row
 
 
 def build_issue_row(
@@ -202,18 +252,65 @@ def detect_airbnb_visibility_issue(
     impression_row = metric_rows.get("first_page_search_impressions", {})
     visibility_triggered = visibility_up_more_than_3x(impression_row)
     conversion_triggered, weakened_metrics = conversion_weakened(metric_rows)
+    conversion_is_improving, improved_metrics = conversion_improved(metric_rows)
     rule_change_explains = meaningful_pricelabs_rule_change(settings_rows)
     existing = existing_unresolved_issue(history_rows, run_date)
 
     if visibility_triggered and conversion_triggered and not rule_change_explains:
         return [build_issue_row(run_date, impression_row=impression_row, weakened_metrics=weakened_metrics, existing=existing)]
     if existing:
-        row = {column: existing.get(column, "") for column in COLUMNS}
-        row["last_seen_run_date"] = run_date
-        row["weeks_open"] = increment_weeks_open(existing)
-        row["status"] = "monitoring"
-        row["notes"] = "Carried forward; V1 keeps unresolved diagnostic issues under monitoring unless clear improvement is confirmed."
-        return [row]
+        if not airbnb_history_rows:
+            existing_status = existing.get("status", "open")
+            status = existing_status if existing_status in {"open", "improving", "monitoring"} else "monitoring"
+            streak = improvement_streak(existing)
+            return [
+                copy_existing_issue(
+                    run_date,
+                    existing,
+                    status=status,
+                    notes=(
+                        "Carried forward; resolution could not be evaluated because Airbnb diagnostics were missing. "
+                        f"improvement_streak={streak}"
+                    ),
+                )
+            ]
+        if conversion_is_improving:
+            streak = improvement_streak(existing) + 1
+            metrics_text = ", ".join(metric.replace("_", " ") for metric in improved_metrics)
+            if streak >= 2:
+                return [
+                    copy_existing_issue(
+                        run_date,
+                        existing,
+                        status="resolved",
+                        notes=(
+                            "Resolved after conversion improved for 2 consecutive runs "
+                            f"({metrics_text}). improvement_streak={streak}"
+                        ),
+                        metric_rows=metric_rows,
+                    )
+                ]
+            return [
+                copy_existing_issue(
+                    run_date,
+                    existing,
+                    status="improving",
+                    notes=(
+                        "Conversion is improving, but one more confirming run is required before resolution "
+                        f"({metrics_text}). improvement_streak={streak}"
+                    ),
+                    metric_rows=metric_rows,
+                )
+            ]
+        return [
+            copy_existing_issue(
+                run_date,
+                existing,
+                status="monitoring",
+                notes="Carried forward; resolution criteria are not met. improvement_streak=0",
+                metric_rows=metric_rows,
+            )
+        ]
     return []
 
 

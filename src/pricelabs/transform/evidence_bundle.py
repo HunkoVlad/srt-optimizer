@@ -104,6 +104,34 @@ def core_specs(run_date: str) -> list[EvidenceSpec]:
             "diagnostic",
         ),
         EvidenceSpec(
+            f"analysis/listing_state_snapshot_{run_date}.md",
+            "listing_state_snapshot",
+            False,
+            "listing_state_baseline",
+            "diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/listing_search_card_{run_date}.png",
+            "listing_state_snapshot",
+            False,
+            "listing_visual_baseline",
+            "diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/listing_page_top_{run_date}.png",
+            "listing_state_snapshot",
+            False,
+            "listing_visual_baseline",
+            "diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/listing_first_5_photos_{run_date}.png",
+            "listing_state_snapshot",
+            False,
+            "listing_visual_baseline",
+            "diagnostic",
+        ),
+        EvidenceSpec(
             f"raw/pricelabs_competitor_list_{run_date}.csv",
             "listing_competitor_review",
             False,
@@ -117,6 +145,18 @@ def core_specs(run_date: str) -> list[EvidenceSpec]:
             "pricelabs_competitor_price_min_stay_availability_context_90_day",
             "diagnostic",
         ),
+    ]
+
+
+def history_specs() -> list[EvidenceSpec]:
+    return [
+        EvidenceSpec(
+            "../../history/listing_change_log.csv",
+            "listing_change_log",
+            False,
+            "listing_change_history",
+            "diagnostic",
+        )
     ]
 
 
@@ -205,6 +245,7 @@ def build_manifest(run_date: str, run_dir: Path) -> dict[str, object]:
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     specs = core_specs(run_date)
+    specs.extend(history_specs())
     combined_signal_path = run_dir / "analysis" / f"combined_market_listing_signal_{run_date}.csv"
     if combined_signal_is_high_priority(combined_signal_path):
         specs.extend(high_priority_specs(run_date))

@@ -66,7 +66,7 @@ def test_evidence_bundle_folder_and_manifest_are_created(tmp_path: Path) -> None
     assert manifest["attachment_mode"] == "bundle_only"
     assert manifest["status"] == "complete"
     assert manifest["missing_required_files"] == []
-    assert len(manifest["files"]) == 12
+    assert len(manifest["files"]) == 17
 
 
 def test_core_files_are_copied_and_labeled_core(tmp_path: Path) -> None:
@@ -164,6 +164,50 @@ def test_listing_competitor_review_outputs_are_optional_diagnostic_evidence(tmp_
     assert all(entry["source_of_truth_type"] == "diagnostic" for entry in entries)
 
 
+def test_listing_state_snapshot_outputs_are_optional_diagnostic_evidence(tmp_path: Path) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    create_core_files(run_dir)
+    write_text(run_dir / "analysis" / f"listing_state_snapshot_{RUN_DATE}.md", "# Listing Snapshot\n")
+    write_text(run_dir / "analysis" / f"listing_search_card_{RUN_DATE}.png", "png")
+    write_text(run_dir / "analysis" / f"listing_page_top_{RUN_DATE}.png", "png")
+    write_text(run_dir / "analysis" / f"listing_first_5_photos_{RUN_DATE}.png", "png")
+
+    manifest = read_manifest(run(RUN_DATE, run_dir=run_dir))
+    names = copied_names(manifest)
+    entries = [
+        entry
+        for entry in manifest["files"]
+        if entry["category"] == "listing_state_snapshot" and entry["copied"]
+    ]
+
+    assert f"{RUN_DATE}__listing_state_snapshot__listing_state_snapshot_{RUN_DATE}.md" in names
+    assert f"{RUN_DATE}__listing_state_snapshot__listing_search_card_{RUN_DATE}.png" in names
+    assert f"{RUN_DATE}__listing_state_snapshot__listing_page_top_{RUN_DATE}.png" in names
+    assert f"{RUN_DATE}__listing_state_snapshot__listing_first_5_photos_{RUN_DATE}.png" in names
+    assert {entry["role"] for entry in entries} == {"listing_state_baseline", "listing_visual_baseline"}
+    assert all(entry["required"] is False for entry in entries)
+    assert all(entry["source_of_truth_type"] == "diagnostic" for entry in entries)
+
+
+def test_listing_change_log_is_optional_diagnostic_evidence(tmp_path: Path) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    create_core_files(run_dir)
+    write_text(tmp_path / "data" / "history" / "listing_change_log.csv", "change_date,run_date\n")
+
+    manifest = read_manifest(run(RUN_DATE, run_dir=run_dir))
+    names = copied_names(manifest)
+    entry = next(
+        entry
+        for entry in manifest["files"]
+        if entry["role"] == "listing_change_history"
+    )
+
+    assert f"{RUN_DATE}__listing_change_log__listing_change_log.csv" in names
+    assert entry["category"] == "listing_change_log"
+    assert entry["required"] is False
+    assert entry["source_of_truth_type"] == "diagnostic"
+
+
 def test_pricelabs_competitor_list_is_optional_listing_review_evidence(tmp_path: Path) -> None:
     run_dir = tmp_path / "data" / "runs" / RUN_DATE
     create_core_files(run_dir)
@@ -210,9 +254,11 @@ def test_missing_high_priority_optional_files_do_not_fail(tmp_path: Path) -> Non
 
     assert manifest["status"] == "complete"
     assert manifest["missing_required_files"] == []
-    assert len(manifest["missing_optional_files"]) == 10
+    assert len(manifest["missing_optional_files"]) == 15
     assert any("diagnostic_issue_tracker" in path for path in manifest["missing_optional_files"])
     assert any("listing_competitor_review" in path for path in manifest["missing_optional_files"])
+    assert any("listing_state_snapshot" in path for path in manifest["missing_optional_files"])
+    assert any("listing_change_log" in path for path in manifest["missing_optional_files"])
     assert any("pricelabs_competitor_list" in path for path in manifest["missing_optional_files"])
     assert any("pricelabs_competitor_calendar" in path for path in manifest["missing_optional_files"])
     assert any("airbnb_conversion_diagnostic_report" in path for path in manifest["missing_optional_files"])

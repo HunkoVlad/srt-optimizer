@@ -23,6 +23,7 @@ def read_rows(path: Path) -> list[dict[str, str]]:
 
 def history_rows(
     *,
+    run_date: str = RUN_DATE,
     impressions_current: str = "3535",
     impressions_previous: str = "489",
     impressions_change: str = "3046",
@@ -31,7 +32,7 @@ def history_rows(
 ) -> list[dict[str, str]]:
     return [
         {
-            "run_date": RUN_DATE,
+            "run_date": run_date,
             "metric_window_start": "2026-05-17",
             "metric_window_end": "2026-05-24",
             "metric_name": "first_page_search_impressions",
@@ -41,7 +42,7 @@ def history_rows(
             "last_4_week_avg": "654",
         },
         {
-            "run_date": RUN_DATE,
+            "run_date": run_date,
             "metric_window_start": "2026-05-17",
             "metric_window_end": "2026-05-24",
             "metric_name": "search_to_listing_conversion_rate",
@@ -51,7 +52,7 @@ def history_rows(
             "last_4_week_avg": "40.91",
         },
         {
-            "run_date": RUN_DATE,
+            "run_date": run_date,
             "metric_window_start": "2026-05-17",
             "metric_window_end": "2026-05-24",
             "metric_name": "listing_to_booking_conversion_rate",
@@ -63,23 +64,55 @@ def history_rows(
     ]
 
 
+def existing_issue_row(
+    *,
+    first_seen_run_date: str = "2026-05-25",
+    last_seen_run_date: str = "2026-05-25",
+    status: str = "open",
+    weeks_open: str = "1",
+    notes: str = "Prior note.",
+) -> dict[str, str]:
+    return {
+        "issue_id": "airbnb_visibility_up_conversion_down",
+        "issue_title": "Airbnb visibility up, conversion down",
+        "first_seen_run_date": first_seen_run_date,
+        "last_seen_run_date": last_seen_run_date,
+        "status": status,
+        "severity": "high",
+        "source_type": "airbnb_diagnostic",
+        "signal_type": "visibility_up_conversion_down",
+        "current_value": "1200",
+        "previous_value": "300",
+        "wow_change": "900",
+        "four_week_average": "400",
+        "weeks_open": weeks_open,
+        "evidence_summary": "Prior issue.",
+        "suspected_cause": "listing competitiveness / value perception / booking friction",
+        "recommended_investigation": "Review listing against competitors before changing PriceLabs rules.",
+        "blocked_recommendation_reason": "Airbnb diagnostic signal alone cannot create PriceLabs rule recommendation.",
+        "resolution_rule": "Resolve after conversion improves for 2 consecutive runs.",
+        "notes": notes,
+    }
+
+
 def run_tracker(
     tmp_path: Path,
     *,
+    run_date: str = RUN_DATE,
     airbnb_rows: list[dict[str, str]] | None = None,
     settings_rows: list[dict[str, str]] | None = None,
     existing_history_rows: list[dict[str, str]] | None = None,
 ) -> tuple[Path, Path, list[dict[str, str]]]:
-    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    run_dir = tmp_path / "data" / "runs" / run_date
     history_file = tmp_path / "data" / "history" / "diagnostic_issue_tracker.csv"
     if airbnb_rows is not None:
-        write_csv(run_dir / "analysis" / f"airbnb_weekly_history_comparison_{RUN_DATE}.csv", airbnb_rows)
+        write_csv(run_dir / "analysis" / f"airbnb_weekly_history_comparison_{run_date}.csv", airbnb_rows)
     if settings_rows is not None:
-        write_csv(run_dir / "settings" / f"pricelabs_settings_changes_{RUN_DATE}.csv", settings_rows)
+        write_csv(run_dir / "settings" / f"pricelabs_settings_changes_{run_date}.csv", settings_rows)
     if existing_history_rows is not None:
         write_csv(history_file, existing_history_rows, diagnostic_issue_tracker.COLUMNS)
 
-    output = diagnostic_issue_tracker.run(RUN_DATE, run_dir=run_dir, history_file=history_file)
+    output = diagnostic_issue_tracker.run(run_date, run_dir=run_dir, history_file=history_file)
     return output, history_file, read_rows(output)
 
 
@@ -118,27 +151,7 @@ def test_does_not_create_issue_when_visibility_does_not_increase_sharply(tmp_pat
 
 
 def test_carries_open_issue_forward_from_history(tmp_path: Path) -> None:
-    existing = {
-        "issue_id": "airbnb_visibility_up_conversion_down",
-        "issue_title": "Airbnb visibility up, conversion down",
-        "first_seen_run_date": "2026-05-18",
-        "last_seen_run_date": "2026-05-18",
-        "status": "open",
-        "severity": "high",
-        "source_type": "airbnb_diagnostic",
-        "signal_type": "visibility_up_conversion_down",
-        "current_value": "1200",
-        "previous_value": "300",
-        "wow_change": "900",
-        "four_week_average": "400",
-        "weeks_open": "1",
-        "evidence_summary": "Prior issue.",
-        "suspected_cause": "listing competitiveness / value perception / booking friction",
-        "recommended_investigation": "Review listing against competitors before changing PriceLabs rules.",
-        "blocked_recommendation_reason": "Airbnb diagnostic signal alone cannot create PriceLabs rule recommendation.",
-        "resolution_rule": "Keep open until conversion improves for 2 consecutive runs; V1 does not auto-resolve.",
-        "notes": "Prior note.",
-    }
+    existing = existing_issue_row(first_seen_run_date="2026-05-18", last_seen_run_date="2026-05-18")
 
     _output, _history_file, rows = run_tracker(
         tmp_path,
@@ -153,6 +166,96 @@ def test_carries_open_issue_forward_from_history(tmp_path: Path) -> None:
     assert rows[0]["last_seen_run_date"] == RUN_DATE
     assert rows[0]["weeks_open"] == "2"
     assert "Carried forward" in rows[0]["notes"]
+
+
+def test_next_run_with_same_issue_remains_open_and_increments_weeks_open(tmp_path: Path) -> None:
+    _output, _history_file, rows = run_tracker(
+        tmp_path,
+        run_date="2026-06-01",
+        airbnb_rows=history_rows(run_date="2026-06-01"),
+        settings_rows=[],
+        existing_history_rows=[existing_issue_row()],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["status"] == "open"
+    assert rows[0]["first_seen_run_date"] == "2026-05-25"
+    assert rows[0]["last_seen_run_date"] == "2026-06-01"
+    assert rows[0]["weeks_open"] == "2"
+
+
+def test_next_run_with_conversion_improvement_marks_improving_not_resolved(tmp_path: Path) -> None:
+    _output, _history_file, rows = run_tracker(
+        tmp_path,
+        run_date="2026-06-01",
+        airbnb_rows=history_rows(
+            run_date="2026-06-01",
+            impressions_current="650",
+            impressions_previous="600",
+            impressions_change="50",
+            search_change="2.5",
+            booking_change="0.75",
+        ),
+        settings_rows=[],
+        existing_history_rows=[existing_issue_row()],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["status"] == "improving"
+    assert rows[0]["weeks_open"] == "2"
+    assert "improvement_streak=1" in rows[0]["notes"]
+
+
+def test_two_consecutive_improving_runs_marks_issue_resolved(tmp_path: Path) -> None:
+    _output, _history_file, rows = run_tracker(
+        tmp_path,
+        run_date="2026-06-08",
+        airbnb_rows=history_rows(
+            run_date="2026-06-08",
+            impressions_current="700",
+            impressions_previous="650",
+            impressions_change="50",
+            search_change="1.1",
+            booking_change="0.4",
+        ),
+        settings_rows=[],
+        existing_history_rows=[
+            existing_issue_row(
+                last_seen_run_date="2026-06-01",
+                status="improving",
+                weeks_open="2",
+                notes="Conversion is improving, but one more confirming run is required before resolution. improvement_streak=1",
+            )
+        ],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["status"] == "resolved"
+    assert rows[0]["weeks_open"] == "3"
+    assert "improvement_streak=2" in rows[0]["notes"]
+    assert "Resolved after conversion improved for 2 consecutive runs" in rows[0]["notes"]
+
+
+def test_missing_airbnb_data_does_not_resolve_existing_issue(tmp_path: Path) -> None:
+    _output, _history_file, rows = run_tracker(
+        tmp_path,
+        run_date="2026-06-08",
+        settings_rows=[],
+        existing_history_rows=[
+            existing_issue_row(
+                last_seen_run_date="2026-06-01",
+                status="improving",
+                weeks_open="2",
+                notes="Conversion is improving, but one more confirming run is required before resolution. improvement_streak=1",
+            )
+        ],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["status"] == "improving"
+    assert rows[0]["weeks_open"] == "3"
+    assert "resolution could not be evaluated because Airbnb diagnostics were missing" in rows[0]["notes"]
+    assert "improvement_streak=1" in rows[0]["notes"]
 
 
 def test_rerunning_same_run_date_does_not_increment_weeks_open(tmp_path: Path) -> None:

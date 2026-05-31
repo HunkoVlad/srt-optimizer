@@ -274,24 +274,19 @@ def materially_different(subject: Decimal | None, competitor: Decimal | None, th
 def build_competitor_calendar_context(rows: list[dict[str, str]]) -> dict[str, str]:
     if not rows:
         return {}
-    stay_dates = sorted({row.get("stay_date", "") for row in rows if row.get("stay_date", "")})
+    competitor_rows = [
+        row
+        for row in rows
+        if row.get("is_subject_listing", "").strip().lower() != "true"
+    ]
+    stay_dates = sorted({row.get("stay_date", "") for row in competitor_rows if row.get("stay_date", "")})
     grouped: dict[str, list[dict[str, str]]] = {}
-    for row in rows:
+    for row in competitor_rows:
         grouped.setdefault(row.get("competitor_name", ""), []).append(row)
-    subject_groups = [
-        group_rows
-        for group_rows in grouped.values()
-        if any(row.get("is_subject_listing", "").strip().lower() == "true" for row in group_rows)
-    ]
-    competitor_groups = [
-        group_rows
-        for group_rows in grouped.values()
-        if not any(row.get("is_subject_listing", "").strip().lower() == "true" for row in group_rows)
-    ]
-    if not stay_dates or not subject_groups or not competitor_groups:
+    competitor_groups = list(grouped.values())
+    if not stay_dates or not competitor_groups:
         return {}
 
-    subject = listing_metrics(subject_groups[0])
     competitor_metrics = [listing_metrics(group_rows) for group_rows in competitor_groups]
     competitor_avg_prices = [value for metric in competitor_metrics for value in [metric["average_price"]] if isinstance(value, Decimal)]
     competitor_avg_min_stays = [value for metric in competitor_metrics for value in [metric["average_min_stay"]] if isinstance(value, Decimal)]
@@ -301,34 +296,26 @@ def build_competitor_calendar_context(rows: list[dict[str, str]]) -> dict[str, s
         if isinstance(metric["available_count"], int)
     ]
 
-    subject_avg_price = subject["average_price"] if isinstance(subject["average_price"], Decimal) else None
     competitor_median_price = median_decimal(competitor_avg_prices)
-    subject_avg_min_stay = subject["average_min_stay"] if isinstance(subject["average_min_stay"], Decimal) else None
     competitor_median_min_stay = median_decimal(competitor_avg_min_stays)
-    subject_available = Decimal(str(subject["available_count"])) if isinstance(subject["available_count"], int) else None
     competitor_median_available = median_decimal(competitor_available_counts)
 
     notable: list[str] = []
-    price_direction = materially_different(subject_avg_price, competitor_median_price)
-    if price_direction:
-        notable.append(f"Subject listing average price is materially {price_direction} the selected comp median.")
-    if subject_avg_min_stay is not None and competitor_median_min_stay is not None and subject_avg_min_stay > competitor_median_min_stay:
-        notable.append("Subject listing average min stay is more restrictive than the selected comp median.")
-    availability_direction = materially_different(subject_available, competitor_median_available)
-    if availability_direction:
-        notable.append(f"Subject listing available date count materially differs from the selected comp median ({availability_direction}).")
+    if competitor_median_price is None:
+        notable.append("Competitor available-date prices were not available.")
+    if competitor_median_min_stay is None:
+        notable.append("Competitor min-stay values were not available.")
+    if competitor_median_available is not None and competitor_median_available == 0:
+        notable.append("Selected competitors show no available dates in the normalized calendar window.")
 
     return {
         "window_start": stay_dates[0],
         "window_end": stay_dates[-1],
         "competitor_count": str(len(competitor_groups)),
-        "subject_average_price": format_decimal(subject_avg_price),
         "competitor_median_average_price": format_decimal(competitor_median_price),
-        "subject_average_min_stay": format_decimal(subject_avg_min_stay),
         "competitor_median_min_stay": format_decimal(competitor_median_min_stay),
-        "subject_available_date_count": format_decimal(subject_available),
         "competitor_median_available_date_count": format_decimal(competitor_median_available),
-        "notable_context": " ".join(notable) if notable else "No material price, min-stay, or availability gap was detected from the selected PriceLabs comp set.",
+        "notable_context": " ".join(notable) if notable else "Selected competitor price, min-stay, and availability context is available for review.",
     }
 
 
@@ -341,13 +328,11 @@ def competitor_calendar_context_section(context: dict[str, str]) -> list[str]:
         [
             f"- 90-day window: {context['window_start']} to {context['window_end']}.",
             f"- Selected competitors: {context['competitor_count']}.",
-            f"- Subject listing average price over available dates: {context['subject_average_price']}.",
             f"- Competitor median average price over available dates: {context['competitor_median_average_price']}.",
-            f"- Subject listing average min stay: {context['subject_average_min_stay']}.",
             f"- Competitor median min stay: {context['competitor_median_min_stay']}.",
-            f"- Subject listing available date count: {context['subject_available_date_count']}.",
             f"- Competitor median available date count: {context['competitor_median_available_date_count']}.",
             f"- Notable context: {context['notable_context']}",
+            "- Subject listing metrics are intentionally excluded here because PriceLabs core outputs are the source of truth for Aloha Poconos pricing, availability, revenue pace, and cleaning context.",
             "- This is diagnostic context from selected PriceLabs competitors only. It is not a revenue or occupancy source of truth and does not create price-rule recommendations.",
             "",
         ]

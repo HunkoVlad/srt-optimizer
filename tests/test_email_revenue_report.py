@@ -286,12 +286,12 @@ def airbnb_summary_row() -> dict[str, str]:
     }
 
 
-def diagnostic_issue_row(status: str = "open") -> dict[str, str]:
+def diagnostic_issue_row(status: str = "open", *, last_seen_run_date: str = "2026-05-25") -> dict[str, str]:
     return {
         "issue_id": "airbnb_visibility_up_conversion_down",
         "issue_title": "Airbnb visibility up, conversion down",
         "first_seen_run_date": "2026-05-25",
-        "last_seen_run_date": "2026-05-25",
+        "last_seen_run_date": last_seen_run_date,
         "status": status,
         "severity": "high",
         "source_type": "airbnb_diagnostic",
@@ -305,7 +305,7 @@ def diagnostic_issue_row(status: str = "open") -> dict[str, str]:
         "suspected_cause": "listing competitiveness / value perception / booking friction",
         "recommended_investigation": "Review listing against competitors before changing PriceLabs rules.",
         "blocked_recommendation_reason": "Airbnb diagnostic signal alone cannot create PriceLabs rule recommendation.",
-        "resolution_rule": "Keep open until conversion improves for 2 consecutive runs; V1 does not auto-resolve.",
+        "resolution_rule": "Resolve after conversion improves for 2 consecutive runs.",
         "notes": "Diagnostic issue only; no recommendation action is created.",
     }
 
@@ -322,6 +322,75 @@ def listing_review_row(review_area: str = "search_card_appeal") -> dict[str, str
         "price_rule_change_allowed": "false",
         "notes": "V1 template-based listing-side review.",
     }
+
+
+def listing_change_row(status: str = "active", review_after_run_date: str = "2026-06-01") -> dict[str, str]:
+    return {
+        "change_date": "2026-05-26",
+        "run_date": "2026-05-25",
+        "related_issue_id": "airbnb_visibility_up_conversion_down",
+        "change_type": "cover_photo_test",
+        "old_value": "Hot tub hero photo",
+        "new_value": "Updated hero grid/copy baseline",
+        "reason": "Monitor conversion after listing-side baseline change.",
+        "expected_effect": "Improve search-to-listing and listing-to-booking conversion.",
+        "status": status,
+        "review_after_run_date": review_after_run_date,
+        "notes": "No additional listing changes until one full diagnostic cycle completes.",
+    }
+
+
+def competitor_calendar_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "run_date": "2026-05-25",
+            "stay_date": "2026-05-27",
+            "competitor_name": "Comp A",
+            "competitor_listing_id": "111",
+            "airbnb_url": "https://www.airbnb.com/rooms/111",
+            "is_subject_listing": "false",
+            "competitor_price": "400",
+            "competitor_available": "1",
+            "competitor_min_stay": "2",
+            "source_file": "source.csv",
+        },
+        {
+            "run_date": "2026-05-25",
+            "stay_date": "2026-05-28",
+            "competitor_name": "Comp A",
+            "competitor_listing_id": "111",
+            "airbnb_url": "https://www.airbnb.com/rooms/111",
+            "is_subject_listing": "false",
+            "competitor_price": "500",
+            "competitor_available": "1",
+            "competitor_min_stay": "2",
+            "source_file": "source.csv",
+        },
+        {
+            "run_date": "2026-05-25",
+            "stay_date": "2026-05-27",
+            "competitor_name": "Comp B",
+            "competitor_listing_id": "222",
+            "airbnb_url": "https://www.airbnb.com/rooms/222",
+            "is_subject_listing": "false",
+            "competitor_price": "469.29",
+            "competitor_available": "1",
+            "competitor_min_stay": "1.96",
+            "source_file": "source.csv",
+        },
+        {
+            "run_date": "2026-05-25",
+            "stay_date": "2026-05-28",
+            "competitor_name": "Your Listing - Aloha Poconos",
+            "competitor_listing_id": "",
+            "airbnb_url": "",
+            "is_subject_listing": "true",
+            "competitor_price": "999",
+            "competitor_available": "1",
+            "competitor_min_stay": "7",
+            "source_file": "source.csv",
+        },
+    ]
 
 
 def test_email_revenue_report_content() -> None:
@@ -415,19 +484,46 @@ def test_airbnb_funnel_section_does_not_change_recommendation_logic() -> None:
 
 def test_open_diagnostic_issues_section_appears_when_open_issue_exists() -> None:
     markdown = build_markdown(
-        "2026-05-08",
+        "2026-05-25",
         sample_rows(),
         diagnostic_issue_rows=[diagnostic_issue_row()],
         diagnostic_issue_tracker_available=True,
     )
     section = markdown.split("## Open Diagnostic Issues", 1)[1].split("## Recommendation Review", 1)[0]
 
-    assert "High: Airbnb visibility up, conversion down." in section
+    assert "High/Open: Airbnb visibility up, conversion down." in section
     assert "First seen: 2026-05-25. Weeks open: 1." in section
     assert "Evidence: First-page search impressions increased sharply: 3535 vs 489. Conversion weakened / remained weak." in section
     assert "Investigation: Review listing against competitors before changing PriceLabs rules." in section
     assert "Guardrail: Airbnb diagnostic signal alone cannot create PriceLabs rule recommendation." in section
     assert "Diagnostic issues are informational only." in section
+
+
+def test_improving_diagnostic_issue_appears_active_with_next_check() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        diagnostic_issue_rows=[diagnostic_issue_row(status="improving")],
+        diagnostic_issue_tracker_available=True,
+    )
+    section = markdown.split("## Open Diagnostic Issues", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Improving: Airbnb visibility up, conversion down." in section
+    assert "Next check: Resolve after conversion improves for 2 consecutive runs." in section
+    assert "Guardrail: Airbnb diagnostic signal alone cannot create PriceLabs rule recommendation." in section
+
+
+def test_monitoring_diagnostic_issue_appears_active() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        diagnostic_issue_rows=[diagnostic_issue_row(status="monitoring")],
+        diagnostic_issue_tracker_available=True,
+    )
+    section = markdown.split("## Open Diagnostic Issues", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Monitoring: Airbnb visibility up, conversion down." in section
+    assert "Investigation: Review listing against competitors before changing PriceLabs rules." in section
 
 
 def test_open_diagnostic_issues_section_handles_missing_tracker() -> None:
@@ -439,15 +535,40 @@ def test_open_diagnostic_issues_section_handles_missing_tracker() -> None:
 
 def test_open_diagnostic_issues_section_omits_resolved_only_tracker() -> None:
     markdown = build_markdown(
-        "2026-05-08",
+        "2026-05-25",
         sample_rows(),
         diagnostic_issue_rows=[diagnostic_issue_row(status="resolved")],
         diagnostic_issue_tracker_available=True,
     )
-    section = markdown.split("## Open Diagnostic Issues", 1)[1].split("## Recommendation Review", 1)[0]
+    section = markdown.split("## Open Diagnostic Issues", 1)[1].split("## Recently Resolved Diagnostic Issues", 1)[0]
 
     assert "No active diagnostic issues." in section
     assert "Airbnb visibility up, conversion down" not in section
+
+
+def test_resolved_issue_appears_under_recently_resolved_when_resolved_this_run() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        diagnostic_issue_rows=[diagnostic_issue_row(status="resolved")],
+        diagnostic_issue_tracker_available=True,
+    )
+    section = markdown.split("## Recently Resolved Diagnostic Issues", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Resolved: Airbnb visibility up, conversion down." in section
+    assert "First seen: 2026-05-25. Resolved on: 2026-05-25." in section
+    assert "Resolution rule: Resolve after conversion improves for 2 consecutive runs." in section
+
+
+def test_resolved_issue_from_prior_run_does_not_show_recently_resolved() -> None:
+    markdown = build_markdown(
+        "2026-06-01",
+        sample_rows(),
+        diagnostic_issue_rows=[diagnostic_issue_row(status="resolved", last_seen_run_date="2026-05-25")],
+        diagnostic_issue_tracker_available=True,
+    )
+
+    assert "## Recently Resolved Diagnostic Issues" not in markdown
 
 
 def test_open_diagnostic_issues_do_not_change_recommendation_review() -> None:
@@ -500,6 +621,42 @@ def test_listing_review_needed_section_references_full_review_when_markdown_exis
     assert "Full review: see listing_competitor_review_2026-05-25.md in the evidence bundle." in section
 
 
+def test_listing_review_needed_section_references_listing_snapshot_when_exists() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_review_rows=[listing_review_row()],
+        listing_review_available=True,
+        listing_snapshot_available=True,
+    )
+    section = markdown.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Listing snapshot: see listing_state_snapshot_2026-05-25.md in the evidence bundle." in section
+
+
+def test_listing_review_needed_section_references_visual_baseline_only_when_exists() -> None:
+    with_visuals = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_review_rows=[listing_review_row()],
+        listing_review_available=True,
+        listing_visual_baseline_available=True,
+    )
+    without_visuals = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_review_rows=[listing_review_row()],
+        listing_review_available=True,
+        listing_visual_baseline_available=False,
+    )
+
+    visual_section = with_visuals.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
+    no_visual_section = without_visuals.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Visual baseline files are included in the evidence bundle when available." in visual_section
+    assert "Visual baseline files are included" not in no_visual_section
+
+
 def test_listing_review_needed_section_references_competitor_list_when_exists() -> None:
     markdown = build_markdown(
         "2026-05-25",
@@ -511,6 +668,27 @@ def test_listing_review_needed_section_references_competitor_list_when_exists() 
     section = markdown.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
 
     assert "Competitor set: see pricelabs_competitor_list_2026-05-25.csv in the evidence bundle." in section
+
+
+def test_listing_review_needed_section_includes_competitor_calendar_context_when_exists() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_review_rows=[listing_review_row()],
+        listing_review_available=True,
+        competitor_calendar_rows=competitor_calendar_rows(),
+        competitor_calendar_available=True,
+    )
+    section = markdown.split("## Listing Review Needed", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Competitor context: selected PriceLabs comps show median average price of $459.65" in section
+    assert "median minimum stay of 1.98 nights" in section
+    assert "median available date count of 1.5 across the 90-day window" in section
+    assert "Subject listing metrics are intentionally excluded from this competitor context" in section
+    assert "Subject listing average price" not in section
+    assert "Subject listing average min stay" not in section
+    assert "Subject listing available date count" not in section
+    assert "$999" not in section
 
 
 def test_listing_review_needed_section_does_not_reference_missing_full_review() -> None:
@@ -525,8 +703,12 @@ def test_listing_review_needed_section_does_not_reference_missing_full_review() 
 
     assert "Full review:" not in section
     assert "listing_competitor_review_2026-05-25.md" not in section
+    assert "Listing snapshot:" not in section
+    assert "listing_state_snapshot_2026-05-25.md" not in section
+    assert "Visual baseline files" not in section
     assert "Competitor set:" not in section
     assert "pricelabs_competitor_list_2026-05-25.csv" not in section
+    assert "Competitor context:" not in section
 
 
 def test_listing_review_needed_section_handles_missing_or_empty_review() -> None:
@@ -568,11 +750,113 @@ def test_listing_review_evidence_reference_does_not_change_recommendation_review
         listing_review_rows=[listing_review_row()],
         listing_review_available=True,
         listing_review_markdown_available=True,
+        listing_snapshot_available=True,
+        listing_visual_baseline_available=True,
         competitor_list_available=True,
+        competitor_calendar_rows=competitor_calendar_rows(),
+        competitor_calendar_available=True,
     )
 
     without_recommendations = without_reference.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
     with_recommendations = with_reference.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    assert with_recommendations == without_recommendations
+
+
+def test_active_listing_tests_section_appears_when_active_change_exists() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_change_rows=[listing_change_row()],
+        listing_change_log_available=True,
+    )
+    section = markdown.split("## Active Listing Tests", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Active test: cover_photo_test." in section
+    assert "Related issue: airbnb_visibility_up_conversion_down." in section
+    assert "Change date: 2026-05-26." in section
+    assert "Expected effect: Improve search-to-listing and listing-to-booking conversion." in section
+    assert "Review after: 2026-06-01." in section
+    assert "Review due this run: No." in section
+    assert "Do not make additional listing or pricing changes until this test has at least one full Airbnb diagnostic cycle" in section
+
+
+def test_active_listing_tests_section_shows_review_due_this_run() -> None:
+    markdown = build_markdown(
+        "2026-06-01",
+        sample_rows(),
+        listing_change_rows=[listing_change_row(review_after_run_date="2026-06-01")],
+        listing_change_log_available=True,
+    )
+    section = markdown.split("## Active Listing Tests", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Review due this run: Yes." in section
+
+
+def test_active_listing_tests_section_notes_visual_baseline_when_available() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_change_rows=[listing_change_row()],
+        listing_change_log_available=True,
+        listing_visual_baseline_available=True,
+    )
+    section = markdown.split("## Active Listing Tests", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Current visual baseline files are included in the evidence bundle." in section
+
+
+def test_active_listing_tests_section_omits_visual_note_when_missing() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_change_rows=[listing_change_row()],
+        listing_change_log_available=True,
+        listing_visual_baseline_available=False,
+    )
+    section = markdown.split("## Active Listing Tests", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Current visual baseline files are included" not in section
+
+
+def test_active_listing_tests_omits_inactive_and_resolved_changes() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_change_rows=[
+            listing_change_row(status="open"),
+            listing_change_row(status="monitoring"),
+            listing_change_row(status="resolved"),
+            listing_change_row(status="inactive"),
+            listing_change_row(status="closed"),
+        ],
+        listing_change_log_available=True,
+    )
+
+    assert "## Active Listing Tests" not in markdown
+
+
+def test_missing_listing_change_log_does_not_render_active_tests() -> None:
+    markdown = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_change_rows=[listing_change_row()],
+        listing_change_log_available=False,
+    )
+
+    assert "## Active Listing Tests" not in markdown
+
+
+def test_active_listing_tests_do_not_change_recommendation_review() -> None:
+    without_change = build_markdown("2026-05-25", sample_rows())
+    with_change = build_markdown(
+        "2026-05-25",
+        sample_rows(),
+        listing_change_rows=[listing_change_row()],
+        listing_change_log_available=True,
+    )
+
+    without_recommendations = without_change.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    with_recommendations = with_change.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
     assert with_recommendations == without_recommendations
 
 

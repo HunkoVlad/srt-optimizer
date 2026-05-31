@@ -92,6 +92,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     diagnostic_position = script.index('"analysis.diagnostic_issue_tracker"')
     competitor_calendar_position = script.index('"pricelabs.transform.competitor_calendar"')
     listing_review_position = script.index('"analysis.listing_competitor_review"')
+    listing_snapshot_position = script.index('"analysis.listing_state_snapshot"')
     email_position = script.index('"pricelabs.transform.email_revenue_report"')
     evidence_position = script.index('"pricelabs.transform.evidence_bundle"')
     html_position = script.index('"pricelabs.transform.email_html_report"')
@@ -103,6 +104,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
         < diagnostic_position
         < competitor_calendar_position
         < listing_review_position
+        < listing_snapshot_position
         < email_position
         < evidence_position
         < html_position
@@ -113,6 +115,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert '"-m", "analysis.diagnostic_issue_tracker"' in script
     assert '"-m", "pricelabs.transform.competitor_calendar"' in script
     assert '"-m", "analysis.listing_competitor_review"' in script
+    assert '"-m", "analysis.listing_state_snapshot"' in script
     assert '"-m", "pricelabs.transform.email_revenue_report"' in script
     assert '"-m", "pricelabs.transform.evidence_bundle"' in script
     assert '$combinedMarketListingSignalFile = Join-Path $analysisDir "combined_market_listing_signal_$RunDate.csv"' in script
@@ -121,6 +124,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert '$pricelabsCompetitorListFile = Join-Path $rawDir "pricelabs_competitor_list_$RunDate.csv"' in script
     assert '$listingCompetitorReviewFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.md"' in script
     assert '$listingCompetitorReviewCsvFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.csv"' in script
+    assert '$listingStateSnapshotFile = Join-Path $analysisDir "listing_state_snapshot_$RunDate.md"' in script
     assert '"--combined-signal-file", $combinedMarketListingSignalFile' in script
     assert '"--diagnostic-issue-file", $diagnosticIssueTrackerFile' in script
     assert '"--listing-review-file", $listingCompetitorReviewCsvFile' in script
@@ -128,6 +132,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert "diagnostic_issue_tracker output path:" in script
     assert "pricelabs_competitor_calendar output path:" in script
     assert "listing_competitor_review output path:" in script
+    assert "listing_state_snapshot output path:" in script
     assert "evidence_bundle manifest path:" in script
 
 
@@ -180,10 +185,12 @@ def test_scheduled_wrapper_checks_evidence_bundle_manifest_output() -> None:
     assert 'analysis\\pricelabs_competitor_calendar_$RunDate.csv' in script
     assert 'analysis\\listing_competitor_review_$RunDate.md' in script
     assert 'analysis\\listing_competitor_review_$RunDate.csv' in script
+    assert 'analysis\\listing_state_snapshot_$RunDate.md' in script
     assert 'analysis\\email_revenue_report_$RunDate.md' in script
     assert script.index('analysis\\diagnostic_issue_tracker_$RunDate.csv') < script.index('analysis\\pricelabs_competitor_calendar_$RunDate.csv')
     assert script.index('analysis\\pricelabs_competitor_calendar_$RunDate.csv') < script.index('analysis\\listing_competitor_review_$RunDate.md')
-    assert script.index('analysis\\listing_competitor_review_$RunDate.csv') < script.index('analysis\\email_revenue_report_$RunDate.md')
+    assert script.index('analysis\\listing_competitor_review_$RunDate.csv') < script.index('analysis\\listing_state_snapshot_$RunDate.md')
+    assert script.index('analysis\\listing_state_snapshot_$RunDate.md') < script.index('analysis\\email_revenue_report_$RunDate.md')
     assert script.index('analysis\\email_revenue_report_$RunDate.md') < script.index(
         'analysis\\evidence_bundle_$RunDate\\evidence_manifest_$RunDate.json'
     )

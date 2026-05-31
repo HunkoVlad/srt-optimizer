@@ -277,13 +277,14 @@ def test_listing_review_includes_competitor_calendar_context_when_file_exists(tm
     assert "## PriceLabs Competitor Calendar Context" in markdown
     assert "90-day window: 2026-05-27 to 2026-05-28." in markdown
     assert "Selected competitors: 2." in markdown
-    assert "Subject listing average price over available dates: 410." in markdown
     assert "Competitor median average price over available dates: 255." in markdown
-    assert "Subject listing average min stay: 4." in markdown
     assert "Competitor median min stay: 2.5." in markdown
-    assert "Subject listing available date count: 2." in markdown
     assert "Competitor median available date count: 1.5." in markdown
+    assert "Subject listing metrics are intentionally excluded here because PriceLabs core outputs are the source of truth" in markdown
     assert "This is diagnostic context from selected PriceLabs competitors only." in markdown
+    assert "Subject listing average price over available dates" not in markdown
+    assert "Subject listing average min stay" not in markdown
+    assert "Subject listing available date count" not in markdown
     context_row = next(row for row in rows if row["review_area"] == "competitor_calendar_context")
     assert context_row["price_rule_change_allowed"] == "false"
     assert "Review competitor price/min-stay/availability context" in context_row["suggested_investigation"]
@@ -306,6 +307,7 @@ def test_competitor_calendar_context_does_not_invent_findings_or_rule_changes(tm
     combined_text = markdown + "\n" + "\n".join(str(row) for row in rows)
 
     assert "does not create price-rule recommendations" in combined_text
+    assert "Subject listing metrics are intentionally excluded" in combined_text
     assert "lower price" not in combined_text.lower()
     assert "raise price" not in combined_text.lower()
     assert "competitor listing is better" not in combined_text.lower()

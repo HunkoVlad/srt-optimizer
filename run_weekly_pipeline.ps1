@@ -140,6 +140,7 @@ $pricelabsCompetitorCalendarFile = Join-Path $analysisDir "pricelabs_competitor_
 $pricelabsCompetitorListFile = Join-Path $rawDir "pricelabs_competitor_list_$RunDate.csv"
 $listingCompetitorReviewFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.md"
 $listingCompetitorReviewCsvFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.csv"
+$listingStateSnapshotFile = Join-Path $analysisDir "listing_state_snapshot_$RunDate.md"
 $runtimeConfig = Join-Path $settingsDir "pricelabs_transform_config.toml"
 
 @"
@@ -322,6 +323,13 @@ Invoke-PythonStep "listing_competitor_review" @(
 )
 Write-Host "listing_competitor_review output path: $listingCompetitorReviewFile"
 Write-Host "listing_competitor_review CSV output path: $listingCompetitorReviewCsvFile"
+
+Invoke-PythonStep "listing_state_snapshot" @(
+    "-m", "analysis.listing_state_snapshot",
+    "--run-date", $RunDate,
+    "--run-dir", $runRoot
+)
+Write-Host "listing_state_snapshot output path: $listingStateSnapshotFile"
 
 Invoke-PythonStep "Monthly revenue summary" @(
     "-m", "pricelabs.transform.monthly_revenue_summary",

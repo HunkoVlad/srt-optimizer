@@ -141,6 +141,7 @@ if ($exitCode -eq 0) {
         (Join-Path $runRoot "analysis\pricelabs_competitor_calendar_$RunDate.csv"),
         (Join-Path $runRoot "analysis\listing_competitor_review_$RunDate.md"),
         (Join-Path $runRoot "analysis\listing_competitor_review_$RunDate.csv"),
+        (Join-Path $runRoot "analysis\listing_state_snapshot_$RunDate.md"),
         (Join-Path $runRoot "analysis\email_revenue_report_$RunDate.md"),
         (Join-Path $runRoot "analysis\evidence_bundle_$RunDate\evidence_manifest_$RunDate.json"),
         (Join-Path $runRoot "analysis\email_revenue_report_$RunDate.html"),
