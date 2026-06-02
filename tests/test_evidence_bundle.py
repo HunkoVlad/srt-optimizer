@@ -66,7 +66,7 @@ def test_evidence_bundle_folder_and_manifest_are_created(tmp_path: Path) -> None
     assert manifest["attachment_mode"] == "bundle_only"
     assert manifest["status"] == "complete"
     assert manifest["missing_required_files"] == []
-    assert len(manifest["files"]) == 17
+    assert len(manifest["files"]) == 20
 
 
 def test_core_files_are_copied_and_labeled_core(tmp_path: Path) -> None:
@@ -246,6 +246,29 @@ def test_normalized_competitor_calendar_is_optional_diagnostic_evidence(tmp_path
     assert calendar_entry["source_of_truth_type"] == "diagnostic"
 
 
+def test_airbnb_search_visibility_outputs_are_optional_diagnostic_evidence(tmp_path: Path) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    create_core_files(run_dir)
+    write_text(run_dir / "raw" / f"airbnb_search_visibility_input_{RUN_DATE}.csv")
+    write_text(run_dir / "analysis" / f"airbnb_search_visibility_{RUN_DATE}.csv")
+    write_text(run_dir / "analysis" / f"airbnb_search_visibility_{RUN_DATE}.md")
+
+    manifest = read_manifest(run(RUN_DATE, run_dir=run_dir))
+    names = copied_names(manifest)
+    entries = [
+        entry
+        for entry in manifest["files"]
+        if entry["category"] == "airbnb_search_visibility" and entry["copied"]
+    ]
+
+    assert f"{RUN_DATE}__airbnb_search_visibility__airbnb_search_visibility_input_{RUN_DATE}.csv" in names
+    assert f"{RUN_DATE}__airbnb_search_visibility__airbnb_search_visibility_{RUN_DATE}.csv" in names
+    assert f"{RUN_DATE}__airbnb_search_visibility__airbnb_search_visibility_{RUN_DATE}.md" in names
+    assert len(entries) == 3
+    assert all(entry["role"] == "broad_and_high_intent_search_discovery_diagnostic" for entry in entries)
+    assert all(entry["source_of_truth_type"] == "diagnostic" for entry in entries)
+
+
 def test_missing_high_priority_optional_files_do_not_fail(tmp_path: Path) -> None:
     run_dir = tmp_path / "data" / "runs" / RUN_DATE
     create_core_files(run_dir, priority="high")
@@ -254,13 +277,14 @@ def test_missing_high_priority_optional_files_do_not_fail(tmp_path: Path) -> Non
 
     assert manifest["status"] == "complete"
     assert manifest["missing_required_files"] == []
-    assert len(manifest["missing_optional_files"]) == 15
+    assert len(manifest["missing_optional_files"]) == 18
     assert any("diagnostic_issue_tracker" in path for path in manifest["missing_optional_files"])
     assert any("listing_competitor_review" in path for path in manifest["missing_optional_files"])
     assert any("listing_state_snapshot" in path for path in manifest["missing_optional_files"])
     assert any("listing_change_log" in path for path in manifest["missing_optional_files"])
     assert any("pricelabs_competitor_list" in path for path in manifest["missing_optional_files"])
     assert any("pricelabs_competitor_calendar" in path for path in manifest["missing_optional_files"])
+    assert any("airbnb_search_visibility" in path for path in manifest["missing_optional_files"])
     assert any("airbnb_conversion_diagnostic_report" in path for path in manifest["missing_optional_files"])
     assert any("airbnb_weekly_history_comparison" in path for path in manifest["missing_optional_files"])
 

@@ -42,6 +42,14 @@ def test_parse_args_rejects_unsupported_mode() -> None:
         download_diagnostics.parse_args(["--run-date", RUN_DATE, "--mode", "download-all"])
 
 
+def test_parse_args_accepts_debug_date_flow_flag() -> None:
+    args = download_diagnostics.parse_args(
+        ["--run-date", RUN_DATE, "--mode", "capture-headed-and-validate", "--debug-date-flow"]
+    )
+
+    assert args.debug_date_flow is True
+
+
 def test_run_rejects_unsupported_mode() -> None:
     with pytest.raises(ValueError, match="unsupported mode"):
         download_diagnostics.run(RUN_DATE, mode="download-all")
@@ -251,11 +259,14 @@ class FakeLocator:
     def first(self) -> "FakeLocator":
         return self
 
-    def click(self, timeout=None) -> None:
+    def click(self, timeout=None, trial: bool = False) -> None:
         if self.page.fail_date_selector and (
             self.selector == download_diagnostics.DATE_RANGE_SELECTOR or self.selector.startswith("role:button:")
         ):
             raise RuntimeError("date selector unavailable")
+        if trial:
+            self.page.trial_clicked_selectors.append(self.selector)
+            return
         self.page.clicked_selectors.append(self.selector)
         if self.selector == download_diagnostics.CONVERSION_LINK_SELECTOR:
             self.page.url = download_diagnostics.AIRBNB_CONVERSION_URL
@@ -265,7 +276,7 @@ class FakeLocator:
         if not self.page.fill_does_not_update:
             self.page.input_values[self.selector] = value
 
-    def type(self, value, timeout=None) -> None:
+    def type(self, value, timeout=None, delay=None) -> None:
         self.page.typed_inputs.append((self.selector, value))
         if not self.page.type_does_not_update:
             self.page.input_values[self.selector] = value
@@ -292,6 +303,11 @@ class FakeLocator:
         return ""
 
     def inner_text(self, timeout=None):
+        if self.selector in {
+            f"{download_diagnostics.DATE_RANGE_SELECTOR} button",
+            f"{download_diagnostics.DATE_RANGE_SELECTOR} [role='button']",
+        }:
+            return self.page.selected_date_control_text or self.page.visible_text
         return self.page.visible_text
 
     def wait_for(self, state=None, timeout=None) -> None:
@@ -309,6 +325,7 @@ class FakePage:
         goto_error: str = "",
         goto_final_url: str = "",
         visible_text: str = "Airbnb Performance Booking conversion Page views Wishlist additions May 10 May 17",
+        selected_date_control_text: str = "",
         fill_does_not_update: bool = False,
         type_does_not_update: bool = False,
         dom_events_do_not_update: bool = False,
@@ -320,11 +337,13 @@ class FakePage:
         self.goto_error = goto_error
         self.goto_final_url = goto_final_url
         self.visible_text = visible_text
+        self.selected_date_control_text = selected_date_control_text
         self.fill_does_not_update = fill_does_not_update
         self.type_does_not_update = type_does_not_update
         self.dom_events_do_not_update = dom_events_do_not_update
         self.goto_urls: list[str] = []
         self.clicked_selectors: list[str] = []
+        self.trial_clicked_selectors: list[str] = []
         self.filled_inputs: list[tuple[str, str]] = []
         self.typed_inputs: list[tuple[str, str]] = []
         self.evaluated_inputs: list[tuple[str, str]] = []
@@ -333,7 +352,9 @@ class FakePage:
         self.selected_options: list[tuple[str, str]] = []
         self.load_states: list[str] = []
         self.waited_selectors: list[str] = []
+        self.waited_timeouts: list[int] = []
         self.pause_count = 0
+        self.screenshots: list[str] = []
 
     def goto(self, url: str) -> None:
         self.goto_urls.append(url)
@@ -343,6 +364,7 @@ class FakePage:
         self.url = url
         if "ds-start=-8" in url and "ds-end=-1" in url:
             self.visible_text = "Airbnb Performance Booking conversion Page views Wishlist additions May 17 May 24"
+            self.selected_date_control_text = "May 17 → May 24"
 
     def locator(self, selector: str) -> FakeLocator:
         return FakeLocator(self, selector)
@@ -367,12 +389,21 @@ class FakePage:
     def wait_for_load_state(self, state: str, timeout=None) -> None:
         self.load_states.append(state)
 
+    def wait_for_timeout(self, milliseconds: int) -> None:
+        self.waited_timeouts.append(milliseconds)
+
     def pause(self) -> None:
         self.pause_count += 1
 
     def content(self) -> str:
         self.counter += 1
         return f"<html><body>Airbnb performance insights captured page {self.counter}</body></html>"
+
+    def screenshot(self, path: str, full_page: bool = False) -> None:
+        self.screenshots.append(path)
+        output_path = download_diagnostics.Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"debug")
 
 
 class FakeBrowser:
@@ -398,6 +429,7 @@ def install_fake_capture(
     fail_performance_indicator: bool = False,
     url: str = "",
     visible_text: str = "Airbnb Performance Booking conversion Page views Wishlist additions May 10 May 17",
+    selected_date_control_text: str = "",
     fill_does_not_update: bool = False,
     type_does_not_update: bool = False,
     dom_events_do_not_update: bool = False,
@@ -408,6 +440,7 @@ def install_fake_capture(
         fail_performance_indicator=fail_performance_indicator,
         url=url,
         visible_text=visible_text,
+        selected_date_control_text=selected_date_control_text,
         fill_does_not_update=fill_does_not_update,
         type_does_not_update=type_does_not_update,
         dom_events_do_not_update=dom_events_do_not_update,
@@ -488,7 +521,8 @@ def test_capture_headed_writes_only_allowed_staged_filenames(tmp_path, monkeypat
     assert manifest["report_controls_ready"] is True
     assert all(result["capture_status"] == "captured" for result in manifest["capture_results"])
     assert all(result["metric_assertion_status"] == "passed" for result in manifest["capture_results"])
-    assert all(result["date_range_assertion_status"] == "passed_visible_short_format" for result in manifest["capture_results"])
+    assert manifest["selected_date_control_text"]
+    assert all(result["date_range_assertion_status"] == "passed" for result in manifest["capture_results"])
     assert all(result["compare_assertion_status"] == "passed" for result in manifest["capture_results"])
     assert page.goto_urls in ([], [download_diagnostics.AIRBNB_CONVERSION_URL])
     assert page.pause_count == 0
@@ -497,11 +531,55 @@ def test_capture_headed_writes_only_allowed_staged_filenames(tmp_path, monkeypat
     assert 'text="Booking conversion"' in page.waited_selectors
     assert download_diagnostics.DATE_RANGE_SELECTOR in page.clicked_selectors
     assert download_diagnostics.DATE_RANGE_APPLY_SELECTOR in page.clicked_selectors
-    assert (download_diagnostics.START_DATE_INPUT_SELECTOR, "05/10/2026") in page.filled_inputs
-    assert (download_diagnostics.END_DATE_INPUT_SELECTOR, "05/17/2026") in page.filled_inputs
+    assert (download_diagnostics.START_DATE_INPUT_SELECTOR, "05/10/2026") in page.typed_inputs
+    assert (download_diagnostics.END_DATE_INPUT_SELECTOR, "05/17/2026") in page.typed_inputs
     assert browser.closed is True
     assert len(prompts) == 1
     assert not (run_dir / "raw").exists()
+
+
+def test_capture_headed_debug_date_flow_records_manifest_and_screenshots(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    _playwright, _browser, page, _prompts = install_fake_capture(monkeypatch)
+
+    manifest = read_json(
+        download_diagnostics.run(
+            RUN_DATE,
+            mode="capture-headed",
+            run_dir=run_dir,
+            debug_date_flow=True,
+        )
+    )
+
+    debug_dir = run_dir / "downloads_staging" / "airbnb" / "debug_date_flow"
+    assert manifest["debug_date_flow_enabled"] is True
+    assert manifest["debug_date_flow_dir"] == str(debug_dir)
+    assert "start_input_value_before" in manifest
+    assert "end_input_value_before" in manifest
+    assert manifest["start_input_value_after"] == "05/10/2026"
+    assert manifest["end_input_value_after"] == "05/17/2026"
+    assert manifest["selected_date_control_text_before_apply"]
+    assert manifest["selected_date_control_text_after_apply"]
+    assert manifest["current_url_before_apply"]
+    assert manifest["current_url_after_apply"]
+    assert manifest["date_picker_apply_clicked"] is True
+    assert manifest["date_input_selector_used"] == "role:textbox:START DATE|role:textbox:END DATE"
+    assert manifest["date_apply_selector_used"] == "testid:dsDropdownApply"
+    assert all(str(debug_dir) in path for path in manifest["debug_date_flow_screenshots"])
+    assert (debug_dir / "01_before_open_date_picker.png").exists()
+    assert (debug_dir / "07_selected_date_chip.png").exists()
+    assert page.screenshots
+
+
+def test_capture_headed_non_debug_behavior_does_not_create_debug_screenshots(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    install_fake_capture(monkeypatch)
+
+    manifest = read_json(download_diagnostics.run(RUN_DATE, mode="capture-headed", run_dir=run_dir))
+
+    assert manifest["debug_date_flow_enabled"] is False
+    assert manifest["debug_date_flow_dir"] == ""
+    assert not (run_dir / "downloads_staging" / "airbnb" / "debug_date_flow").exists()
 
 
 def test_capture_headed_does_not_write_html_when_performance_page_not_confirmed(tmp_path, monkeypatch) -> None:
@@ -672,13 +750,13 @@ def test_set_airbnb_reporting_window_uses_known_date_selectors() -> None:
 
     assert details["date_range_automation_status"] == "applied"
     assert details["date_range_automation_error"] == ""
-    assert details["date_input_strategy_used"] == "fill_clear"
+    assert details["date_input_strategy_used"] == "type_clear"
     assert details["start_input_value_after_set"] == "05/17/2026"
     assert details["end_input_value_after_set"] == "05/24/2026"
     assert details["apply_clicked"] is True
     assert page.clicked_selectors[0] == download_diagnostics.DATE_RANGE_SELECTOR
     assert page.clicked_selectors[-1] == download_diagnostics.DATE_RANGE_APPLY_SELECTOR
-    assert page.filled_inputs == [
+    assert page.typed_inputs == [
         (download_diagnostics.START_DATE_INPUT_SELECTOR, "05/17/2026"),
         (download_diagnostics.END_DATE_INPUT_SELECTOR, "05/24/2026"),
     ]
@@ -686,17 +764,135 @@ def test_set_airbnb_reporting_window_uses_known_date_selectors() -> None:
     assert (download_diagnostics.START_DATE_INPUT_SELECTOR, "Backspace") in page.pressed_keys
     assert (download_diagnostics.END_DATE_INPUT_SELECTOR, "ControlOrMeta+A") in page.pressed_keys
     assert (download_diagnostics.END_DATE_INPUT_SELECTOR, "Backspace") in page.pressed_keys
+    assert (download_diagnostics.START_DATE_INPUT_SELECTOR, "Enter") not in page.pressed_keys
+    assert (download_diagnostics.END_DATE_INPUT_SELECTOR, "Enter") not in page.pressed_keys
 
 
-def test_set_airbnb_reporting_window_falls_back_to_type_clear() -> None:
-    page = FakePage(visible_text="Airbnb Performance Booking conversion May 17 May 24", fill_does_not_update=True)
+def test_click_airbnb_date_apply_waits_until_clickable_and_hidden() -> None:
+    page = FakePage()
+
+    download_diagnostics.click_airbnb_date_apply(page)
+
+    assert page.waited_selectors.count(download_diagnostics.DATE_RANGE_APPLY_SELECTOR) == 2
+    assert download_diagnostics.DATE_RANGE_APPLY_SELECTOR in page.trial_clicked_selectors
+    assert download_diagnostics.DATE_RANGE_APPLY_SELECTOR in page.clicked_selectors
+    assert page.waited_timeouts == [
+        download_diagnostics.DATE_APPLY_PRE_CLICK_SETTLE_MS,
+        download_diagnostics.DATE_APPLY_POST_CLICK_SETTLE_MS,
+    ]
+
+
+def test_date_assertion_passes_when_selected_control_has_arrow_format() -> None:
+    page = FakePage(
+        visible_text="Airbnb Performance chart axis May 21 May 28",
+        selected_date_control_text="May 24 → May 31",
+    )
+
+    ok, status, error = download_diagnostics.assert_airbnb_date_range_applied(
+        page,
+        date(2026, 5, 24),
+        date(2026, 5, 31),
+    )
+
+    assert ok is True
+    assert status == "passed"
+    assert error == ""
+
+
+def test_date_assertion_passes_when_selected_control_has_numeric_format() -> None:
+    page = FakePage(selected_date_control_text="05/24/2026 - 05/31/2026")
+
+    ok, status, error = download_diagnostics.assert_airbnb_date_range_applied(
+        page,
+        date(2026, 5, 24),
+        date(2026, 5, 31),
+    )
+
+    assert ok is True
+    assert status == "passed"
+    assert error == ""
+
+
+def test_date_assertion_does_not_use_chart_text_when_selected_control_is_wrong() -> None:
+    page = FakePage(
+        visible_text="Airbnb Performance chart axis May 24 May 31",
+        selected_date_control_text="May 21 → May 28",
+    )
+
+    ok, status, error = download_diagnostics.assert_airbnb_date_range_applied(
+        page,
+        date(2026, 5, 24),
+        date(2026, 5, 31),
+    )
+
+    assert ok is False
+    assert status == "failed_visible_range_mismatch"
+    assert "selected date control text" in error
+
+
+def test_set_airbnb_reporting_window_uses_selected_date_control_not_chart_text() -> None:
+    page = FakePage(
+        visible_text="Airbnb Performance Booking conversion May 21 May 28 No filters applied",
+        selected_date_control_text="May 24 → May 31",
+    )
+
+    details = download_diagnostics.set_airbnb_reporting_window(
+        page,
+        date(2026, 5, 24),
+        date(2026, 5, 31),
+        date(2026, 6, 1),
+    )
+
+    assert details["date_range_automation_status"] == "applied"
+    assert details["selected_date_control_text"] == "May 24 → May 31"
+    assert details["visible_date_text_after_apply"] == "Airbnb Performance Booking conversion May 21 May 28 No filters applied"
+
+
+def test_set_airbnb_reporting_window_retries_when_airbnb_snaps_to_wrong_date(monkeypatch) -> None:
+    page = FakePage(
+        visible_text="Airbnb Performance Booking conversion May 21 May 28 No filters applied",
+        selected_date_control_text="May 24 \u2192 May 28",
+    )
+    apply_count = 0
+
+    def fake_apply(_page) -> None:
+        nonlocal apply_count
+        apply_count += 1
+        page.clicked_selectors.append(download_diagnostics.DATE_RANGE_APPLY_SELECTOR)
+        if apply_count == 1:
+            page.selected_date_control_text = "May 24 \u2192 May 28"
+        else:
+            page.selected_date_control_text = "May 24 \u2192 May 31"
+
+    monkeypatch.setattr(download_diagnostics, "click_airbnb_date_apply", fake_apply)
+
+    details = download_diagnostics.set_airbnb_reporting_window(
+        page,
+        date(2026, 5, 24),
+        date(2026, 5, 31),
+        date(2026, 6, 1),
+    )
+
+    assert details["date_range_automation_status"] == "applied"
+    assert details["date_range_attempt"] == 2
+    assert details["date_range_max_attempts"] == 2
+    assert details["date_fields_attempted"] == "end"
+    assert details["selected_date_control_text"] == "May 24 \u2192 May 31"
+    assert "May 28" in details["date_range_previous_attempt_error"]
+    assert apply_count == 2
+    assert page.typed_inputs.count((download_diagnostics.START_DATE_INPUT_SELECTOR, "05/24/2026")) == 1
+    assert page.typed_inputs.count((download_diagnostics.END_DATE_INPUT_SELECTOR, "05/31/2026")) == 2
+
+
+def test_set_airbnb_reporting_window_falls_back_to_fill_clear() -> None:
+    page = FakePage(visible_text="Airbnb Performance Booking conversion May 17 May 24", type_does_not_update=True)
 
     details = download_diagnostics.set_airbnb_reporting_window(page, date(2026, 5, 17), date(2026, 5, 24), date(2026, 5, 25))
 
     assert details["date_range_automation_status"] == "applied"
-    assert details["date_input_strategy_used"] == "type_clear"
-    assert (download_diagnostics.START_DATE_INPUT_SELECTOR, "05/17/2026") in page.typed_inputs
-    assert (download_diagnostics.END_DATE_INPUT_SELECTOR, "05/24/2026") in page.typed_inputs
+    assert details["date_input_strategy_used"] == "fill_clear"
+    assert (download_diagnostics.START_DATE_INPUT_SELECTOR, "05/17/2026") in page.filled_inputs
+    assert (download_diagnostics.END_DATE_INPUT_SELECTOR, "05/24/2026") in page.filled_inputs
 
 
 def test_set_airbnb_reporting_window_falls_back_to_dom_events() -> None:

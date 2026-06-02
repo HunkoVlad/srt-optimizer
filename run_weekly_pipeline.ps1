@@ -141,6 +141,7 @@ $pricelabsCompetitorListFile = Join-Path $rawDir "pricelabs_competitor_list_$Run
 $listingCompetitorReviewFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.md"
 $listingCompetitorReviewCsvFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.csv"
 $listingStateSnapshotFile = Join-Path $analysisDir "listing_state_snapshot_$RunDate.md"
+$airbnbSearchVisibilityFile = Join-Path $analysisDir "airbnb_search_visibility_$RunDate.md"
 $runtimeConfig = Join-Path $settingsDir "pricelabs_transform_config.toml"
 
 @"
@@ -330,6 +331,13 @@ Invoke-PythonStep "listing_state_snapshot" @(
     "--run-dir", $runRoot
 )
 Write-Host "listing_state_snapshot output path: $listingStateSnapshotFile"
+
+Invoke-PythonStep "airbnb_search_visibility" @(
+    "-m", "analysis.airbnb_search_visibility",
+    "--run-date", $RunDate,
+    "--run-dir", $runRoot
+)
+Write-Host "airbnb_search_visibility output path: $airbnbSearchVisibilityFile"
 
 Invoke-PythonStep "Monthly revenue summary" @(
     "-m", "pricelabs.transform.monthly_revenue_summary",

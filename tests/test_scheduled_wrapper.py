@@ -93,6 +93,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     competitor_calendar_position = script.index('"pricelabs.transform.competitor_calendar"')
     listing_review_position = script.index('"analysis.listing_competitor_review"')
     listing_snapshot_position = script.index('"analysis.listing_state_snapshot"')
+    search_visibility_position = script.index('"analysis.airbnb_search_visibility"')
     email_position = script.index('"pricelabs.transform.email_revenue_report"')
     evidence_position = script.index('"pricelabs.transform.evidence_bundle"')
     html_position = script.index('"pricelabs.transform.email_html_report"')
@@ -105,6 +106,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
         < competitor_calendar_position
         < listing_review_position
         < listing_snapshot_position
+        < search_visibility_position
         < email_position
         < evidence_position
         < html_position
@@ -116,6 +118,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert '"-m", "pricelabs.transform.competitor_calendar"' in script
     assert '"-m", "analysis.listing_competitor_review"' in script
     assert '"-m", "analysis.listing_state_snapshot"' in script
+    assert '"-m", "analysis.airbnb_search_visibility"' in script
     assert '"-m", "pricelabs.transform.email_revenue_report"' in script
     assert '"-m", "pricelabs.transform.evidence_bundle"' in script
     assert '$combinedMarketListingSignalFile = Join-Path $analysisDir "combined_market_listing_signal_$RunDate.csv"' in script
@@ -125,6 +128,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert '$listingCompetitorReviewFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.md"' in script
     assert '$listingCompetitorReviewCsvFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.csv"' in script
     assert '$listingStateSnapshotFile = Join-Path $analysisDir "listing_state_snapshot_$RunDate.md"' in script
+    assert '$airbnbSearchVisibilityFile = Join-Path $analysisDir "airbnb_search_visibility_$RunDate.md"' in script
     assert '"--combined-signal-file", $combinedMarketListingSignalFile' in script
     assert '"--diagnostic-issue-file", $diagnosticIssueTrackerFile' in script
     assert '"--listing-review-file", $listingCompetitorReviewCsvFile' in script
@@ -133,6 +137,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert "pricelabs_competitor_calendar output path:" in script
     assert "listing_competitor_review output path:" in script
     assert "listing_state_snapshot output path:" in script
+    assert "airbnb_search_visibility output path:" in script
     assert "evidence_bundle manifest path:" in script
 
 

@@ -145,6 +145,27 @@ def core_specs(run_date: str) -> list[EvidenceSpec]:
             "pricelabs_competitor_price_min_stay_availability_context_90_day",
             "diagnostic",
         ),
+        EvidenceSpec(
+            f"raw/airbnb_search_visibility_input_{run_date}.csv",
+            "airbnb_search_visibility",
+            False,
+            "broad_and_high_intent_search_discovery_diagnostic",
+            "diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/airbnb_search_visibility_{run_date}.csv",
+            "airbnb_search_visibility",
+            False,
+            "broad_and_high_intent_search_discovery_diagnostic",
+            "diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/airbnb_search_visibility_{run_date}.md",
+            "airbnb_search_visibility",
+            False,
+            "broad_and_high_intent_search_discovery_diagnostic",
+            "diagnostic",
+        ),
     ]
 
 

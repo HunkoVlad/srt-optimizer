@@ -73,6 +73,10 @@ def parse_args() -> argparse.Namespace:
         "--listing-change-log-file",
         help="Optional listing change log CSV. Defaults to data/history/listing_change_log.csv.",
     )
+    parser.add_argument(
+        "--airbnb-search-visibility-file",
+        help="Optional Airbnb search visibility diagnostic CSV. Defaults to analysis/airbnb_search_visibility_<run-date>.csv.",
+    )
     return parser.parse_args()
 
 
@@ -274,6 +278,13 @@ def read_listing_change_rows(path: Path) -> list[dict[str, str]]:
         return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
 
 
+def read_airbnb_search_visibility_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
 def default_combined_signal_path(run_date: str, output_path: Path) -> Path:
     if output_path.parent.name == "analysis":
         return output_path.parent / f"combined_market_listing_signal_{run_date}.csv"
@@ -339,6 +350,12 @@ def default_listing_change_log_path(output_path: Path) -> Path:
         except IndexError:
             pass
     return Path("data") / "history" / "listing_change_log.csv"
+
+
+def default_airbnb_search_visibility_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"airbnb_search_visibility_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "analysis" / f"airbnb_search_visibility_{run_date}.csv"
 
 
 def default_output_path(run_date: str) -> Path:
@@ -675,6 +692,53 @@ def active_listing_changes_section(
     return lines
 
 
+def find_visibility_scenario(rows: list[dict[str, str]], scenario_name: str) -> dict[str, str] | None:
+    return next((row for row in rows if row.get("scenario_name") == scenario_name), None)
+
+
+def visibility_status(row: dict[str, str] | None) -> str:
+    if not row:
+        return "unavailable"
+    found = row.get("found_status", "") or "unknown"
+    if found == "found":
+        page = row.get("page_number", "") or "unknown"
+        position = row.get("position_on_page", "")
+        return f"found on page {page}" + (f", position {position}" if position else "")
+    return f"{found} after {row.get('max_pages_checked', '') or 'unknown'} pages checked"
+
+
+def best_filtered_visibility(rows: list[dict[str, str]]) -> dict[str, str] | None:
+    found_rows = [row for row in rows if row.get("scenario_name") != "broad_no_filters" and row.get("found_status") == "found"]
+    return min(
+        found_rows,
+        key=lambda row: (
+            float(row.get("page_number") or 9999),
+            float(row.get("position_on_page") or 9999),
+        ),
+        default=None,
+    )
+
+
+def airbnb_search_visibility_section(rows: list[dict[str, str]] | None, *, diagnostic_available: bool = False) -> list[str]:
+    if not diagnostic_available or not rows:
+        return []
+    broad = find_visibility_scenario(rows, "broad_no_filters")
+    high_intent = find_visibility_scenario(rows, "broad_high_intent_filters")
+    best_filtered = best_filtered_visibility(rows)
+    cover_status = next((row.get("cover_photo_status", "") for row in rows if row.get("cover_photo_status", "")), "unavailable")
+    lines = [
+        "## Airbnb Search Visibility Diagnostic",
+        "",
+        f"- Broad no-filter status: {visibility_status(broad)}.",
+        f"- High-intent filter status: {visibility_status(high_intent)}.",
+        f"- Best filtered scenario found: {best_filtered.get('scenario_name', 'unavailable') if best_filtered else 'unavailable'}.",
+        f"- Cover photo status: {cover_status}.",
+        "- Guardrail: Airbnb search visibility is diagnostic only and does not create a PriceLabs rule recommendation.",
+        "",
+    ]
+    return lines
+
+
 def booking_source_notes(rows: list[dict[str, str]]) -> list[str]:
     lines = ["## Booking Source Notes", ""]
     source_rows = [
@@ -709,6 +773,8 @@ def build_markdown(
     competitor_calendar_available: bool = False,
     listing_change_rows: list[dict[str, str]] | None = None,
     listing_change_log_available: bool = False,
+    airbnb_search_visibility_rows: list[dict[str, str]] | None = None,
+    airbnb_search_visibility_available: bool = False,
 ) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
@@ -754,6 +820,12 @@ def build_markdown(
             competitor_calendar_context=build_competitor_calendar_context(competitor_calendar_rows or [])
             if listing_review_available and competitor_calendar_available
             else None,
+        )
+    )
+    lines.extend(
+        airbnb_search_visibility_section(
+            airbnb_search_visibility_rows,
+            diagnostic_available=airbnb_search_visibility_available,
         )
     )
     lines.extend(
@@ -862,6 +934,11 @@ def run() -> int:
     competitor_list_path = Path(args.competitor_list_file) if args.competitor_list_file else default_competitor_list_path(args.run_date, output_path)
     competitor_calendar_path = Path(args.competitor_calendar_file) if args.competitor_calendar_file else default_competitor_calendar_path(args.run_date, output_path)
     listing_change_log_path = Path(args.listing_change_log_file) if args.listing_change_log_file else default_listing_change_log_path(output_path)
+    airbnb_search_visibility_path = (
+        Path(args.airbnb_search_visibility_file)
+        if args.airbnb_search_visibility_file
+        else default_airbnb_search_visibility_path(args.run_date, output_path)
+    )
 
     if not summary_path.exists():
         raise FileNotFoundError(f"Monthly revenue summary markdown does not exist: {summary_path}")
@@ -878,6 +955,7 @@ def run() -> int:
     print(f"Email revenue report competitor list input: {competitor_list_path}")
     print(f"Email revenue report competitor calendar input: {competitor_calendar_path}")
     print(f"Email revenue report listing change log input: {listing_change_log_path}")
+    print(f"Email revenue report Airbnb search visibility input: {airbnb_search_visibility_path}")
     print(f"Email revenue report output: {output_path}")
 
     rows = read_monthly_rows(rolling_path)
@@ -888,6 +966,7 @@ def run() -> int:
     listing_review_rows = read_listing_review_rows(listing_review_path)
     competitor_calendar_rows = read_competitor_calendar_rows(competitor_calendar_path)
     listing_change_rows = read_listing_change_rows(listing_change_log_path)
+    airbnb_search_visibility_rows = read_airbnb_search_visibility_rows(airbnb_search_visibility_path)
     write_markdown(
         output_path,
         build_markdown(
@@ -908,6 +987,8 @@ def run() -> int:
             competitor_calendar_path.exists(),
             listing_change_rows,
             listing_change_log_path.exists(),
+            airbnb_search_visibility_rows,
+            airbnb_search_visibility_path.exists(),
         ),
     )
     print(f"Wrote {output_path}")

@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import shutil
 import sys
+import time
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
@@ -44,6 +45,9 @@ START_DATE_INPUT_SELECTOR = "input#startDateString"
 END_DATE_INPUT_SELECTOR = "input#endDateString"
 DATE_RANGE_APPLY_SELECTOR = 'button[data-testid="dsDropdownApply"]'
 COMPARE_SELECTOR = 'select[name="chart-compare"][aria-label="Compare"]'
+DATE_INPUT_SETTLE_TIMEOUT_MS = 1500
+DATE_APPLY_PRE_CLICK_SETTLE_MS = 500
+DATE_APPLY_POST_CLICK_SETTLE_MS = 1000
 
 
 @dataclass(frozen=True)
@@ -137,6 +141,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--run-dir",
         help="Optional run directory. Defaults to data/runs/<run-date>.",
+    )
+    parser.add_argument(
+        "--debug-date-flow",
+        action="store_true",
+        help="Capture date input/apply screenshots and manifest fields for headed Airbnb diagnostics debugging.",
     )
     args = parser.parse_args(argv)
     if args.mode not in SUPPORTED_MODES:
@@ -484,6 +493,22 @@ def pause_for_date_setting(page, message: str) -> None:
     page.pause()
 
 
+def debug_date_flow_dir(staging_path: Path) -> Path:
+    return staging_path / "debug_date_flow"
+
+
+def capture_debug_date_flow_screenshot(page, debug_dir: Path | None, filename: str) -> str:
+    if debug_dir is None:
+        return ""
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    path = debug_dir / filename
+    try:
+        page.screenshot(path=str(path), full_page=False)
+        return str(path)
+    except Exception:
+        return ""
+
+
 def write_date_picker_debug_dom(page, output_path: Path) -> str:
     try:
         snippet = page.evaluate(
@@ -629,6 +654,43 @@ def date_selector_visible_text(page) -> str:
         return ""
 
 
+def selected_date_control_text(page) -> str:
+    """Return the selected date-range chip/control text, avoiding chart/page text."""
+    candidates = [
+        f"{DATE_RANGE_SELECTOR} button",
+        f"{DATE_RANGE_SELECTOR} [role='button']",
+    ]
+    for selector in candidates:
+        try:
+            text = page.locator(selector).first.inner_text(timeout=1500)
+            collapsed = re.sub(r"\s+", " ", text).strip()
+            if collapsed:
+                return collapsed
+        except Exception:
+            continue
+    try:
+        text = page.get_by_role("button", name=re.compile("Filters applied")).inner_text(timeout=1500)
+        return re.sub(r"\s+", " ", text).strip()
+    except Exception:
+        return ""
+
+
+def date_range_presence_in_text(text: str, start_date: date, end_date: date) -> tuple[bool, bool]:
+    start_input = format_airbnb_date_input(start_date)
+    end_input = format_airbnb_date_input(end_date)
+    short_start = start_date.strftime("%b %-d") if sys.platform != "win32" else start_date.strftime("%b %#d")
+    short_end = end_date.strftime("%b %-d") if sys.platform != "win32" else end_date.strftime("%b %#d")
+    normalized = (
+        text.replace("\u2192", "-")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+        .replace("â†’", "-")
+        .replace("â€“", "-")
+        .replace("â€”", "-")
+    )
+    return short_start in normalized or start_input in normalized, short_end in normalized or end_input in normalized
+
+
 def select_airbnb_metric(page, metric_link_name: str, expected_metric_text: str | None = None) -> tuple[bool, str]:
     try:
         page.get_by_role("link", name=metric_link_name).click(timeout=5000)
@@ -647,18 +709,23 @@ def assert_airbnb_metric_ready(page, expected_metric_text: str) -> tuple[bool, s
 
 
 def assert_airbnb_date_range_applied(page, start_date: date, end_date: date) -> tuple[bool, str, str]:
-    text = date_selector_visible_text(page)
+    text = selected_date_control_text(page)
     start_input = format_airbnb_date_input(start_date)
     end_input = format_airbnb_date_input(end_date)
     short_start = start_date.strftime("%b %-d") if sys.platform != "win32" else start_date.strftime("%b %#d")
     short_end = end_date.strftime("%b %-d") if sys.platform != "win32" else end_date.strftime("%b %#d")
-    has_start = short_start in text
-    has_end = short_end in text
-    if has_start and has_end:
-        return True, "passed_visible_short_format", ""
+    normalized = text.replace("→", "-").replace("–", "-").replace("—", "-")
+    has_short_start = short_start in normalized
+    has_short_end = short_end in normalized
+    has_input_start = start_input in normalized
+    has_input_end = end_input in normalized
+    if has_short_start and has_short_end:
+        return True, "passed", ""
+    if has_input_start and has_input_end:
+        return True, "passed", ""
     if text:
-        return False, "failed_visible_range_mismatch", f"visible date selector text {text!r} does not include {short_start} and {short_end}"
-    return False, "failed", f"visible date selector text is unavailable; expected {short_start} and {short_end}"
+        return False, "failed_visible_range_mismatch", f"selected date control text {text!r} does not include {short_start} and {short_end}"
+    return False, "failed", f"selected date control text is unavailable; expected {short_start} and {short_end}"
 
 
 def select_airbnb_compare_mode(page, compare_value: str) -> tuple[bool, str]:
@@ -755,19 +822,71 @@ def read_input_value(locator) -> str:
         return ""
 
 
-def clear_masked_date_input(locator) -> None:
+def wait_for_date_input_visible(locator) -> None:
+    locator.wait_for(state="visible", timeout=3000)
+
+
+def wait_for_input_value_in(locator, expected_values: set[str], timeout_ms: int = DATE_INPUT_SETTLE_TIMEOUT_MS) -> str:
+    deadline = datetime.now(UTC) + timedelta(milliseconds=timeout_ms)
+    last_value = read_input_value(locator)
+    normalized_expected = {value.strip().lower() for value in expected_values}
+    while datetime.now(UTC) <= deadline:
+        last_value = read_input_value(locator)
+        if last_value.strip().lower() in normalized_expected:
+            return last_value
+        time.sleep(0.05)
+    return last_value
+
+
+def wait_for_input_value(locator, expected_value: str, timeout_ms: int = DATE_INPUT_SETTLE_TIMEOUT_MS) -> str:
+    return wait_for_input_value_in(locator, {expected_value}, timeout_ms)
+
+
+def wait_for_masked_date_input_cleared(locator, timeout_ms: int = DATE_INPUT_SETTLE_TIMEOUT_MS) -> str:
+    return wait_for_input_value_in(locator, {"", "mm/dd/yyyy", "MM/DD/YYYY"}, timeout_ms)
+
+
+def commit_masked_date_input(locator, value: str) -> str:
+    """Confirm the masked input value without moving focus away from the date picker."""
+    return wait_for_input_value(locator, value, timeout_ms=1000)
+
+
+def wait_for_airbnb_ui_settle(page, milliseconds: int) -> None:
+    try:
+        page.wait_for_timeout(milliseconds)
+    except Exception:
+        time.sleep(milliseconds / 1000)
+
+
+def click_airbnb_date_apply(page) -> None:
+    apply_button = page.locator(DATE_RANGE_APPLY_SELECTOR).first
+    apply_button.wait_for(state="visible", timeout=5000)
+    wait_for_airbnb_ui_settle(page, DATE_APPLY_PRE_CLICK_SETTLE_MS)
+    try:
+        apply_button.click(timeout=5000, trial=True)
+    except TypeError:
+        pass
+    apply_button.click(timeout=5000)
+    apply_button.wait_for(state="hidden", timeout=5000)
+    wait_for_airbnb_ui_settle(page, DATE_APPLY_POST_CLICK_SETTLE_MS)
+
+
+def clear_masked_date_input(locator) -> str:
+    wait_for_date_input_visible(locator)
     locator.click(timeout=3000)
+    wait_for_date_input_visible(locator)
     try:
         locator.press("ControlOrMeta+A", timeout=1000)
     except Exception:
         locator.press("Control+A", timeout=1000)
     locator.press("Backspace", timeout=1000)
+    return wait_for_masked_date_input_cleared(locator)
 
 
 def set_masked_date_input(locator, value: str) -> tuple[bool, str, str]:
     strategies = (
+        ("type_clear", lambda: locator.type(value, timeout=3000, delay=75)),
         ("fill_clear", lambda: locator.fill(value, timeout=3000)),
-        ("type_clear", lambda: locator.type(value, timeout=3000)),
         (
             "dom_events",
             lambda: locator.evaluate(
@@ -782,11 +901,16 @@ def set_masked_date_input(locator, value: str) -> tuple[bool, str, str]:
     )
     for strategy, action in strategies:
         try:
-            clear_masked_date_input(locator)
+            cleared_value = clear_masked_date_input(locator)
+            if cleared_value.strip().lower() not in {"", "mm/dd/yyyy"}:
+                continue
+            wait_for_date_input_visible(locator)
             action()
-            current = read_input_value(locator)
+            current = wait_for_input_value(locator, value)
             if current == value:
-                return True, strategy, current
+                committed = commit_masked_date_input(locator, value)
+                if committed == value:
+                    return True, strategy, committed
         except Exception:
             continue
     return False, "failed", read_input_value(locator)
@@ -821,56 +945,141 @@ def apply_airbnb_date_query_fallback(page, start_date: date, end_date: date, anc
     return True, ""
 
 
-def set_airbnb_reporting_window(page, start_date: date, end_date: date, anchor_date: date, debug_dom_path: Path | None = None) -> dict[str, object]:
+def set_airbnb_reporting_window(
+    page,
+    start_date: date,
+    end_date: date,
+    anchor_date: date,
+    debug_dom_path: Path | None = None,
+    debug_screenshot_dir: Path | None = None,
+    max_attempts: int = 2,
+    attempt: int = 1,
+    retry_date_fields: set[str] | None = None,
+) -> dict[str, object]:
+    date_fields_to_set = retry_date_fields or {"start", "end"}
     details: dict[str, object] = {
         "date_range_automation_status": "failed",
         "date_range_automation_error": "",
+        "date_range_attempt": attempt,
+        "date_range_max_attempts": max_attempts,
+        "date_fields_attempted": ",".join(sorted(date_fields_to_set)),
         "date_input_strategy_used": "failed",
+        "date_input_selector_used": "",
+        "date_apply_selector_used": "",
+        "start_input_value_before": "",
+        "end_input_value_before": "",
         "start_input_value_after_set": "",
         "end_input_value_after_set": "",
+        "start_input_value_after": "",
+        "end_input_value_after": "",
         "apply_clicked": False,
+        "date_picker_apply_clicked": False,
+        "selected_date_control_text_before_apply": "",
+        "selected_date_control_text": "",
+        "selected_date_control_text_after_apply": "",
+        "current_url_before_apply": "",
+        "current_url_after_apply": "",
         "visible_date_text_after_apply": "",
         "date_query_fallback_url": "",
+        "debug_date_flow_screenshots": [],
     }
+    screenshots: list[str] = []
     start_value = format_airbnb_date_input(start_date)
     end_value = format_airbnb_date_input(end_date)
     try:
+        screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "01_before_open_date_picker.png"))
         open_airbnb_date_selector(page)
+        screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "02_date_picker_open.png"))
         if debug_dom_path is not None:
             write_date_picker_debug_dom(page, debug_dom_path)
         start_locator = page.get_by_role("textbox", name="START DATE")
         end_locator = page.get_by_role("textbox", name="END DATE")
         start_locator.wait_for(state="visible", timeout=3000)
         end_locator.wait_for(state="visible", timeout=3000)
-        start_ok, start_strategy, start_after = set_masked_date_input(start_locator, start_value)
-        end_ok, end_strategy, end_after = set_masked_date_input(end_locator, end_value)
+        if debug_screenshot_dir is not None and attempt == 1:
+            print("Debug pause before entering Airbnb date inputs. Resume when ready to let the script fill dates.")
+            page.pause()
+        details["date_input_selector_used"] = "role:textbox:START DATE|role:textbox:END DATE"
+        details["date_apply_selector_used"] = "testid:dsDropdownApply"
+        details["start_input_value_before"] = read_input_value(start_locator)
+        details["end_input_value_before"] = read_input_value(end_locator)
+        if "start" in date_fields_to_set:
+            start_ok, start_strategy, start_after = set_masked_date_input(start_locator, start_value)
+        else:
+            start_ok, start_strategy, start_after = True, "skipped", read_input_value(start_locator)
+        screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "03_after_start_date_set.png"))
+        if "end" in date_fields_to_set:
+            end_ok, end_strategy, end_after = set_masked_date_input(end_locator, end_value)
+        else:
+            end_ok, end_strategy, end_after = True, "skipped", read_input_value(end_locator)
+        screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "04_after_end_date_set.png"))
         details["start_input_value_after_set"] = start_after
         details["end_input_value_after_set"] = end_after
+        details["start_input_value_after"] = start_after
+        details["end_input_value_after"] = end_after
         details["date_input_strategy_used"] = start_strategy if start_strategy == end_strategy else f"{start_strategy}+{end_strategy}"
         if not start_ok or not end_ok:
             details["date_range_automation_error"] = f"date inputs not confirmed: start={start_after!r}, end={end_after!r}"
+            details["debug_date_flow_screenshots"] = [path for path in screenshots if path]
             return details
-        page.get_by_test_id("dsDropdownApply").click(timeout=3000)
+        details["selected_date_control_text_before_apply"] = selected_date_control_text(page)
+        details["current_url_before_apply"] = current_page_url(page)
+        screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "05_before_apply.png"))
+        click_airbnb_date_apply(page)
         details["apply_clicked"] = True
+        details["date_picker_apply_clicked"] = True
         wait_for_page_idle(page)
+        details["current_url_after_apply"] = current_page_url(page)
+        screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "06_after_apply.png"))
     except Exception as exc:
         details["date_range_automation_error"] = str(exc)
+        details["debug_date_flow_screenshots"] = [path for path in screenshots if path]
         return details
+    details["selected_date_control_text"] = selected_date_control_text(page)
+    details["selected_date_control_text_after_apply"] = str(details["selected_date_control_text"])
     details["visible_date_text_after_apply"] = date_selector_visible_text(page)
+    screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "07_selected_date_chip.png"))
     date_asserted, _date_status, date_error = assert_airbnb_date_range_applied(page, start_date, end_date)
     if date_asserted:
         details["date_range_automation_status"] = "applied"
+        details["debug_date_flow_screenshots"] = [path for path in screenshots if path]
         return details
+    if attempt < max_attempts:
+        start_present, end_present = date_range_presence_in_text(str(details["selected_date_control_text"]), start_date, end_date)
+        next_retry_fields: set[str] = set()
+        if not start_present:
+            next_retry_fields.add("start")
+        if not end_present:
+            next_retry_fields.add("end")
+        if not next_retry_fields:
+            next_retry_fields = {"start", "end"}
+        retry_details = set_airbnb_reporting_window(
+            page,
+            start_date,
+            end_date,
+            anchor_date,
+            debug_dom_path,
+            debug_screenshot_dir,
+            max_attempts=max_attempts,
+            attempt=attempt + 1,
+            retry_date_fields=next_retry_fields,
+        )
+        retry_details["date_range_previous_attempt_error"] = date_error
+        return retry_details
     fallback_url = airbnb_date_query_url(current_page_url(page), start_date, end_date, anchor_date)
     details["date_query_fallback_url"] = fallback_url
     fallback_ok, fallback_error = apply_airbnb_date_query_fallback(page, start_date, end_date, anchor_date)
+    details["selected_date_control_text"] = selected_date_control_text(page)
+    details["selected_date_control_text_after_apply"] = str(details["selected_date_control_text"])
     details["visible_date_text_after_apply"] = date_selector_visible_text(page)
     if fallback_ok:
         details["date_range_automation_status"] = "applied_url_query"
         details["date_range_automation_error"] = ""
+        details["debug_date_flow_screenshots"] = [path for path in screenshots if path]
         return details
     details["date_range_automation_status"] = "failed"
     details["date_range_automation_error"] = f"{date_error}; URL query fallback failed: {fallback_error}"
+    details["debug_date_flow_screenshots"] = [path for path in screenshots if path]
     return details
 
 
@@ -893,8 +1102,12 @@ def build_capture_manifest(
     start_input_value_after_set: str = "",
     end_input_value_after_set: str = "",
     apply_clicked: bool = False,
+    selected_date_control_text: str = "",
     visible_date_text_after_apply: str = "",
     date_query_fallback_url: str = "",
+    debug_date_flow_enabled: bool = False,
+    debug_date_flow_dir_path: str = "",
+    debug_date_flow_fields: dict[str, object] | None = None,
     report_controls_ready: bool = False,
     capture_results: list[dict[str, object]] | None = None,
     navigation_status: str = "not_attempted",
@@ -920,11 +1133,14 @@ def build_capture_manifest(
         "navigation_status": navigation_status,
         "performance_page_confirmed": performance_page_confirmed,
         "report_controls_ready": report_controls_ready,
+        "debug_date_flow_enabled": debug_date_flow_enabled,
+        "debug_date_flow_dir": debug_date_flow_dir_path,
         "date_range_automation_status": date_range_automation_status,
         "date_input_strategy_used": date_input_strategy_used,
         "start_input_value_after_set": start_input_value_after_set,
         "end_input_value_after_set": end_input_value_after_set,
         "apply_clicked": apply_clicked,
+        "selected_date_control_text": selected_date_control_text,
         "visible_date_text_after_apply": visible_date_text_after_apply,
         "date_query_fallback_url": date_query_fallback_url,
         "expected_files": EXPECTED_FILES,
@@ -941,6 +1157,8 @@ def build_capture_manifest(
             "No screenshots, cookies, tokens, credentials, browser state, HAR files, or unrelated HTML were saved.",
         ],
     }
+    if debug_date_flow_fields:
+        manifest.update(debug_date_flow_fields)
     if date_range_automation_error:
         manifest["date_range_automation_error"] = date_range_automation_error
         manifest["notes"].append(f"Date range automation status detail: {date_range_automation_error}")
@@ -957,7 +1175,7 @@ def build_capture_manifest(
     return manifest
 
 
-def capture_headed(run_date: str, mode: str, staging_path: Path) -> dict[str, object]:
+def capture_headed(run_date: str, mode: str, staging_path: Path, *, debug_date_flow: bool = False) -> dict[str, object]:
     captured_files: list[str] = []
     skipped_files: list[dict[str, str]] = []
     reporting_window_start, reporting_window_end = calculate_airbnb_reporting_window(datetime.strptime(run_date, "%Y-%m-%d").date())
@@ -967,8 +1185,11 @@ def capture_headed(run_date: str, mode: str, staging_path: Path) -> dict[str, ob
     start_input_value_after_set = ""
     end_input_value_after_set = ""
     apply_clicked = False
+    selected_date_control_text_value = ""
     visible_date_text_after_apply = ""
     date_query_fallback_url = ""
+    debug_dir = debug_date_flow_dir(staging_path) if debug_date_flow else None
+    debug_fields: dict[str, object] = {}
     navigation_status = "not_attempted"
     navigation_error = ""
     performance_page_confirmed = False
@@ -1011,8 +1232,12 @@ def capture_headed(run_date: str, mode: str, staging_path: Path) -> dict[str, ob
                 start_input_value_after_set,
                 end_input_value_after_set,
                 apply_clicked,
+                selected_date_control_text_value,
                 visible_date_text_after_apply,
                 date_query_fallback_url,
+                debug_date_flow,
+                str(debug_dir) if debug_dir else "",
+                debug_fields,
                 report_controls_ready,
                 capture_results,
                 navigation_status,
@@ -1058,8 +1283,12 @@ def capture_headed(run_date: str, mode: str, staging_path: Path) -> dict[str, ob
                 start_input_value_after_set,
                 end_input_value_after_set,
                 apply_clicked,
+                selected_date_control_text_value,
                 visible_date_text_after_apply,
                 date_query_fallback_url,
+                debug_date_flow,
+                str(debug_dir) if debug_dir else "",
+                debug_fields,
                 report_controls_ready,
                 capture_results,
                 navigation_status,
@@ -1081,11 +1310,15 @@ def capture_headed(run_date: str, mode: str, staging_path: Path) -> dict[str, ob
                 "metric_assertion_status": "not_checked",
                 "date_range_assertion_status": "not_checked",
                 "compare_assertion_status": "not_checked",
-                "date_range_automation_status": "not_attempted",
-                "date_input_strategy_used": "",
+                    "date_range_automation_status": "not_attempted",
+                    "date_range_attempt": 0,
+                    "date_range_max_attempts": 0,
+                    "date_fields_attempted": "",
+                    "date_input_strategy_used": "",
                 "start_input_value_after_set": "",
                 "end_input_value_after_set": "",
                 "apply_clicked": False,
+                "selected_date_control_text": "",
                 "visible_date_text_after_apply": "",
                 "date_query_fallback_url": "",
                 "capture_status": "failed",
@@ -1103,20 +1336,45 @@ def capture_headed(run_date: str, mode: str, staging_path: Path) -> dict[str, ob
                     reporting_window_end,
                     datetime.strptime(run_date, "%Y-%m-%d").date(),
                     staging_path / f"airbnb_date_picker_debug_dom_{run_date}.html" if debug_date_range_pause_enabled() else None,
+                    debug_dir,
                 )
+                debug_fields = {
+                    "start_input_value_before": date_details.get("start_input_value_before", ""),
+                    "end_input_value_before": date_details.get("end_input_value_before", ""),
+                    "start_input_value_after": date_details.get("start_input_value_after", ""),
+                    "end_input_value_after": date_details.get("end_input_value_after", ""),
+                    "selected_date_control_text_before_apply": date_details.get("selected_date_control_text_before_apply", ""),
+                    "selected_date_control_text_after_apply": date_details.get("selected_date_control_text_after_apply", ""),
+                    "current_url_before_apply": date_details.get("current_url_before_apply", ""),
+                    "current_url_after_apply": date_details.get("current_url_after_apply", ""),
+                    "date_picker_apply_clicked": date_details.get("date_picker_apply_clicked", False),
+                    "date_input_selector_used": date_details.get("date_input_selector_used", ""),
+                    "date_apply_selector_used": date_details.get("date_apply_selector_used", ""),
+                    "debug_date_flow_screenshots": date_details.get("debug_date_flow_screenshots", []),
+                    "date_range_attempt": date_details.get("date_range_attempt", 0),
+                    "date_range_max_attempts": date_details.get("date_range_max_attempts", 0),
+                    "date_fields_attempted": date_details.get("date_fields_attempted", ""),
+                    "date_range_previous_attempt_error": date_details.get("date_range_previous_attempt_error", ""),
+                }
                 date_range_automation_status = str(date_details["date_range_automation_status"])
                 date_range_automation_error = str(date_details["date_range_automation_error"])
                 date_input_strategy_used = str(date_details["date_input_strategy_used"])
                 start_input_value_after_set = str(date_details["start_input_value_after_set"])
                 end_input_value_after_set = str(date_details["end_input_value_after_set"])
                 apply_clicked = bool(date_details["apply_clicked"])
+                selected_date_control_text_value = str(date_details["selected_date_control_text"])
                 visible_date_text_after_apply = str(date_details["visible_date_text_after_apply"])
                 date_query_fallback_url = str(date_details["date_query_fallback_url"])
                 result["date_range_automation_status"] = date_range_automation_status
+                result["date_range_attempt"] = date_details.get("date_range_attempt", 0)
+                result["date_range_max_attempts"] = date_details.get("date_range_max_attempts", 0)
+                result["date_fields_attempted"] = date_details.get("date_fields_attempted", "")
+                result["date_range_previous_attempt_error"] = date_details.get("date_range_previous_attempt_error", "")
                 result["date_input_strategy_used"] = date_input_strategy_used
                 result["start_input_value_after_set"] = start_input_value_after_set
                 result["end_input_value_after_set"] = end_input_value_after_set
                 result["apply_clicked"] = apply_clicked
+                result["selected_date_control_text"] = selected_date_control_text_value
                 result["visible_date_text_after_apply"] = visible_date_text_after_apply
                 result["date_query_fallback_url"] = date_query_fallback_url
                 if date_range_automation_status != "applied" and date_range_automation_status != "applied_url_query":
@@ -1176,8 +1434,12 @@ def capture_headed(run_date: str, mode: str, staging_path: Path) -> dict[str, ob
         start_input_value_after_set,
         end_input_value_after_set,
         apply_clicked,
+        selected_date_control_text_value,
         visible_date_text_after_apply,
         date_query_fallback_url,
+        debug_date_flow,
+        str(debug_dir) if debug_dir else "",
+        debug_fields,
         report_controls_ready,
         capture_results,
         navigation_status,
@@ -1192,7 +1454,7 @@ def write_manifest(manifest: dict[str, object], path: Path) -> None:
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
-def run(run_date: str, mode: str = "dry-run", run_dir: Path | None = None) -> Path:
+def run(run_date: str, mode: str = "dry-run", run_dir: Path | None = None, *, debug_date_flow: bool = False) -> Path:
     if mode not in SUPPORTED_MODES:
         raise ValueError("unsupported mode. Supported modes: dry-run, validate-staged, promote-staged, cleanup-staging, capture-headed, capture-headed-and-validate.")
     resolved_run_dir = run_dir or Path("data") / "runs" / run_date
@@ -1200,7 +1462,7 @@ def run(run_date: str, mode: str = "dry-run", run_dir: Path | None = None) -> Pa
     resolved_staging_dir.mkdir(parents=True, exist_ok=True)
     resolved_manifest_path = manifest_path(resolved_staging_dir, run_date)
     if mode in {"capture-headed", "capture-headed-and-validate"}:
-        manifest = capture_headed(run_date, mode, resolved_staging_dir)
+        manifest = capture_headed(run_date, mode, resolved_staging_dir, debug_date_flow=debug_date_flow)
     elif mode == "promote-staged":
         manifest = build_promote_manifest(run_date, resolved_run_dir, resolved_staging_dir)
     elif mode == "cleanup-staging":
@@ -1215,7 +1477,12 @@ def run(run_date: str, mode: str = "dry-run", run_dir: Path | None = None) -> Pa
 
 def main() -> int:
     args = parse_args()
-    output = run(args.run_date, args.mode, Path(args.run_dir) if args.run_dir else None)
+    output = run(
+        args.run_date,
+        args.mode,
+        Path(args.run_dir) if args.run_dir else None,
+        debug_date_flow=args.debug_date_flow,
+    )
     print(f"Wrote {output}")
     return 0
 

@@ -340,6 +340,31 @@ def listing_change_row(status: str = "active", review_after_run_date: str = "202
     }
 
 
+def airbnb_search_visibility_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "run_date": "2026-06-01",
+            "scenario_name": "broad_no_filters",
+            "found_status": "not_found",
+            "max_pages_checked": "15",
+            "page_number": "",
+            "position_on_page": "",
+            "cover_photo_status": "current_cover",
+            "classifications": "broad_not_found",
+        },
+        {
+            "run_date": "2026-06-01",
+            "scenario_name": "broad_high_intent_filters",
+            "found_status": "found",
+            "max_pages_checked": "5",
+            "page_number": "4",
+            "position_on_page": "3",
+            "cover_photo_status": "current_cover",
+            "classifications": "high_intent_found;high_intent_found_deep;filtered_visibility_improved",
+        },
+    ]
+
+
 def competitor_calendar_rows() -> list[dict[str, str]]:
     return [
         {
@@ -857,6 +882,42 @@ def test_active_listing_tests_do_not_change_recommendation_review() -> None:
 
     without_recommendations = without_change.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
     with_recommendations = with_change.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    assert with_recommendations == without_recommendations
+
+
+def test_airbnb_search_visibility_section_appears_when_diagnostic_exists() -> None:
+    markdown = build_markdown(
+        "2026-06-01",
+        sample_rows(),
+        airbnb_search_visibility_rows=airbnb_search_visibility_rows(),
+        airbnb_search_visibility_available=True,
+    )
+    section = markdown.split("## Airbnb Search Visibility Diagnostic", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Broad no-filter status: not_found after 15 pages checked." in section
+    assert "High-intent filter status: found on page 4, position 3." in section
+    assert "Best filtered scenario found: broad_high_intent_filters." in section
+    assert "Cover photo status: current_cover." in section
+    assert "Airbnb search visibility is diagnostic only and does not create a PriceLabs rule recommendation." in section
+
+
+def test_airbnb_search_visibility_section_omitted_when_missing() -> None:
+    markdown = build_markdown("2026-06-01", sample_rows(), airbnb_search_visibility_available=False)
+
+    assert "## Airbnb Search Visibility Diagnostic" not in markdown
+
+
+def test_airbnb_search_visibility_does_not_change_recommendation_review() -> None:
+    without_visibility = build_markdown("2026-06-01", sample_rows())
+    with_visibility = build_markdown(
+        "2026-06-01",
+        sample_rows(),
+        airbnb_search_visibility_rows=airbnb_search_visibility_rows(),
+        airbnb_search_visibility_available=True,
+    )
+
+    without_recommendations = without_visibility.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    with_recommendations = with_visibility.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
     assert with_recommendations == without_recommendations
 
 
