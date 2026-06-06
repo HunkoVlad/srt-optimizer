@@ -142,6 +142,7 @@ $listingCompetitorReviewFile = Join-Path $analysisDir "listing_competitor_review
 $listingCompetitorReviewCsvFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.csv"
 $listingStateSnapshotFile = Join-Path $analysisDir "listing_state_snapshot_$RunDate.md"
 $airbnbSearchVisibilityFile = Join-Path $analysisDir "airbnb_search_visibility_$RunDate.md"
+$stayfiAnniversarySummaryFile = Join-Path $analysisDir "stayfi_anniversary_email_summary_$RunDate.csv"
 $runtimeConfig = Join-Path $settingsDir "pricelabs_transform_config.toml"
 
 @"
@@ -286,6 +287,19 @@ Invoke-PythonStep "Performance reason review" @(
     "--output-file", $performanceReasonReviewFile
 )
 
+$airbnbRawFiles = @(
+    (Join-Path $rawDir "airbnb_booking_conversion_daily.html"),
+    (Join-Path $rawDir "airbnb_page_views_daily.html"),
+    (Join-Path $rawDir "airbnb_wishlist_additions_daily.html"),
+    (Join-Path $rawDir "airbnb_booking_conversion_similar.html"),
+    (Join-Path $rawDir "airbnb_page_views_similar.html"),
+    (Join-Path $rawDir "airbnb_wishlist_additions_similar.html")
+)
+$missingAirbnbRawFiles = @($airbnbRawFiles | Where-Object { -not (Test-Path $_) })
+if ($missingAirbnbRawFiles.Count -gt 0) {
+    Write-Host "Airbnb funnel diagnostics require manual MFA capture before final email report."
+}
+
 Invoke-PythonStep "Airbnb diagnostics" @(
     "-m", "airbnb.run_diagnostics",
     "--run-date", $RunDate,
@@ -338,6 +352,13 @@ Invoke-PythonStep "airbnb_search_visibility" @(
     "--run-dir", $runRoot
 )
 Write-Host "airbnb_search_visibility output path: $airbnbSearchVisibilityFile"
+
+Invoke-PythonStep "StayFi anniversary email drafts" @(
+    "-m", "marketing.stayfi_anniversary_email",
+    "--run-date", $RunDate,
+    "--run-dir", $runRoot
+)
+Write-Host "stayfi_anniversary_email_summary output path: $stayfiAnniversarySummaryFile"
 
 Invoke-PythonStep "Monthly revenue summary" @(
     "-m", "pricelabs.transform.monthly_revenue_summary",

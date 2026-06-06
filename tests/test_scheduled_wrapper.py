@@ -83,6 +83,92 @@ def test_weekly_with_pricelabs_downloads_wrapper_accepts_today_run_date() -> Non
     assert "RunDate must use YYYY-MM-DD format or today." in script
 
 
+def test_monday_full_report_wrapper_exists_and_orders_steps() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script_path = repo_root / "scripts" / "run_monday_full_report.ps1"
+
+    script = script_path.read_text(encoding="utf-8")
+
+    expected_order = [
+        "PriceLabs required raw input preflight",
+        "Airbnb search screening",
+        "Airbnb funnel capture",
+        "Promote Airbnb staged diagnostics",
+        "Airbnb diagnostics",
+        "Weekly pipeline and report generation",
+    ]
+    positions = [script.index(token) for token in expected_order]
+    assert positions == sorted(positions)
+    assert "monday_full_report_$RunDate.log" in script
+    assert "-m airbnb.airbnb_search_screening --run-date $RunDate --include-filtered-scenarios" in script
+    assert "-m airbnb.download_diagnostics --run-date $RunDate --mode capture-headed-and-validate --use-persistent-profile" in script
+    assert "-m airbnb.download_diagnostics --run-date $RunDate --mode promote-staged" in script
+    assert "-m airbnb.run_diagnostics --run-date $RunDate" in script
+    assert "run_weekly_pipeline.ps1" in script
+
+
+def test_monday_full_report_wrapper_keeps_airbnb_steps_nonblocking() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts" / "run_monday_full_report.ps1").read_text(encoding="utf-8")
+
+    assert 'Invoke-MondayStep "Airbnb search screening"' in script
+    assert 'Invoke-MondayStep "Airbnb funnel capture"' in script
+    assert 'Invoke-MondayStep "Promote Airbnb staged diagnostics"' in script
+    assert 'Invoke-MondayStep "Airbnb diagnostics"' in script
+    assert script.count("-Blocking $false") >= 4
+    assert 'Invoke-MondayStep "Weekly pipeline and report generation"' in script
+    assert "-Blocking $true" in script
+    assert "failure_nonblocking" in script
+    assert "Airbnb funnel capture uses persistent profile with manual MFA fallback" in script
+
+
+def test_monday_full_report_wrapper_stops_when_pricelabs_raw_files_missing() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    run_date = "2099-02-01"
+    run_dir = repo_root / "data" / "runs" / run_date
+    log_file = run_dir / "logs" / f"monday_full_report_{run_date}.log"
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(repo_root / "scripts" / "run_monday_full_report.ps1"),
+                "-RunDate",
+                run_date,
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 2
+        assert log_file.exists()
+        log_text = log_file.read_text(encoding="utf-8")
+        assert "failed_blocking: PriceLabs required raw input preflight." in log_text
+        assert "priceLabs_future_export.csv" in log_text
+        assert "price_occ.csv" in log_text
+        assert "monthly_trends.csv" in log_text
+        assert "bookings_report.xlsx" in log_text
+        assert "Airbnb search screening" not in log_text
+        assert "Weekly pipeline and report generation" not in log_text
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_monday_full_report_wrapper_does_not_reference_browser_profile_for_evidence() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts" / "run_monday_full_report.ps1").read_text(encoding="utf-8")
+
+    assert ".local/browser_profiles/airbnb" in script
+    assert "evidence" in script.lower()
+    assert "Copy-Item" not in script
+
+
 def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     script = (repo_root / "run_weekly_pipeline.ps1").read_text(encoding="utf-8")
@@ -94,6 +180,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     listing_review_position = script.index('"analysis.listing_competitor_review"')
     listing_snapshot_position = script.index('"analysis.listing_state_snapshot"')
     search_visibility_position = script.index('"analysis.airbnb_search_visibility"')
+    stayfi_anniversary_position = script.index('"marketing.stayfi_anniversary_email"')
     email_position = script.index('"pricelabs.transform.email_revenue_report"')
     evidence_position = script.index('"pricelabs.transform.evidence_bundle"')
     html_position = script.index('"pricelabs.transform.email_html_report"')
@@ -107,6 +194,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
         < listing_review_position
         < listing_snapshot_position
         < search_visibility_position
+        < stayfi_anniversary_position
         < email_position
         < evidence_position
         < html_position
@@ -119,6 +207,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert '"-m", "analysis.listing_competitor_review"' in script
     assert '"-m", "analysis.listing_state_snapshot"' in script
     assert '"-m", "analysis.airbnb_search_visibility"' in script
+    assert '"-m", "marketing.stayfi_anniversary_email"' in script
     assert '"-m", "pricelabs.transform.email_revenue_report"' in script
     assert '"-m", "pricelabs.transform.evidence_bundle"' in script
     assert '$combinedMarketListingSignalFile = Join-Path $analysisDir "combined_market_listing_signal_$RunDate.csv"' in script
@@ -129,6 +218,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert '$listingCompetitorReviewCsvFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.csv"' in script
     assert '$listingStateSnapshotFile = Join-Path $analysisDir "listing_state_snapshot_$RunDate.md"' in script
     assert '$airbnbSearchVisibilityFile = Join-Path $analysisDir "airbnb_search_visibility_$RunDate.md"' in script
+    assert '$stayfiAnniversarySummaryFile = Join-Path $analysisDir "stayfi_anniversary_email_summary_$RunDate.csv"' in script
     assert '"--combined-signal-file", $combinedMarketListingSignalFile' in script
     assert '"--diagnostic-issue-file", $diagnosticIssueTrackerFile' in script
     assert '"--listing-review-file", $listingCompetitorReviewCsvFile' in script
@@ -138,7 +228,9 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert "listing_competitor_review output path:" in script
     assert "listing_state_snapshot output path:" in script
     assert "airbnb_search_visibility output path:" in script
+    assert "stayfi_anniversary_email_summary output path:" in script
     assert "evidence_bundle manifest path:" in script
+    assert "Airbnb funnel diagnostics require manual MFA capture before final email report." in script
 
 
 def test_weekly_with_pricelabs_downloads_cleans_staging_only_after_success() -> None:
