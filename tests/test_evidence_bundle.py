@@ -66,7 +66,7 @@ def test_evidence_bundle_folder_and_manifest_are_created(tmp_path: Path) -> None
     assert manifest["attachment_mode"] == "bundle_only"
     assert manifest["status"] == "complete"
     assert manifest["missing_required_files"] == []
-    assert len(manifest["files"]) == 20
+    assert len(manifest["files"]) == 26
 
 
 def test_core_files_are_copied_and_labeled_core(tmp_path: Path) -> None:
@@ -98,7 +98,7 @@ def test_high_priority_optional_files_are_copied_only_when_priority_is_high(tmp_
     high_manifest = read_manifest(run(RUN_DATE, run_dir=run_dir))
 
     source_types = {entry["source_of_truth_type"] for entry in high_manifest["files"]}
-    assert {"core", "combined", "diagnostic", "configuration"} == source_types
+    assert {"core", "combined", "diagnostic", "configuration", "marketing_diagnostic"} == source_types
     names = copied_names(high_manifest)
     assert f"{RUN_DATE}__airbnb_diagnostic__airbnb_weekly_history_comparison_{RUN_DATE}.csv" in names
     assert f"{RUN_DATE}__settings__pricelabs_settings_snapshot_{RUN_DATE}.json" in names
@@ -269,6 +269,34 @@ def test_airbnb_search_visibility_outputs_are_optional_diagnostic_evidence(tmp_p
     assert all(entry["source_of_truth_type"] == "diagnostic" for entry in entries)
 
 
+def test_stayfi_anniversary_outputs_are_optional_marketing_evidence(tmp_path: Path) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    create_core_files(run_dir)
+    write_text(run_dir / "analysis" / f"stayfi_anniversary_email_candidates_{RUN_DATE}.csv")
+    write_text(run_dir / "analysis" / f"stayfi_anniversary_email_drafts_{RUN_DATE}.csv")
+    write_text(run_dir / "analysis" / f"stayfi_anniversary_email_summary_{RUN_DATE}.csv")
+    write_text(run_dir / "analysis" / f"stayfi_anniversary_gmail_draft_results_{RUN_DATE}.csv")
+    write_text(run_dir / "analysis" / f"stayfi_anniversary_email_send_results_{RUN_DATE}.csv")
+    write_text(tmp_path / "data" / "history" / "stayfi_anniversary_email_log.csv", "email,first_name\n")
+
+    manifest = read_manifest(run(RUN_DATE, run_dir=run_dir))
+    names = copied_names(manifest)
+    entries = [
+        entry
+        for entry in manifest["files"]
+        if entry["category"] == "stayfi_anniversary_email" and entry["copied"]
+    ]
+
+    assert f"{RUN_DATE}__stayfi_anniversary_email__stayfi_anniversary_email_candidates_{RUN_DATE}.csv" in names
+    assert f"{RUN_DATE}__stayfi_anniversary_email__stayfi_anniversary_email_drafts_{RUN_DATE}.csv" in names
+    assert f"{RUN_DATE}__stayfi_anniversary_email__stayfi_anniversary_email_summary_{RUN_DATE}.csv" in names
+    assert f"{RUN_DATE}__stayfi_anniversary_email__stayfi_anniversary_gmail_draft_results_{RUN_DATE}.csv" in names
+    assert f"{RUN_DATE}__stayfi_anniversary_email__stayfi_anniversary_email_send_results_{RUN_DATE}.csv" in names
+    assert f"{RUN_DATE}__stayfi_anniversary_email__stayfi_anniversary_email_log.csv" in names
+    assert {entry["source_of_truth_type"] for entry in entries} == {"marketing_diagnostic"}
+    assert all(entry["required"] is False for entry in entries)
+
+
 def test_missing_high_priority_optional_files_do_not_fail(tmp_path: Path) -> None:
     run_dir = tmp_path / "data" / "runs" / RUN_DATE
     create_core_files(run_dir, priority="high")
@@ -277,7 +305,7 @@ def test_missing_high_priority_optional_files_do_not_fail(tmp_path: Path) -> Non
 
     assert manifest["status"] == "complete"
     assert manifest["missing_required_files"] == []
-    assert len(manifest["missing_optional_files"]) == 18
+    assert len(manifest["missing_optional_files"]) == 24
     assert any("diagnostic_issue_tracker" in path for path in manifest["missing_optional_files"])
     assert any("listing_competitor_review" in path for path in manifest["missing_optional_files"])
     assert any("listing_state_snapshot" in path for path in manifest["missing_optional_files"])
@@ -287,6 +315,7 @@ def test_missing_high_priority_optional_files_do_not_fail(tmp_path: Path) -> Non
     assert any("airbnb_search_visibility" in path for path in manifest["missing_optional_files"])
     assert any("airbnb_conversion_diagnostic_report" in path for path in manifest["missing_optional_files"])
     assert any("airbnb_weekly_history_comparison" in path for path in manifest["missing_optional_files"])
+    assert any("stayfi_anniversary_email" in path for path in manifest["missing_optional_files"])
 
 
 def test_missing_required_core_file_sets_partial_status(tmp_path: Path) -> None:
@@ -311,6 +340,7 @@ def test_raw_staging_logs_and_browser_state_are_never_copied(tmp_path: Path) -> 
     write_text(run_dir / "downloads_staging" / "monthly_trends.csv")
     write_text(run_dir / "logs" / "pricelabs_download_debug.png")
     write_text(tmp_path / ".local" / "pricelabs_browser_profile" / "Cookies", "secret")
+    write_text(tmp_path / ".local" / "browser_profiles" / "airbnb" / "Cookies", "secret")
 
     manifest = read_manifest(run(RUN_DATE, run_dir=run_dir))
     bundled_text = "\n".join(copied_names(manifest)).lower()
@@ -320,6 +350,7 @@ def test_raw_staging_logs_and_browser_state_are_never_copied(tmp_path: Path) -> 
     assert "monthly_trends" not in bundled_text
     assert "debug" not in bundled_text
     assert "cookies" not in manifest_text
+    assert "browser_profiles" not in manifest_text
     assert "downloads_staging" not in manifest_text
     assert "priceLabs_future_export.csv".lower() not in manifest_text
     assert "/raw/" not in manifest_text

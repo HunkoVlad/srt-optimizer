@@ -166,6 +166,41 @@ def core_specs(run_date: str) -> list[EvidenceSpec]:
             "broad_and_high_intent_search_discovery_diagnostic",
             "diagnostic",
         ),
+        EvidenceSpec(
+            f"analysis/stayfi_anniversary_email_candidates_{run_date}.csv",
+            "stayfi_anniversary_email",
+            False,
+            "draft_only_anniversary_email_candidates",
+            "marketing_diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/stayfi_anniversary_email_drafts_{run_date}.csv",
+            "stayfi_anniversary_email",
+            False,
+            "draft_only_anniversary_email_records",
+            "marketing_diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/stayfi_anniversary_email_summary_{run_date}.csv",
+            "stayfi_anniversary_email",
+            False,
+            "draft_only_anniversary_email_summary",
+            "marketing_diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/stayfi_anniversary_gmail_draft_results_{run_date}.csv",
+            "stayfi_anniversary_email",
+            False,
+            "gmail_draft_creation_results",
+            "marketing_diagnostic",
+        ),
+        EvidenceSpec(
+            f"analysis/stayfi_anniversary_email_send_results_{run_date}.csv",
+            "stayfi_anniversary_email",
+            False,
+            "gmail_send_results",
+            "marketing_diagnostic",
+        ),
     ]
 
 
@@ -177,7 +212,14 @@ def history_specs() -> list[EvidenceSpec]:
             False,
             "listing_change_history",
             "diagnostic",
-        )
+        ),
+        EvidenceSpec(
+            "../../history/stayfi_anniversary_email_log.csv",
+            "stayfi_anniversary_email",
+            False,
+            "persistent_anniversary_email_duplicate_log",
+            "marketing_diagnostic",
+        ),
     ]
 
 

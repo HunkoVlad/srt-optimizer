@@ -35,3 +35,12 @@ __pycache__/
 
 # Test cache
 .pytest_cache/
+
+# Gmail OAuth credentials
+config/gmail_oauth_client.json
+config/*oauth*.json
+config/*token*.json
+
+# Private StayFi guest data and email logs
+data/source/stayfi/*.csv
+data/history/stayfi_anniversary_email_log.csv

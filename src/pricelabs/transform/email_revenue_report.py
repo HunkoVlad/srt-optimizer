@@ -54,6 +54,10 @@ def parse_args() -> argparse.Namespace:
         help="Optional Airbnb weekly conversion summary CSV. Defaults to analysis/airbnb_weekly_conversion_summary_<run-date>.csv.",
     )
     parser.add_argument(
+        "--airbnb-weekly-history-file",
+        help="Optional Airbnb weekly history comparison CSV. Defaults to analysis/airbnb_weekly_history_comparison_<run-date>.csv.",
+    )
+    parser.add_argument(
         "--diagnostic-issue-file",
         help="Optional diagnostic issue tracker CSV. Defaults to analysis/diagnostic_issue_tracker_<run-date>.csv.",
     )
@@ -76,6 +80,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--airbnb-search-visibility-file",
         help="Optional Airbnb search visibility diagnostic CSV. Defaults to analysis/airbnb_search_visibility_<run-date>.csv.",
+    )
+    parser.add_argument(
+        "--stayfi-anniversary-summary-file",
+        help="Optional StayFi anniversary email summary CSV. Defaults to analysis/stayfi_anniversary_email_summary_<run-date>.csv.",
+    )
+    parser.add_argument(
+        "--stayfi-anniversary-send-results-file",
+        help="Optional StayFi anniversary send results CSV. Defaults to analysis/stayfi_anniversary_email_send_results_<run-date>.csv.",
     )
     return parser.parse_args()
 
@@ -250,6 +262,13 @@ def read_airbnb_summary_rows(path: Path) -> list[dict[str, str]]:
         return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
 
 
+def read_airbnb_weekly_history_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
 def read_diagnostic_issue_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
@@ -285,6 +304,20 @@ def read_airbnb_search_visibility_rows(path: Path) -> list[dict[str, str]]:
         return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
 
 
+def read_stayfi_anniversary_summary_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
+def read_stayfi_anniversary_send_result_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
 def default_combined_signal_path(run_date: str, output_path: Path) -> Path:
     if output_path.parent.name == "analysis":
         return output_path.parent / f"combined_market_listing_signal_{run_date}.csv"
@@ -295,6 +328,12 @@ def default_airbnb_summary_path(run_date: str, output_path: Path) -> Path:
     if output_path.parent.name == "analysis":
         return output_path.parent / f"airbnb_weekly_conversion_summary_{run_date}.csv"
     return Path("data") / "runs" / run_date / "analysis" / f"airbnb_weekly_conversion_summary_{run_date}.csv"
+
+
+def default_airbnb_weekly_history_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"airbnb_weekly_history_comparison_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "analysis" / f"airbnb_weekly_history_comparison_{run_date}.csv"
 
 
 def default_diagnostic_issue_path(run_date: str, output_path: Path) -> Path:
@@ -358,6 +397,18 @@ def default_airbnb_search_visibility_path(run_date: str, output_path: Path) -> P
     return Path("data") / "runs" / run_date / "analysis" / f"airbnb_search_visibility_{run_date}.csv"
 
 
+def default_stayfi_anniversary_summary_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"stayfi_anniversary_email_summary_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "analysis" / f"stayfi_anniversary_email_summary_{run_date}.csv"
+
+
+def default_stayfi_anniversary_send_results_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"stayfi_anniversary_email_send_results_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "analysis" / f"stayfi_anniversary_email_send_results_{run_date}.csv"
+
+
 def default_output_path(run_date: str) -> Path:
     return Path("data") / "runs" / run_date / "analysis" / f"email_revenue_report_{run_date}.md"
 
@@ -407,6 +458,83 @@ def display_signal_value(key: str, value: str) -> str:
     if key in percent_keys and not value.endswith("%"):
         return f"{value}%"
     return value
+
+
+AIRBNB_FUNNEL_SIGNALS = (
+    ("page_views", "Page views", "count"),
+    ("first_page_search_impressions", "First-page search impressions", "count"),
+    ("wishlist_additions", "Wishlist additions", "count"),
+    ("average_overall_conversion_rate", "Average overall conversion rate", "rate"),
+    ("first_page_search_impression_rate", "First-page search impression rate", "rate"),
+    ("search_to_listing_conversion_rate", "Search-to-listing conversion rate", "rate"),
+    ("listing_to_booking_conversion_rate", "Listing-to-booking conversion rate", "rate"),
+)
+
+
+def signed_number(value: str, *, decimals: int | None = None) -> str:
+    if value == "":
+        return "unknown"
+    try:
+        number = float(str(value).replace("%", ""))
+    except ValueError:
+        return value
+    sign = "+" if number > 0 else ""
+    if decimals is None:
+        if number.is_integer():
+            return f"{sign}{int(number)}"
+        return f"{sign}{number:g}"
+    formatted = f"{number:.{decimals}f}".rstrip("0").rstrip(".")
+    return f"{sign}{formatted}"
+
+
+def airbnb_wow_value(metric_name: str, value: str, metric_type: str) -> str:
+    if not value:
+        return "unknown"
+    if metric_type == "rate":
+        return display_signal_value(metric_name, value)
+    try:
+        number = float(value)
+    except ValueError:
+        return value
+    return str(int(number)) if number.is_integer() else f"{number:g}"
+
+
+def airbnb_funnel_wow_section(history_rows: list[dict[str, str]] | None) -> list[str]:
+    lines = ["## Airbnb Funnel Week-over-Week", ""]
+    if not history_rows:
+        lines.extend(["- Airbnb funnel week-over-week comparison unavailable for this run.", ""])
+        return lines
+
+    rows_by_metric = {row.get("metric_name", ""): row for row in history_rows}
+    rendered_any = False
+    for metric_name, label, metric_type in AIRBNB_FUNNEL_SIGNALS:
+        row = rows_by_metric.get(metric_name)
+        if not row:
+            continue
+        previous = airbnb_wow_value(metric_name, row.get("previous_week_value", ""), metric_type)
+        current = airbnb_wow_value(metric_name, row.get("current_value", ""), metric_type)
+        change = row.get("change_vs_previous_week", "")
+        if metric_type == "rate":
+            change_text = f"{signed_number(change, decimals=2)} pp"
+        else:
+            change_text = signed_number(change)
+        lines.append(f"- {label}: {previous} \u2192 {current} ({change_text})")
+        rendered_any = True
+
+    if not rendered_any:
+        lines.extend(["- Airbnb funnel week-over-week comparison unavailable for this run.", ""])
+        return lines
+
+    lines.extend(
+        [
+            "- Interpretation: Search-to-listing conversion improved slightly.",
+            "- Interpretation: Listing-to-booking conversion was essentially flat.",
+            "- Interpretation: Visibility volume softened slightly.",
+            "- Diagnostic only; this does not create a PriceLabs rule recommendation.",
+            "",
+        ]
+    )
+    return lines
 
 
 def market_vs_listing_signal_section(signal_rows: list[dict[str, str]] | None) -> list[str]:
@@ -480,6 +608,13 @@ def airbnb_funnel_signals_section(summary_rows: list[dict[str, str]] | None) -> 
         lines.extend(
             [
                 "- Airbnb funnel diagnostics unavailable for this run.",
+                "- Manual action required before final report: run Airbnb capture with browser login/MFA, then promote staged files and rerun diagnostics.",
+                "- Commands:",
+                '  `$env:PYTHONPATH = "src"`',
+                "  `.\\.venv\\Scripts\\python.exe -m airbnb.download_diagnostics --run-date <run_date> --mode capture-headed-and-validate`",
+                "  `.\\.venv\\Scripts\\python.exe -m airbnb.download_diagnostics --run-date <run_date> --mode promote-staged`",
+                "  `.\\.venv\\Scripts\\python.exe -m airbnb.run_diagnostics --run-date <run_date>`",
+                "  `.\\run_weekly_pipeline.ps1 -RunDate <run_date>`",
                 "- Airbnb funnel signals are diagnostic only. PriceLabs remains the source of truth for revenue, occupancy, ADR, booked nights, booking totals, cleaning count, and monthly revenue pace.",
                 "",
             ]
@@ -487,19 +622,10 @@ def airbnb_funnel_signals_section(summary_rows: list[dict[str, str]] | None) -> 
         return lines
 
     row = summary_rows[0]
-    signals = (
-        ("page_views", "Page views"),
-        ("first_page_search_impressions", "First-page search impressions"),
-        ("wishlist_additions", "Wishlist additions"),
-        ("average_overall_conversion_rate", "Average overall conversion rate"),
-        ("first_page_search_impression_rate", "First-page search impression rate"),
-        ("search_to_listing_conversion_rate", "Search-to-listing conversion rate"),
-        ("listing_to_booking_conversion_rate", "Listing-to-booking conversion rate"),
-    )
     window_start = row.get("metric_window_start", "") or "unknown"
     window_end = row.get("metric_window_end", "") or "unknown"
     lines.append(f"- Metric window: {window_start} to {window_end}.")
-    for key, label in signals:
+    for key, label, _metric_type in AIRBNB_FUNNEL_SIGNALS:
         lines.append(f"- {label}: {display_signal_value(key, row.get(key, ''))}.")
     lines.extend(
         [
@@ -692,6 +818,72 @@ def active_listing_changes_section(
     return lines
 
 
+def stayfi_anniversary_email_section(
+    summary_rows: list[dict[str, str]] | None,
+    *,
+    summary_available: bool = False,
+    send_result_rows: list[dict[str, str]] | None = None,
+    send_results_available: bool = False,
+) -> list[str]:
+    if not summary_available:
+        return []
+    lines = ["## StayFi Anniversary Email Drafts", ""]
+    if not summary_rows:
+        lines.extend(
+            [
+                "- StayFi anniversary email summary unavailable for this run.",
+                "- No emails were sent automatically.",
+                "",
+            ]
+        )
+        return lines
+    row = summary_rows[0]
+    if row.get("source_file_status", "") == "missing":
+        lines.append(
+            f"- Warning: StayFi source file missing: {row.get('stayfi_input_file', '') or 'data/source/stayfi/stayfi_guests_2026.csv'}."
+        )
+    if row.get("source_file_status", "") == "available_but_missing_columns":
+        lines.append(f"- Warning: StayFi source file is missing required columns: {row.get('missing_required_columns', '')}.")
+    lines.extend(
+        [
+            f"- Anniversary audience window: {row.get('anniversary_audience_window_start', '')} to {row.get('anniversary_audience_window_end', '')}.",
+            f"- Date column used: {row.get('date_column_used', '') or 'unavailable'}. Email column used: {row.get('email_column_used', '') or 'unavailable'}.",
+            f"- Total StayFi rows checked: {row.get('total_stayfi_rows_checked', '0')}.",
+            f"- Rows in audience window: {row.get('rows_in_audience_window', '0')}.",
+            f"- Eligible guests: {row.get('eligible_guests', '0')}.",
+            f"- Draft-ready CSV records prepared: {row.get('drafts_prepared_csv', row.get('drafts_created', '0'))}.",
+            f"- Gmail drafts created: {row.get('gmail_drafts_created', row.get('drafts_created', '0'))}.",
+            f"- Gmail draft failures: {row.get('gmail_draft_failures', '0')}.",
+            f"- Excluded invalid emails: {row.get('excluded_invalid_emails', '0')}.",
+            f"- Excluded missing email: {row.get('excluded_missing_email', '0')}.",
+            f"- Excluded wrong property: {row.get('excluded_wrong_property', '0')}.",
+            f"- Excluded no opt-in: {row.get('excluded_no_opt_in', '0')}.",
+            f"- Excluded bad rating 1-3 stars: {row.get('excluded_bad_rating', '0')}.",
+            f"- Skipped duplicates from permanent log: {row.get('skipped_duplicates_from_log', row.get('skipped_duplicates', '0'))}.",
+            f"- Date parse failures: {row.get('date_parse_failed', '0')}.",
+            "- Manual send workflow; no emails were sent automatically by the weekly pipeline."
+            if send_results_available
+            else "- Draft-only workflow; no emails were sent automatically.",
+        ]
+    )
+    if send_results_available:
+        rows = send_result_rows or []
+        dry_run_would_send = sum(1 for result in rows if result.get("send_status") == "dry_run_would_send")
+        sent = sum(1 for result in rows if result.get("send_status") == "sent")
+        failures = sum(1 for result in rows if result.get("send_status") == "failed")
+        skipped = sum(1 for result in rows if result.get("send_status") == "skipped_duplicate_logged")
+        lines.extend(
+            [
+                f"- Dry-run would send: {dry_run_would_send}.",
+                f"- Emails sent: {sent}.",
+                f"- Send failures: {failures}.",
+                f"- Send skipped duplicates from permanent log: {skipped}.",
+            ]
+        )
+    lines.append("")
+    return lines
+
+
 def find_visibility_scenario(rows: list[dict[str, str]], scenario_name: str) -> dict[str, str] | None:
     return next((row for row in rows if row.get("scenario_name") == scenario_name), None)
 
@@ -761,6 +953,7 @@ def build_markdown(
     reason_rows: list[dict[str, str]] | None = None,
     combined_signal_rows: list[dict[str, str]] | None = None,
     airbnb_summary_rows: list[dict[str, str]] | None = None,
+    airbnb_weekly_history_rows: list[dict[str, str]] | None = None,
     diagnostic_issue_rows: list[dict[str, str]] | None = None,
     diagnostic_issue_tracker_available: bool = False,
     listing_review_rows: list[dict[str, str]] | None = None,
@@ -775,6 +968,10 @@ def build_markdown(
     listing_change_log_available: bool = False,
     airbnb_search_visibility_rows: list[dict[str, str]] | None = None,
     airbnb_search_visibility_available: bool = False,
+    stayfi_anniversary_summary_rows: list[dict[str, str]] | None = None,
+    stayfi_anniversary_summary_available: bool = False,
+    stayfi_anniversary_send_result_rows: list[dict[str, str]] | None = None,
+    stayfi_anniversary_send_results_available: bool = False,
 ) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
@@ -808,6 +1005,7 @@ def build_markdown(
     lines.extend(reason_review_section(reason_rows or []))
     lines.extend(market_vs_listing_signal_section(combined_signal_rows))
     lines.extend(airbnb_funnel_signals_section(airbnb_summary_rows))
+    lines.extend(airbnb_funnel_wow_section(airbnb_weekly_history_rows if airbnb_summary_rows else None))
     lines.extend(open_diagnostic_issues_section(diagnostic_issue_rows if diagnostic_issue_tracker_available else None, run_date=run_date))
     lines.extend(
         listing_review_needed_section(
@@ -834,6 +1032,14 @@ def build_markdown(
             listing_change_rows,
             change_log_available=listing_change_log_available,
             visual_baseline_available=listing_visual_baseline_available,
+        )
+    )
+    lines.extend(
+        stayfi_anniversary_email_section(
+            stayfi_anniversary_summary_rows,
+            summary_available=stayfi_anniversary_summary_available,
+            send_result_rows=stayfi_anniversary_send_result_rows,
+            send_results_available=stayfi_anniversary_send_results_available,
         )
     )
     lines.extend(recommendation_section(sorted_rows, reason_rows or [], combined_signal_rows))
@@ -926,6 +1132,11 @@ def run() -> int:
     )
     combined_signal_path = Path(args.combined_signal_file) if args.combined_signal_file else default_combined_signal_path(args.run_date, output_path)
     airbnb_summary_path = Path(args.airbnb_summary_file) if args.airbnb_summary_file else default_airbnb_summary_path(args.run_date, output_path)
+    airbnb_weekly_history_path = (
+        Path(args.airbnb_weekly_history_file)
+        if args.airbnb_weekly_history_file
+        else default_airbnb_weekly_history_path(args.run_date, output_path)
+    )
     diagnostic_issue_path = Path(args.diagnostic_issue_file) if args.diagnostic_issue_file else default_diagnostic_issue_path(args.run_date, output_path)
     listing_review_path = Path(args.listing_review_file) if args.listing_review_file else default_listing_review_path(args.run_date, output_path)
     listing_review_markdown_path = default_listing_review_markdown_path(args.run_date, output_path)
@@ -939,6 +1150,16 @@ def run() -> int:
         if args.airbnb_search_visibility_file
         else default_airbnb_search_visibility_path(args.run_date, output_path)
     )
+    stayfi_anniversary_summary_path = (
+        Path(args.stayfi_anniversary_summary_file)
+        if args.stayfi_anniversary_summary_file
+        else default_stayfi_anniversary_summary_path(args.run_date, output_path)
+    )
+    stayfi_anniversary_send_results_path = (
+        Path(args.stayfi_anniversary_send_results_file)
+        if args.stayfi_anniversary_send_results_file
+        else default_stayfi_anniversary_send_results_path(args.run_date, output_path)
+    )
 
     if not summary_path.exists():
         raise FileNotFoundError(f"Monthly revenue summary markdown does not exist: {summary_path}")
@@ -948,6 +1169,7 @@ def run() -> int:
     print(f"Email revenue report reason review input: {reason_path}")
     print(f"Email revenue report combined signal input: {combined_signal_path}")
     print(f"Email revenue report Airbnb summary input: {airbnb_summary_path}")
+    print(f"Email revenue report Airbnb weekly history input: {airbnb_weekly_history_path}")
     print(f"Email revenue report diagnostic issue input: {diagnostic_issue_path}")
     print(f"Email revenue report listing review input: {listing_review_path}")
     print(f"Email revenue report listing review markdown: {listing_review_markdown_path}")
@@ -956,17 +1178,22 @@ def run() -> int:
     print(f"Email revenue report competitor calendar input: {competitor_calendar_path}")
     print(f"Email revenue report listing change log input: {listing_change_log_path}")
     print(f"Email revenue report Airbnb search visibility input: {airbnb_search_visibility_path}")
+    print(f"Email revenue report StayFi anniversary summary input: {stayfi_anniversary_summary_path}")
+    print(f"Email revenue report StayFi anniversary send results input: {stayfi_anniversary_send_results_path}")
     print(f"Email revenue report output: {output_path}")
 
     rows = read_monthly_rows(rolling_path)
     reason_rows = read_reason_rows(reason_path)
     combined_signal_rows = read_combined_signal_rows(combined_signal_path)
     airbnb_summary_rows = read_airbnb_summary_rows(airbnb_summary_path)
+    airbnb_weekly_history_rows = read_airbnb_weekly_history_rows(airbnb_weekly_history_path)
     diagnostic_issue_rows = read_diagnostic_issue_rows(diagnostic_issue_path)
     listing_review_rows = read_listing_review_rows(listing_review_path)
     competitor_calendar_rows = read_competitor_calendar_rows(competitor_calendar_path)
     listing_change_rows = read_listing_change_rows(listing_change_log_path)
     airbnb_search_visibility_rows = read_airbnb_search_visibility_rows(airbnb_search_visibility_path)
+    stayfi_anniversary_summary_rows = read_stayfi_anniversary_summary_rows(stayfi_anniversary_summary_path)
+    stayfi_anniversary_send_result_rows = read_stayfi_anniversary_send_result_rows(stayfi_anniversary_send_results_path)
     write_markdown(
         output_path,
         build_markdown(
@@ -975,6 +1202,7 @@ def run() -> int:
             reason_rows,
             combined_signal_rows,
             airbnb_summary_rows,
+            airbnb_weekly_history_rows,
             diagnostic_issue_rows,
             diagnostic_issue_path.exists(),
             listing_review_rows,
@@ -989,6 +1217,10 @@ def run() -> int:
             listing_change_log_path.exists(),
             airbnb_search_visibility_rows,
             airbnb_search_visibility_path.exists(),
+            stayfi_anniversary_summary_rows,
+            stayfi_anniversary_summary_path.exists(),
+            stayfi_anniversary_send_result_rows,
+            stayfi_anniversary_send_results_path.exists(),
         ),
     )
     print(f"Wrote {output_path}")

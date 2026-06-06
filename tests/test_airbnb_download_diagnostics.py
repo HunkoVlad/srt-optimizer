@@ -50,6 +50,22 @@ def test_parse_args_accepts_debug_date_flow_flag() -> None:
     assert args.debug_date_flow is True
 
 
+def test_parse_args_accepts_use_persistent_profile_flag() -> None:
+    args = download_diagnostics.parse_args(
+        ["--run-date", RUN_DATE, "--mode", "capture-headed-and-validate", "--use-persistent-profile"]
+    )
+
+    assert args.use_persistent_profile is True
+
+
+def test_persistent_profile_path_is_outside_run_outputs() -> None:
+    profile_path = download_diagnostics.persistent_profile_path()
+
+    assert profile_path.parts[:2] == (".local", "browser_profiles")
+    assert "data" not in profile_path.parts
+    assert "runs" not in profile_path.parts
+
+
 def test_run_rejects_unsupported_mode() -> None:
     with pytest.raises(ValueError, match="unsupported mode"):
         download_diagnostics.run(RUN_DATE, mode="download-all")
@@ -461,6 +477,26 @@ def install_fake_capture(
     return fake_playwright, fake_browser, fake_page, prompts
 
 
+def install_fake_persistent_capture(
+    monkeypatch,
+    fail_performance_indicator: bool = False,
+    url: str = "",
+):
+    fake_playwright = FakePlaywright()
+    fake_page = FakePage(fail_performance_indicator=fail_performance_indicator, url=url)
+    fake_browser = FakeBrowser(fake_page)
+    prompts: list[str] = []
+    launched_profiles: list[download_diagnostics.Path] = []
+
+    def launch(profile_path):
+        launched_profiles.append(profile_path)
+        return fake_playwright, fake_browser, fake_page
+
+    monkeypatch.setattr(download_diagnostics, "launch_persistent_headed_browser", launch)
+    monkeypatch.setattr(download_diagnostics, "prompt_user", lambda message: prompts.append(message) or "")
+    return fake_playwright, fake_browser, fake_page, prompts, launched_profiles
+
+
 def test_ensure_airbnb_conversion_page_skips_goto_when_already_on_conversion_url() -> None:
     page = FakePage(url=download_diagnostics.AIRBNB_CONVERSION_URL)
 
@@ -536,6 +572,84 @@ def test_capture_headed_writes_only_allowed_staged_filenames(tmp_path, monkeypat
     assert browser.closed is True
     assert len(prompts) == 1
     assert not (run_dir / "raw").exists()
+
+
+def test_capture_headed_with_persistent_profile_reuses_logged_in_session(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    _playwright, browser, _page, prompts, launched_profiles = install_fake_persistent_capture(monkeypatch)
+
+    manifest = read_json(
+        download_diagnostics.run(
+            RUN_DATE,
+            mode="capture-headed",
+            run_dir=run_dir,
+            use_persistent_profile=True,
+        )
+    )
+
+    assert launched_profiles == [download_diagnostics.persistent_profile_path()]
+    assert manifest["use_persistent_profile"] is True
+    assert manifest["persistent_profile_path"] == str(download_diagnostics.persistent_profile_path())
+    assert manifest["login_status"] == "logged_in_session_reused"
+    assert manifest["manual_mfa_required"] is False
+    assert manifest["manual_mfa_completed"] is False
+    assert manifest["capture_continued_after_manual_login"] is False
+    assert manifest["performance_page_confirmed"] is True
+    assert manifest["status"] == "captured_all"
+    assert prompts == []
+    assert browser.closed is True
+
+
+def test_capture_headed_with_persistent_profile_records_manual_login_fallback(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    _playwright, _browser, page, prompts, _profiles = install_fake_persistent_capture(
+        monkeypatch,
+        fail_performance_indicator=True,
+        url="https://www.airbnb.com/login",
+    )
+
+    def confirm_after_prompt(message: str) -> str:
+        prompts.append(message)
+        page.fail_performance_indicator = False
+        page.url = download_diagnostics.AIRBNB_CONVERSION_URL
+        return ""
+
+    monkeypatch.setattr(download_diagnostics, "prompt_user", confirm_after_prompt)
+
+    manifest = read_json(
+        download_diagnostics.run(
+            RUN_DATE,
+            mode="capture-headed",
+            run_dir=run_dir,
+            use_persistent_profile=True,
+        )
+    )
+
+    assert manifest["login_status"] == "manual_login_completed"
+    assert manifest["manual_mfa_required"] is True
+    assert manifest["manual_mfa_completed"] is True
+    assert manifest["capture_continued_after_manual_login"] is True
+    assert "Airbnb login/MFA required" in prompts[0]
+
+
+def test_capture_headed_persistent_manifest_does_not_store_sensitive_browser_state_words(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    install_fake_persistent_capture(monkeypatch)
+
+    manifest = read_json(
+        download_diagnostics.run(
+            RUN_DATE,
+            mode="capture-headed",
+            run_dir=run_dir,
+            use_persistent_profile=True,
+        )
+    )
+    text = json.dumps(manifest).lower()
+
+    assert "cookie" not in text
+    assert "token" not in text
+    assert "credential" not in text
+    assert "password" not in text
 
 
 def test_capture_headed_debug_date_flow_records_manifest_and_screenshots(tmp_path, monkeypatch) -> None:

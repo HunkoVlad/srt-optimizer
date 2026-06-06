@@ -147,6 +147,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Capture date input/apply screenshots and manifest fields for headed Airbnb diagnostics debugging.",
     )
+    parser.add_argument(
+        "--use-persistent-profile",
+        action="store_true",
+        help="Use a local Playwright browser profile for Airbnb so active login sessions can be reused.",
+    )
     args = parser.parse_args(argv)
     if args.mode not in SUPPORTED_MODES:
         parser.error("unsupported --mode. Supported modes: dry-run, validate-staged, promote-staged, cleanup-staging, capture-headed, capture-headed-and-validate.")
@@ -155,6 +160,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def staging_dir(run_dir: Path) -> Path:
     return run_dir / "downloads_staging" / "airbnb"
+
+
+def persistent_profile_path() -> Path:
+    return Path(".local") / "browser_profiles" / "airbnb"
 
 
 def manifest_path(staging_path: Path, run_date: str) -> Path:
@@ -467,6 +476,24 @@ def launch_headed_browser():
     except Exception:
         pass
     return playwright, browser, page
+
+
+def launch_persistent_headed_browser(profile_path: Path):
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise RuntimeError("Playwright is required for Airbnb capture modes. Install Playwright before using capture-headed.") from exc
+
+    profile_path.mkdir(parents=True, exist_ok=True)
+    playwright = sync_playwright().start()
+    context = playwright.chromium.launch_persistent_context(str(profile_path), headless=False)
+    page = context.pages[0] if getattr(context, "pages", []) else context.new_page()
+    try:
+        page.goto(AIRBNB_LOGIN_START_URL)
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
+    except Exception:
+        pass
+    return playwright, context, page
 
 
 def close_headed_browser(playwright, browser) -> None:
@@ -1115,6 +1142,12 @@ def build_capture_manifest(
     performance_page_confirmed: bool = False,
     status_override: str = "",
     validation_manifest: dict[str, object] | None = None,
+    use_persistent_profile: bool = False,
+    persistent_profile_path_value: str = "",
+    login_status: str = "",
+    manual_mfa_required: bool = False,
+    manual_mfa_completed: bool = False,
+    capture_continued_after_manual_login: bool = False,
 ) -> dict[str, object]:
     status = status_override or ("captured_all" if len(captured_files) == len(CAPTURE_TARGETS) else ("partial_capture" if captured_files else "capture_failed"))
     manifest: dict[str, object] = {
@@ -1131,7 +1164,13 @@ def build_capture_manifest(
         "requested_start_date_input": format_airbnb_date_input(reporting_window_start),
         "requested_end_date_input": format_airbnb_date_input(reporting_window_end),
         "navigation_status": navigation_status,
+        "use_persistent_profile": use_persistent_profile,
+        "persistent_profile_path": persistent_profile_path_value,
+        "login_status": login_status or ("manual_login_completed" if performance_page_confirmed else "login_failed_or_not_confirmed"),
+        "manual_mfa_required": manual_mfa_required,
+        "manual_mfa_completed": manual_mfa_completed,
         "performance_page_confirmed": performance_page_confirmed,
+        "capture_continued_after_manual_login": capture_continued_after_manual_login,
         "report_controls_ready": report_controls_ready,
         "debug_date_flow_enabled": debug_date_flow_enabled,
         "debug_date_flow_dir": debug_date_flow_dir_path,
@@ -1154,7 +1193,7 @@ def build_capture_manifest(
             "Headed Airbnb capture with automated conversion-page navigation and compare-mode selection.",
             "Date range selection uses Airbnb date inputs and Apply button when available.",
             "No files were promoted to raw.",
-            "No screenshots, cookies, tokens, credentials, browser state, HAR files, or unrelated HTML were saved.",
+            "No sensitive browser storage, login secrets, HAR files, or unrelated HTML were saved.",
         ],
     }
     if debug_date_flow_fields:
@@ -1175,7 +1214,14 @@ def build_capture_manifest(
     return manifest
 
 
-def capture_headed(run_date: str, mode: str, staging_path: Path, *, debug_date_flow: bool = False) -> dict[str, object]:
+def capture_headed(
+    run_date: str,
+    mode: str,
+    staging_path: Path,
+    *,
+    debug_date_flow: bool = False,
+    use_persistent_profile: bool = False,
+) -> dict[str, object]:
     captured_files: list[str] = []
     skipped_files: list[dict[str, str]] = []
     reporting_window_start, reporting_window_end = calculate_airbnb_reporting_window(datetime.strptime(run_date, "%Y-%m-%d").date())
@@ -1196,23 +1242,66 @@ def capture_headed(run_date: str, mode: str, staging_path: Path, *, debug_date_f
     report_controls_ready = False
     capture_results: list[dict[str, object]] = []
     status_override = ""
+    profile_path = persistent_profile_path() if use_persistent_profile else None
+    login_status = "not_checked"
+    manual_mfa_required = False
+    manual_mfa_completed = False
+    capture_continued_after_manual_login = False
     playwright = browser = page = None
     try:
-        playwright, browser, page = launch_headed_browser()
-        prompt_user(
-            "Please log in to Airbnb manually in the opened browser. Complete MFA if required. "
-            "When you can see the Airbnb performance/insights area for Aloha Poconos, return to this terminal and press Enter."
-        )
-        navigation_ok, navigation_error = ensure_airbnb_conversion_page(page)
-        navigation_status = "ok" if navigation_ok else "failed"
-        performance_page_confirmed = navigation_ok and is_airbnb_performance_page_confirmed(page)
+        if use_persistent_profile:
+            playwright, browser, page = launch_persistent_headed_browser(profile_path or persistent_profile_path())
+            navigation_ok, navigation_error = ensure_airbnb_conversion_page(page)
+            navigation_status = "ok" if navigation_ok else "failed"
+            performance_page_confirmed = navigation_ok and is_airbnb_performance_page_confirmed(page)
+            if performance_page_confirmed:
+                login_status = "logged_in_session_reused"
+            else:
+                login_status = "manual_login_required"
+                manual_mfa_required = True
+                prompt_user(
+                    "Airbnb login/MFA required. Complete login in the opened browser, navigate to the performance/insights page if needed, then press Enter."
+                )
+                manual_mfa_completed = True
+                navigation_ok, navigation_error = ensure_airbnb_conversion_page(page)
+                navigation_status = "ok" if navigation_ok else "failed"
+                performance_page_confirmed = navigation_ok and is_airbnb_performance_page_confirmed(page)
+                if performance_page_confirmed:
+                    login_status = "manual_login_completed"
+                    capture_continued_after_manual_login = True
+                else:
+                    login_status = "login_failed_or_not_confirmed"
+        else:
+            playwright, browser, page = launch_headed_browser()
+            login_status = "manual_login_required"
+            manual_mfa_required = True
+            prompt_user(
+                "Please log in to Airbnb manually in the opened browser. Complete MFA if required. "
+                "When you can see the Airbnb performance/insights area for Aloha Poconos, return to this terminal and press Enter."
+            )
+            manual_mfa_completed = True
+            capture_continued_after_manual_login = True
+            navigation_ok, navigation_error = ensure_airbnb_conversion_page(page)
+            navigation_status = "ok" if navigation_ok else "failed"
+            performance_page_confirmed = navigation_ok and is_airbnb_performance_page_confirmed(page)
+            if performance_page_confirmed:
+                login_status = "manual_login_completed"
+            else:
+                login_status = "login_failed_or_not_confirmed"
         report_controls_ready, report_controls_error = wait_for_base_report_controls(page) if performance_page_confirmed else (False, "")
         if not performance_page_confirmed:
             prompt_user("Please make sure the Airbnb Performance > Conversion page is visible, then press Enter.")
+            if manual_mfa_required:
+                manual_mfa_completed = True
             navigation_ok, navigation_error = ensure_airbnb_conversion_page(page)
             navigation_status = "ok" if navigation_ok else "failed"
             performance_page_confirmed = navigation_ok and is_airbnb_performance_page_confirmed(page)
             report_controls_ready, report_controls_error = wait_for_base_report_controls(page) if performance_page_confirmed else (False, "")
+            if performance_page_confirmed:
+                login_status = "manual_login_completed"
+                capture_continued_after_manual_login = manual_mfa_required
+            else:
+                login_status = "login_failed_or_not_confirmed"
         if performance_page_confirmed and not report_controls_ready:
             prompt_user("Please wait until Airbnb Performance > Conversion controls are visible, then press Enter.")
             report_controls_ready, report_controls_error = wait_for_base_report_controls(page)
@@ -1244,6 +1333,13 @@ def capture_headed(run_date: str, mode: str, staging_path: Path, *, debug_date_f
                 navigation_error,
                 performance_page_confirmed,
                 status_override,
+                None,
+                use_persistent_profile,
+                str(profile_path or "") if use_persistent_profile else "",
+                login_status,
+                manual_mfa_required,
+                manual_mfa_completed,
+                capture_continued_after_manual_login,
             )
         if not report_controls_ready:
             status_override = "report_not_ready"
@@ -1295,6 +1391,13 @@ def capture_headed(run_date: str, mode: str, staging_path: Path, *, debug_date_f
                 navigation_error,
                 performance_page_confirmed,
                 status_override,
+                None,
+                use_persistent_profile,
+                str(profile_path or "") if use_persistent_profile else "",
+                login_status,
+                manual_mfa_required,
+                manual_mfa_completed,
+                capture_continued_after_manual_login,
             )
         report_controls_ready, report_controls_error = wait_for_report_ready(page)
         for target in CAPTURE_TARGETS:
@@ -1447,6 +1550,12 @@ def capture_headed(run_date: str, mode: str, staging_path: Path, *, debug_date_f
         performance_page_confirmed,
         status_override,
         validation_manifest,
+        use_persistent_profile,
+        str(profile_path or "") if use_persistent_profile else "",
+        login_status,
+        manual_mfa_required,
+        manual_mfa_completed,
+        capture_continued_after_manual_login,
     )
 
 
@@ -1454,7 +1563,14 @@ def write_manifest(manifest: dict[str, object], path: Path) -> None:
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
-def run(run_date: str, mode: str = "dry-run", run_dir: Path | None = None, *, debug_date_flow: bool = False) -> Path:
+def run(
+    run_date: str,
+    mode: str = "dry-run",
+    run_dir: Path | None = None,
+    *,
+    debug_date_flow: bool = False,
+    use_persistent_profile: bool = False,
+) -> Path:
     if mode not in SUPPORTED_MODES:
         raise ValueError("unsupported mode. Supported modes: dry-run, validate-staged, promote-staged, cleanup-staging, capture-headed, capture-headed-and-validate.")
     resolved_run_dir = run_dir or Path("data") / "runs" / run_date
@@ -1462,7 +1578,13 @@ def run(run_date: str, mode: str = "dry-run", run_dir: Path | None = None, *, de
     resolved_staging_dir.mkdir(parents=True, exist_ok=True)
     resolved_manifest_path = manifest_path(resolved_staging_dir, run_date)
     if mode in {"capture-headed", "capture-headed-and-validate"}:
-        manifest = capture_headed(run_date, mode, resolved_staging_dir, debug_date_flow=debug_date_flow)
+        manifest = capture_headed(
+            run_date,
+            mode,
+            resolved_staging_dir,
+            debug_date_flow=debug_date_flow,
+            use_persistent_profile=use_persistent_profile,
+        )
     elif mode == "promote-staged":
         manifest = build_promote_manifest(run_date, resolved_run_dir, resolved_staging_dir)
     elif mode == "cleanup-staging":
@@ -1482,6 +1604,7 @@ def main() -> int:
         args.mode,
         Path(args.run_dir) if args.run_dir else None,
         debug_date_flow=args.debug_date_flow,
+        use_persistent_profile=args.use_persistent_profile,
     )
     print(f"Wrote {output}")
     return 0

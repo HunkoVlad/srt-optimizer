@@ -929,7 +929,13 @@ def scenario_found_result(
     )
 
 
-def scan_scenario_pages(page: Page, *, max_pages: int, listing_title: str, listing_id: str = DEFAULT_LISTING_ID) -> tuple[int, int, object | None, int | None, int | None]:
+def scan_scenario_pages(
+    page: Page,
+    *,
+    max_pages: int,
+    listing_title: str,
+    listing_id: str = DEFAULT_LISTING_ID,
+) -> tuple[int, int, object | None, int | None, int | None]:
     last_result_count = 0
     target_link = None
     pages_checked = 0

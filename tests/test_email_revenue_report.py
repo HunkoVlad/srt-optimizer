@@ -286,6 +286,35 @@ def airbnb_summary_row() -> dict[str, str]:
     }
 
 
+def airbnb_weekly_history_rows() -> list[dict[str, str]]:
+    metrics = [
+        ("page_views", "333", "335", "-2"),
+        ("first_page_search_impressions", "3280", "3535", "-255"),
+        ("wishlist_additions", "35", "36", "-1"),
+        ("average_overall_conversion_rate", "0.15%", "0.14", "0.01"),
+        ("first_page_search_impression_rate", "56.5%", "60.9", "-4.4"),
+        ("search_to_listing_conversion_rate", "10.15%", "9.48", "0.67"),
+        ("listing_to_booking_conversion_rate", "1.50%", "1.49", "0.01"),
+    ]
+    return [
+        {
+            "run_date": "2026-06-01",
+            "metric_window_start": "2026-05-24",
+            "metric_window_end": "2026-05-31",
+            "metric_name": metric_name,
+            "current_value": current,
+            "previous_week_value": previous,
+            "change_vs_previous_week": change,
+            "last_4_week_avg": "",
+            "change_vs_last_4_week_avg": "",
+            "recent_history_weeks_used": "6",
+            "history_quality_status": "recent_baseline_ready",
+            "notes": "Airbnb retained-history comparison only.",
+        }
+        for metric_name, current, previous, change in metrics
+    ]
+
+
 def diagnostic_issue_row(status: str = "open", *, last_seen_run_date: str = "2026-05-25") -> dict[str, str]:
     return {
         "issue_id": "airbnb_visibility_up_conversion_down",
@@ -338,6 +367,74 @@ def listing_change_row(status: str = "active", review_after_run_date: str = "202
         "review_after_run_date": review_after_run_date,
         "notes": "No additional listing changes until one full diagnostic cycle completes.",
     }
+
+
+def stayfi_anniversary_summary_row() -> dict[str, str]:
+    return {
+        "run_date": "2026-06-01",
+        "anniversary_audience_window_start": "2025-06-01",
+        "anniversary_audience_window_end": "2025-06-07",
+        "total_stayfi_rows_checked": "42",
+        "eligible_guests": "3",
+        "drafts_created": "0",
+        "drafts_prepared_csv": "3",
+        "gmail_drafts_created": "0",
+        "gmail_draft_failures": "1",
+        "excluded_invalid_emails": "2",
+        "excluded_no_opt_in": "5",
+        "excluded_bad_rating": "1",
+        "skipped_duplicates": "4",
+        "skipped_duplicates_from_log": "4",
+        "rating_missing": "7",
+        "detected_columns": "Contact Email | First Seen | Location | Status | Opt-in",
+        "date_column_used": "First Seen",
+        "email_column_used": "Contact Email",
+        "rows_in_audience_window": "15",
+        "excluded_missing_email": "1",
+        "excluded_wrong_property": "2",
+        "date_parse_failed": "3",
+        "missing_required_columns": "",
+        "stayfi_input_file": "StayFi Guests.csv",
+        "source_file_status": "available",
+        "draft_mode": "manual_gmail_draft_prepared_only",
+    }
+
+
+def stayfi_anniversary_send_result_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "email": "guest1@example.com",
+            "subject": "Thinking about another Pocono getaway?",
+            "gmail_message_id": "msg-1",
+            "send_status": "sent",
+            "error_message": "",
+            "sent_at": "2026-06-01T00:00:00+00:00",
+        },
+        {
+            "email": "guest-dry-run@example.com",
+            "subject": "Thinking about another Pocono getaway?",
+            "gmail_message_id": "",
+            "send_status": "dry_run_would_send",
+            "error_message": "",
+            "sent_at": "",
+        },
+        {
+            "email": "guest2@example.com",
+            "subject": "Thinking about another Pocono getaway?",
+            "gmail_message_id": "",
+            "send_status": "failed",
+            "error_message": "api failed",
+            "sent_at": "",
+        },
+        {
+            "email": "guest3@example.com",
+            "subject": "Thinking about another Pocono getaway?",
+            "gmail_message_id": "",
+            "send_status": "skipped_duplicate_logged",
+            "error_message": "already_logged",
+            "sent_at": "",
+        },
+    ]
 
 
 def airbnb_search_visibility_rows() -> list[dict[str, str]]:
@@ -483,11 +580,41 @@ def test_airbnb_funnel_section_includes_count_and_rate_separately() -> None:
     assert "First-page search impressions: 3535%." not in section
 
 
+def test_airbnb_funnel_week_over_week_section_uses_history_comparison() -> None:
+    markdown = build_markdown(
+        "2026-06-01",
+        sample_rows(),
+        airbnb_summary_rows=[airbnb_summary_row()],
+        airbnb_weekly_history_rows=airbnb_weekly_history_rows(),
+    )
+    section = markdown.split("## Airbnb Funnel Week-over-Week", 1)[1].split("## Open Diagnostic Issues", 1)[0]
+
+    assert "- Page views: 335 \u2192 333 (-2)" in section
+    assert "- First-page search impressions: 3535 \u2192 3280 (-255)" in section
+    assert "- Wishlist additions: 36 \u2192 35 (-1)" in section
+    assert "- Average overall conversion rate: 0.14% \u2192 0.15% (+0.01 pp)" in section
+    assert "- First-page search impression rate: 60.9% \u2192 56.5% (-4.4 pp)" in section
+    assert "- Search-to-listing conversion rate: 9.48% \u2192 10.15% (+0.67 pp)" in section
+    assert "- Listing-to-booking conversion rate: 1.49% \u2192 1.50% (+0.01 pp)" in section
+    assert "Diagnostic only; this does not create a PriceLabs rule recommendation." in section
+
+
+def test_airbnb_funnel_week_over_week_unavailable_does_not_fail_report() -> None:
+    markdown = build_markdown("2026-05-08", sample_rows(), airbnb_summary_rows=[airbnb_summary_row()])
+    section = markdown.split("## Airbnb Funnel Week-over-Week", 1)[1].split("## Open Diagnostic Issues", 1)[0]
+
+    assert "Airbnb funnel week-over-week comparison unavailable for this run." in section
+
+
 def test_airbnb_funnel_section_handles_missing_summary() -> None:
     markdown = build_markdown("2026-05-08", sample_rows(), airbnb_summary_rows=[])
     section = markdown.split("## Airbnb Funnel Signals", 1)[1].split("## Recommendation Review", 1)[0]
 
     assert "Airbnb funnel diagnostics unavailable for this run." in section
+    assert "Manual action required before final report: run Airbnb capture with browser login/MFA" in section
+    assert "airbnb.download_diagnostics --run-date <run_date> --mode capture-headed-and-validate" in section
+    assert "airbnb.download_diagnostics --run-date <run_date> --mode promote-staged" in section
+    assert "airbnb.run_diagnostics --run-date <run_date>" in section
     assert "Airbnb funnel signals are diagnostic only." in section
     assert "- 2026-06: Monitor" in markdown
 
@@ -918,6 +1045,110 @@ def test_airbnb_search_visibility_does_not_change_recommendation_review() -> Non
 
     without_recommendations = without_visibility.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
     with_recommendations = with_visibility.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    assert with_recommendations == without_recommendations
+
+
+def test_stayfi_anniversary_email_section_appears_when_summary_exists() -> None:
+    markdown = build_markdown(
+        "2026-06-01",
+        sample_rows(),
+        stayfi_anniversary_summary_rows=[stayfi_anniversary_summary_row()],
+        stayfi_anniversary_summary_available=True,
+    )
+    section = markdown.split("## StayFi Anniversary Email Drafts", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Anniversary audience window: 2025-06-01 to 2025-06-07." in section
+    assert "Date column used: First Seen. Email column used: Contact Email." in section
+    assert "Total StayFi rows checked: 42." in section
+    assert "Rows in audience window: 15." in section
+    assert "Eligible guests: 3." in section
+    assert "Draft-ready CSV records prepared: 3." in section
+    assert "Gmail drafts created: 0." in section
+    assert "Gmail draft failures: 1." in section
+    assert "Excluded invalid emails: 2." in section
+    assert "Excluded missing email: 1." in section
+    assert "Excluded wrong property: 2." in section
+    assert "Excluded no opt-in: 5." in section
+    assert "Excluded bad rating 1-3 stars: 1." in section
+    assert "Skipped duplicates from permanent log: 4." in section
+    assert "Date parse failures: 3." in section
+    assert "Draft-only workflow; no emails were sent automatically." in section
+
+
+def test_stayfi_anniversary_email_section_shows_send_results_when_available() -> None:
+    markdown = build_markdown(
+        "2026-06-01",
+        sample_rows(),
+        stayfi_anniversary_summary_rows=[stayfi_anniversary_summary_row()],
+        stayfi_anniversary_summary_available=True,
+        stayfi_anniversary_send_result_rows=stayfi_anniversary_send_result_rows(),
+        stayfi_anniversary_send_results_available=True,
+    )
+    section = markdown.split("## StayFi Anniversary Email Drafts", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Emails sent: 1." in section
+    assert "Dry-run would send: 1." in section
+    assert "Send failures: 1." in section
+    assert "Send skipped duplicates from permanent log: 1." in section
+    assert "Manual send workflow; no emails were sent automatically by the weekly pipeline." in section
+
+
+def test_stayfi_anniversary_email_section_omitted_when_missing() -> None:
+    markdown = build_markdown("2026-06-01", sample_rows(), stayfi_anniversary_summary_available=False)
+
+    assert "## StayFi Anniversary Email Drafts" not in markdown
+
+
+def test_stayfi_anniversary_email_section_warns_when_source_missing() -> None:
+    summary = stayfi_anniversary_summary_row()
+    summary["source_file_status"] = "missing"
+    summary["stayfi_input_file"] = "data/source/stayfi/stayfi_guests_2026.csv"
+    summary["total_stayfi_rows_checked"] = "0"
+    summary["eligible_guests"] = "0"
+    summary["drafts_created"] = "0"
+    summary["drafts_prepared_csv"] = "0"
+    summary["gmail_drafts_created"] = "0"
+    summary["gmail_draft_failures"] = "0"
+    markdown = build_markdown(
+        "2026-06-01",
+        sample_rows(),
+        stayfi_anniversary_summary_rows=[summary],
+        stayfi_anniversary_summary_available=True,
+    )
+    section = markdown.split("## StayFi Anniversary Email Drafts", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Warning: StayFi source file missing: data/source/stayfi/stayfi_guests_2026.csv." in section
+    assert "Draft-ready CSV records prepared: 0." in section
+    assert "Gmail drafts created: 0." in section
+    assert "Gmail draft failures: 0." in section
+
+
+def test_stayfi_anniversary_email_section_warns_when_columns_missing() -> None:
+    summary = stayfi_anniversary_summary_row()
+    summary["source_file_status"] = "available_but_missing_columns"
+    summary["missing_required_columns"] = "first_sign_in | property"
+    markdown = build_markdown(
+        "2026-06-01",
+        sample_rows(),
+        stayfi_anniversary_summary_rows=[summary],
+        stayfi_anniversary_summary_available=True,
+    )
+    section = markdown.split("## StayFi Anniversary Email Drafts", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Warning: StayFi source file is missing required columns: first_sign_in | property." in section
+
+
+def test_stayfi_anniversary_section_does_not_change_recommendation_review() -> None:
+    without_stayfi = build_markdown("2026-06-01", sample_rows())
+    with_stayfi = build_markdown(
+        "2026-06-01",
+        sample_rows(),
+        stayfi_anniversary_summary_rows=[stayfi_anniversary_summary_row()],
+        stayfi_anniversary_summary_available=True,
+    )
+
+    without_recommendations = without_stayfi.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    with_recommendations = with_stayfi.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
     assert with_recommendations == without_recommendations
 
 
