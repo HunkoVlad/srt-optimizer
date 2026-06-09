@@ -105,6 +105,18 @@ def test_monday_full_report_wrapper_exists_and_orders_steps() -> None:
     assert "-m airbnb.download_diagnostics --run-date $RunDate --mode promote-staged" in script
     assert "-m airbnb.run_diagnostics --run-date $RunDate" in script
     assert "run_weekly_pipeline.ps1" in script
+    assert "Weekly report email: $weeklyReportEmailStatus" in script
+
+
+def test_send_weekly_revenue_report_script_is_explicit_manual_send_only() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts" / "send_weekly_revenue_report.ps1").read_text(encoding="utf-8")
+    pipeline = (repo_root / "run_weekly_pipeline.ps1").read_text(encoding="utf-8")
+
+    assert "pricelabs.transform.email_sender" in script
+    assert "--explicit-send" in script
+    assert "email_revenue_report_send_result_$RunDate.csv" in script
+    assert "send_weekly_revenue_report.ps1" not in pipeline
 
 
 def test_monday_full_report_wrapper_keeps_airbnb_steps_nonblocking() -> None:

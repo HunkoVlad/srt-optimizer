@@ -161,6 +161,24 @@ $emailMarkdownPath = Join-Path $analysisDir "email_revenue_report_$RunDate.md"
 $emailHtmlPath = Join-Path $analysisDir "email_revenue_report_$RunDate.html"
 $evidenceBundlePath = Join-Path $analysisDir "evidence_bundle_$RunDate"
 $emailDraftPath = Join-Path $analysisDir "email_revenue_report_$RunDate.eml"
+$emailSendResultPath = Join-Path $analysisDir "email_revenue_report_send_result_$RunDate.csv"
+
+$weeklyReportEmailStatus = "skipped"
+if (Test-Path $emailSendResultPath) {
+    try {
+        $sendRows = Import-Csv -Path $emailSendResultPath
+        $latestSendRow = @($sendRows)[-1]
+        if ($latestSendRow -and $latestSendRow.send_status) {
+            $weeklyReportEmailStatus = $latestSendRow.send_status
+        }
+    }
+    catch {
+        $weeklyReportEmailStatus = "failed"
+    }
+}
+elseif (Test-Path $emailDraftPath) {
+    $weeklyReportEmailStatus = "draft_created"
+}
 
 Write-Host ""
 Write-Host "Monday full report completed."
@@ -169,11 +187,13 @@ Write-MondayLog "PriceLabs core: success"
 Write-MondayLog "Airbnb search screening: $(if ($airbnbSearchSuccess) { 'success' } else { 'failure_nonblocking' })"
 Write-MondayLog "Airbnb funnel diagnostics: $(if ($airbnbCaptureSuccess -and $airbnbPromoteSuccess -and $airbnbDiagnosticsSuccess) { 'success' } else { 'failure_nonblocking_or_unavailable' })"
 Write-MondayLog "Weekly report: $(if ($weeklyReportSuccess) { 'success' } else { 'failure' })"
+Write-MondayLog "Weekly report email: $weeklyReportEmailStatus"
 
 Write-Host "PriceLabs core: success"
 Write-Host "Airbnb search screening: $(if ($airbnbSearchSuccess) { 'success' } else { 'failure_nonblocking' })"
 Write-Host "Airbnb funnel diagnostics: $(if ($airbnbCaptureSuccess -and $airbnbPromoteSuccess -and $airbnbDiagnosticsSuccess) { 'success' } else { 'failure_nonblocking_or_unavailable' })"
 Write-Host "Weekly report: $(if ($weeklyReportSuccess) { 'success' } else { 'failure' })"
+Write-Host "Weekly report email: $weeklyReportEmailStatus"
 Write-Host "Report path: $emailMarkdownPath"
 Write-Host "HTML report path: $emailHtmlPath"
 Write-Host "Evidence bundle path: $evidenceBundlePath"
@@ -186,6 +206,9 @@ Write-MondayLog "HTML report path: $emailHtmlPath"
 Write-MondayLog "Evidence bundle path: $evidenceBundlePath"
 if (Test-Path $emailDraftPath) {
     Write-MondayLog "Email draft path: $emailDraftPath"
+}
+if (Test-Path $emailSendResultPath) {
+    Write-MondayLog "Email send result path: $emailSendResultPath"
 }
 Write-MondayLog "Monday full report workflow finished."
 
