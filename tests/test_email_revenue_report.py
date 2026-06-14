@@ -265,6 +265,8 @@ def airbnb_summary_row() -> dict[str, str]:
         "comparison_window_end": "2026-05-17",
         "page_views": "335",
         "first_page_search_impressions": "3535",
+        "estimated_relevant_searches": "5804.6",
+        "estimated_relevant_searches_per_day": "829.23",
         "wishlist_additions": "36",
         "average_overall_conversion_rate": "0.14%",
         "first_page_search_impression_rate": "60.9%",
@@ -279,6 +281,16 @@ def airbnb_summary_row() -> dict[str, str]:
         "has_recent_history_baseline": "true",
         "has_similar_listing_benchmark": "true",
         "diagnostic_confidence": "high",
+        "benchmark_type": "all_available_history",
+        "relevant_searches_wow_change": "-255.4",
+        "relevant_searches_vs_trailing_benchmark_pct": "-8.2",
+        "search_to_listing_conversion_vs_benchmark_pct": "6.1",
+        "listing_to_booking_conversion_vs_benchmark_pct": "-1.3",
+        "market_demand_status": "normal",
+        "visibility_status": "stable_or_strong",
+        "search_card_status": "stable_or_strong",
+        "listing_conversion_status": "stable_or_strong",
+        "airbnb_diagnostic_category": "balanced_monitor_only",
         "parsed_metric_pages": "booking_conversion;page_views;wishlist_additions",
         "missing_metric_pages": "",
         "diagnostic_summary": "Airbnb conversion signals are available for the selected week.",
@@ -290,6 +302,8 @@ def airbnb_weekly_history_rows() -> list[dict[str, str]]:
     metrics = [
         ("page_views", "333", "335", "-2"),
         ("first_page_search_impressions", "3280", "3535", "-255"),
+        ("estimated_relevant_searches", "5805.31", "5804.6", "0.71"),
+        ("estimated_relevant_searches_per_day", "829.33", "829.23", "0.1"),
         ("wishlist_additions", "35", "36", "-1"),
         ("average_overall_conversion_rate", "0.15%", "0.14", "0.01"),
         ("first_page_search_impression_rate", "56.5%", "60.9", "-4.4"),
@@ -573,11 +587,16 @@ def test_airbnb_funnel_section_includes_count_and_rate_separately() -> None:
     assert "- Metric window: 2026-05-17 to 2026-05-24." in section
     assert "- Page views: 335." in section
     assert "- First-page search impressions: 3535." in section
+    assert "- Estimated relevant searches: 5804.6." in section
+    assert "- Estimated relevant searches/day: 829.23." in section
     assert "- First-page search impression rate: 60.9%." in section
     assert "- Average overall conversion rate: 0.14%." in section
     assert "- Search-to-listing conversion rate: 9.48%." in section
     assert "- Listing-to-booking conversion rate: 1.49%." in section
     assert "First-page search impressions: 3535%." not in section
+    assert "- Relevant search benchmark: all_available_history." in section
+    assert "- Market demand status: normal." in section
+    assert "- Airbnb diagnostic category: balanced_monitor_only." in section
 
 
 def test_airbnb_funnel_week_over_week_section_uses_history_comparison() -> None:
@@ -591,6 +610,8 @@ def test_airbnb_funnel_week_over_week_section_uses_history_comparison() -> None:
 
     assert "- Page views: 335 \u2192 333 (-2)" in section
     assert "- First-page search impressions: 3535 \u2192 3280 (-255)" in section
+    assert "- Estimated relevant searches: 5804.6 \u2192 5805.31 (+0.71)" in section
+    assert "- Estimated relevant searches/day: 829.23 \u2192 829.33 (+0.1)" in section
     assert "- Wishlist additions: 36 \u2192 35 (-1)" in section
     assert "- Average overall conversion rate: 0.14% \u2192 0.15% (+0.01 pp)" in section
     assert "- First-page search impression rate: 60.9% \u2192 56.5% (-4.4 pp)" in section

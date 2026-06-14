@@ -463,6 +463,8 @@ def display_signal_value(key: str, value: str) -> str:
 AIRBNB_FUNNEL_SIGNALS = (
     ("page_views", "Page views", "count"),
     ("first_page_search_impressions", "First-page search impressions", "count"),
+    ("estimated_relevant_searches", "Estimated relevant searches", "count"),
+    ("estimated_relevant_searches_per_day", "Estimated relevant searches/day", "count"),
     ("wishlist_additions", "Wishlist additions", "count"),
     ("average_overall_conversion_rate", "Average overall conversion rate", "rate"),
     ("first_page_search_impression_rate", "First-page search impression rate", "rate"),
@@ -627,6 +629,20 @@ def airbnb_funnel_signals_section(summary_rows: list[dict[str, str]] | None) -> 
     lines.append(f"- Metric window: {window_start} to {window_end}.")
     for key, label, _metric_type in AIRBNB_FUNNEL_SIGNALS:
         lines.append(f"- {label}: {display_signal_value(key, row.get(key, ''))}.")
+    if row.get("benchmark_type", ""):
+        lines.extend(
+            [
+                f"- Relevant search benchmark: {row.get('benchmark_type', '')}.",
+                f"- Relevant searches vs benchmark: {row.get('relevant_searches_vs_trailing_benchmark_pct', '') or 'unknown'}%.",
+                f"- Search-to-listing conversion vs benchmark: {row.get('search_to_listing_conversion_vs_benchmark_pct', '') or 'unknown'}%.",
+                f"- Listing-to-booking conversion vs benchmark: {row.get('listing_to_booking_conversion_vs_benchmark_pct', '') or 'unknown'}%.",
+                f"- Market demand status: {row.get('market_demand_status', '') or 'unknown'}.",
+                f"- Visibility status: {row.get('visibility_status', '') or 'unknown'}.",
+                f"- Search card status: {row.get('search_card_status', '') or 'unknown'}.",
+                f"- Listing conversion status: {row.get('listing_conversion_status', '') or 'unknown'}.",
+                f"- Airbnb diagnostic category: {row.get('airbnb_diagnostic_category', '') or 'unknown'}.",
+            ]
+        )
     lines.extend(
         [
             "- Airbnb funnel signals are diagnostic only. PriceLabs remains the source of truth for revenue, occupancy, ADR, booked nights, booking totals, cleaning count, and monthly revenue pace.",

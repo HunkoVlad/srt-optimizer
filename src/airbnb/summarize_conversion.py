@@ -18,11 +18,23 @@ SUMMARY_COLUMNS = [
     "comparison_window_end",
     "page_views",
     "first_page_search_impressions",
+    "estimated_relevant_searches",
+    "estimated_relevant_searches_per_day",
     "wishlist_additions",
     "average_overall_conversion_rate",
     "first_page_search_impression_rate",
     "search_to_listing_conversion_rate",
     "listing_to_booking_conversion_rate",
+    "benchmark_type",
+    "relevant_searches_wow_change",
+    "relevant_searches_vs_trailing_benchmark_pct",
+    "search_to_listing_conversion_vs_benchmark_pct",
+    "listing_to_booking_conversion_vs_benchmark_pct",
+    "market_demand_status",
+    "visibility_status",
+    "search_card_status",
+    "listing_conversion_status",
+    "airbnb_diagnostic_category",
     "page_views_change_vs_previous_week",
     "wishlist_additions_change_vs_previous_week",
     "first_page_search_impressions_change_vs_previous_week",
@@ -95,6 +107,42 @@ def first_non_empty(rows: list[dict[str, str]], field: str) -> str:
     return ""
 
 
+def parse_number(value: str) -> float | None:
+    text = (value or "").strip().replace(",", "")
+    if not text:
+        return None
+    try:
+        return float(text.rstrip("%"))
+    except ValueError:
+        return None
+
+
+def format_number(value: float | None) -> str:
+    if value is None:
+        return ""
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def metric_window_days(start: str, end: str) -> int:
+    from datetime import date
+
+    try:
+        days = (date.fromisoformat(end) - date.fromisoformat(start)).days
+    except ValueError:
+        return 7
+    return days if days > 0 else 7
+
+
+def estimated_relevant_searches(impressions: str, impression_rate: str) -> float | None:
+    impression_count = parse_number(impressions)
+    rate_percent = parse_number(impression_rate)
+    if impression_count is None or rate_percent is None or rate_percent <= 0:
+        return None
+    return impression_count / (rate_percent / 100)
+
+
 def has_previous_week_comparison(row: dict[str, str]) -> bool:
     change_fields = (
         "page_views_change_vs_previous_week",
@@ -161,6 +209,11 @@ def build_summary_row(run_date: str, parsed_rows: list[dict[str, str]]) -> dict[
         diagnostic_summary = ""
 
     notes = " ".join(row.get("notes", "") for row in rows if row.get("notes", "")).strip()
+    estimated_searches = estimated_relevant_searches(
+        rows_by_page.get("page_views", {}).get("first_page_search_impressions", ""),
+        rows_by_page.get("booking_conversion", {}).get("first_page_search_impression_rate", ""),
+    )
+    window_days = metric_window_days(first_non_empty(rows, "metric_window_start"), first_non_empty(rows, "metric_window_end"))
     summary_row = {
         "run_date": run_date,
         "metric_window_start": first_non_empty(rows, "metric_window_start"),
@@ -171,11 +224,23 @@ def build_summary_row(run_date: str, parsed_rows: list[dict[str, str]]) -> dict[
         "comparison_window_end": first_non_empty(rows, "comparison_window_end"),
         "page_views": rows_by_page.get("page_views", {}).get("page_views", ""),
         "first_page_search_impressions": rows_by_page.get("page_views", {}).get("first_page_search_impressions", ""),
+        "estimated_relevant_searches": format_number(estimated_searches),
+        "estimated_relevant_searches_per_day": format_number(estimated_searches / window_days if estimated_searches is not None else None),
         "wishlist_additions": rows_by_page.get("wishlist_additions", {}).get("wishlist_additions", ""),
         "average_overall_conversion_rate": rows_by_page.get("booking_conversion", {}).get("average_overall_conversion_rate", ""),
         "first_page_search_impression_rate": rows_by_page.get("booking_conversion", {}).get("first_page_search_impression_rate", ""),
         "search_to_listing_conversion_rate": rows_by_page.get("booking_conversion", {}).get("search_to_listing_conversion_rate", ""),
         "listing_to_booking_conversion_rate": rows_by_page.get("booking_conversion", {}).get("listing_to_booking_conversion_rate", ""),
+        "benchmark_type": "",
+        "relevant_searches_wow_change": "",
+        "relevant_searches_vs_trailing_benchmark_pct": "",
+        "search_to_listing_conversion_vs_benchmark_pct": "",
+        "listing_to_booking_conversion_vs_benchmark_pct": "",
+        "market_demand_status": "",
+        "visibility_status": "",
+        "search_card_status": "",
+        "listing_conversion_status": "",
+        "airbnb_diagnostic_category": "",
         "page_views_change_vs_previous_week": rows_by_page.get("page_views", {}).get("page_views_change_vs_previous_week", ""),
         "wishlist_additions_change_vs_previous_week": rows_by_page.get("wishlist_additions", {}).get("wishlist_additions_change_vs_previous_week", ""),
         "first_page_search_impressions_change_vs_previous_week": rows_by_page.get("page_views", {}).get(

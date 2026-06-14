@@ -27,6 +27,8 @@ def create_inputs(run_dir: Path, run_date: str) -> None:
                 "comparison_window_end": "2026-05-10",
                 "page_views": "176",
                 "first_page_search_impressions": "64",
+                "estimated_relevant_searches": "122.14",
+                "estimated_relevant_searches_per_day": "17.45",
                 "wishlist_additions": "28",
                 "average_overall_conversion_rate": "0.36%",
                 "first_page_search_impression_rate": "52.4%",
@@ -41,6 +43,16 @@ def create_inputs(run_dir: Path, run_date: str) -> None:
                 "has_recent_history_baseline": "false",
                 "has_similar_listing_benchmark": "false",
                 "diagnostic_confidence": "medium",
+                "benchmark_type": "all_available_history",
+                "relevant_searches_wow_change": "-20",
+                "relevant_searches_vs_trailing_benchmark_pct": "-12.75",
+                "search_to_listing_conversion_vs_benchmark_pct": "-18.5",
+                "listing_to_booking_conversion_vs_benchmark_pct": "-4.2",
+                "market_demand_status": "normal",
+                "visibility_status": "stable_or_strong",
+                "search_card_status": "weak",
+                "listing_conversion_status": "stable_or_strong",
+                "airbnb_diagnostic_category": "balanced_monitor_only",
                 "parsed_metric_pages": "booking_conversion;page_views;wishlist_additions",
                 "diagnostic_summary": "Airbnb page views declined versus the previous 7 days; compare with PriceLabs market context before assigning cause.",
             }
@@ -314,6 +326,7 @@ def test_weekly_funnel_table_has_five_columns(tmp_path: Path) -> None:
 
     assert "| Signal | Value | WoW Change | 4-Week Avg | vs 4-Week Avg |" in text
     assert "| Page views | 176 | -157 | - | - |" in text
+    assert "| Estimated relevant searches | 122.14 | -20 | - | - |" in text
     assert "| Wishlist additions | 28 | -2 | - | - |" in text
     assert "| First-page search impression rate | 52.4% | - | - | - |" in text
     signal_lines = [line for line in text.splitlines() if line.startswith("| ") and line.endswith(" |")]
@@ -367,6 +380,8 @@ def test_report_uses_history_comparison_wow_values_for_all_metrics(tmp_path: Pat
     history_rows = [
         ("page_views", "-157", "292.25", "-116.25"),
         ("first_page_search_impressions", "-205", "879", "-390"),
+        ("estimated_relevant_searches", "-300", "1200", "-400"),
+        ("estimated_relevant_searches_per_day", "-42.86", "171.43", "-57.14"),
         ("wishlist_additions", "-2", "29.75", "-1.75"),
         ("average_overall_conversion_rate", "0.71", "0.69", "0.74"),
         ("first_page_search_impression_rate", "-1", "55.92", "-0.32"),
@@ -395,6 +410,8 @@ def test_report_uses_history_comparison_wow_values_for_all_metrics(tmp_path: Pat
 
     assert "| Page views | 176 | -157 | 292.25 | -116.25 |" in text
     assert "| First-page search impressions | 64 | -205 | 879 | -390 |" in text
+    assert "| Estimated relevant searches | 122.14 | -300 | 1200 | -400 |" in text
+    assert "| Estimated relevant searches/day | 17.45 | -42.86 | 171.43 | -57.14 |" in text
     assert "| Wishlist additions | 28 | -2 | 29.75 | -1.75 |" in text
     assert "| Average overall conversion rate | 0.36% | 0.71 | 0.69 | 0.74 |" in text
     assert "| First-page search impression rate | 52.4% | -1 | 55.92 | -0.32 |" in text
@@ -465,6 +482,21 @@ def test_report_includes_neutral_boundary_wording(tmp_path: Path) -> None:
     assert "Similar listings data is an Airbnb diagnostic benchmark only." in text
     assert "Airbnb data is used only for visibility and conversion diagnostics." in text
     assert "PriceLabs remains the source of truth" in text
+
+
+def test_report_includes_relevant_search_demand_diagnostic(tmp_path: Path) -> None:
+    run_date = "2026-05-21"
+    run_dir = tmp_path / "data" / "runs" / run_date
+    create_inputs(run_dir, run_date)
+
+    text = report_conversion.run(run_date, run_dir=run_dir).read_text(encoding="utf-8")
+
+    assert "## Relevant Search Demand Diagnostic" in text
+    assert "- Benchmark type: all_available_history" in text
+    assert "- Relevant searches vs benchmark: -12.75%" in text
+    assert "- Search card status: weak" in text
+    assert "- Diagnostic category: balanced_monitor_only" in text
+    assert "must not create PriceLabs rule recommendations" in text
 
 
 def test_report_avoids_pricelabs_rule_recommendations(tmp_path: Path) -> None:

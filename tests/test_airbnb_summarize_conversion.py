@@ -80,6 +80,25 @@ def test_complete_parsed_input_creates_complete_summary(tmp_path: Path) -> None:
     assert row["has_recent_history_baseline"] == "false"
     assert row["diagnostic_confidence"] == "low"
     assert "no historical baseline" in row["diagnostic_summary"]
+    assert row["estimated_relevant_searches"] == "122.14"
+    assert row["estimated_relevant_searches_per_day"] == "17.45"
+
+
+def test_estimated_relevant_searches_converts_percent_rate() -> None:
+    estimate = summarize_conversion.estimated_relevant_searches("337", "58.1%")
+
+    assert estimate is not None
+    assert round(estimate, 2) == 580.03
+
+
+def test_estimated_relevant_searches_handles_missing_or_zero_rate_safely(tmp_path: Path) -> None:
+    rows = base_rows("2026-05-21")
+    rows[0]["first_page_search_impression_rate"] = "0%"
+
+    row = run_summary(tmp_path, rows)
+
+    assert row["estimated_relevant_searches"] == ""
+    assert row["estimated_relevant_searches_per_day"] == ""
 
 
 def test_previous_week_comparison_creates_medium_confidence_summary(tmp_path: Path) -> None:
