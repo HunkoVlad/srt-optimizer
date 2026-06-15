@@ -378,7 +378,7 @@ class FakePage:
             self.url = self.goto_final_url
             raise RuntimeError(self.goto_error)
         self.url = url
-        if "ds-start=-8" in url and "ds-end=-1" in url:
+        if "ds-start=-7" in url and "ds-end=0" in url:
             self.visible_text = "Airbnb Performance Booking conversion Page views Wishlist additions May 17 May 24"
             self.selected_date_control_text = "May 17 → May 24"
 
@@ -560,7 +560,21 @@ def test_capture_headed_writes_only_allowed_staged_filenames(tmp_path, monkeypat
     assert manifest["selected_date_control_text"]
     assert all(result["date_range_assertion_status"] == "passed" for result in manifest["capture_results"])
     assert all(result["compare_assertion_status"] == "passed" for result in manifest["capture_results"])
-    assert page.goto_urls in ([], [download_diagnostics.AIRBNB_CONVERSION_URL])
+    assert page.goto_urls == [
+        download_diagnostics.AIRBNB_CONVERSION_URL,
+        "https://www.airbnb.com/performance/conversion/p3_impressions",
+        "https://www.airbnb.com/performance/conversion/wishlist",
+        download_diagnostics.AIRBNB_CONVERSION_URL,
+        "https://www.airbnb.com/performance/conversion/p3_impressions",
+        "https://www.airbnb.com/performance/conversion/wishlist",
+    ]
+    assert manifest["capture_mode"] == "capture-headed"
+    assert manifest["current_page_url"] == "https://www.airbnb.com/performance/conversion/wishlist"
+    assert manifest["current_page_title"] == ""
+    assert manifest["expected_files_count"] == 6
+    assert manifest["saved_files_count"] == 6
+    assert manifest["capture_status"] == "captured_all"
+    assert manifest["capture_failure_reason"] == ""
     assert page.pause_count == 0
     assert download_diagnostics.COMPARE_SELECTOR in page.waited_selectors
     assert download_diagnostics.DATE_RANGE_SELECTOR in page.waited_selectors
@@ -1042,8 +1056,8 @@ def test_airbnb_date_query_url_uses_run_date_relative_offsets() -> None:
         date(2026, 5, 25),
     )
 
-    assert "ds-start=-8" in url
-    assert "ds-end=-1" in url
+    assert "ds-start=-7" in url
+    assert "ds-end=0" in url
 
 
 def test_set_airbnb_reporting_window_uses_query_fallback_when_visible_range_does_not_update() -> None:
@@ -1052,8 +1066,8 @@ def test_set_airbnb_reporting_window_uses_query_fallback_when_visible_range_does
     details = download_diagnostics.set_airbnb_reporting_window(page, date(2026, 5, 17), date(2026, 5, 24), date(2026, 5, 25))
 
     assert details["date_range_automation_status"] == "applied_url_query"
-    assert "ds-start=-8" in details["date_query_fallback_url"]
-    assert "ds-end=-1" in details["date_query_fallback_url"]
+    assert "ds-start=-7" in details["date_query_fallback_url"]
+    assert "ds-end=0" in details["date_query_fallback_url"]
     assert details["visible_date_text_after_apply"] == "Airbnb Performance Booking conversion Page views Wishlist additions May 17 May 24"
 
 

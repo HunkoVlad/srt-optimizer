@@ -54,6 +54,7 @@ DATE_APPLY_POST_CLICK_SETTLE_MS = 1000
 class CaptureTarget:
     filename: str
     metric_name: str
+    metric_path: str
     metric_link_name: str
     expected_metric_text: str
     report_mode: str
@@ -65,6 +66,7 @@ CAPTURE_TARGETS = [
     CaptureTarget(
         "airbnb_booking_conversion_daily.html",
         "Booking conversion",
+        "/performance/conversion/conversion_rate",
         "Booking conversion",
         "Booking conversion",
         "over_time",
@@ -74,6 +76,7 @@ CAPTURE_TARGETS = [
     CaptureTarget(
         "airbnb_page_views_daily.html",
         "Views",
+        "/performance/conversion/p3_impressions",
         "Views",
         "Views",
         "over_time",
@@ -83,6 +86,7 @@ CAPTURE_TARGETS = [
     CaptureTarget(
         "airbnb_wishlist_additions_daily.html",
         "Wishlist additions",
+        "/performance/conversion/wishlist",
         "Wishlist additions",
         "Wishlist additions",
         "over_time",
@@ -92,6 +96,7 @@ CAPTURE_TARGETS = [
     CaptureTarget(
         "airbnb_booking_conversion_similar.html",
         "Booking conversion",
+        "/performance/conversion/conversion_rate",
         "Booking conversion",
         "Booking conversion",
         "similar_listings",
@@ -101,6 +106,7 @@ CAPTURE_TARGETS = [
     CaptureTarget(
         "airbnb_page_views_similar.html",
         "Views",
+        "/performance/conversion/p3_impressions",
         "Views",
         "Views",
         "similar_listings",
@@ -110,6 +116,7 @@ CAPTURE_TARGETS = [
     CaptureTarget(
         "airbnb_wishlist_additions_similar.html",
         "Wishlist additions",
+        "/performance/conversion/wishlist",
         "Wishlist additions",
         "Wishlist additions",
         "similar_listings",
@@ -593,6 +600,13 @@ def current_page_url(page) -> str:
         return ""
 
 
+def current_page_title(page) -> str:
+    try:
+        return str(page.title())
+    except Exception:
+        return ""
+
+
 def is_airbnb_conversion_url(url: str) -> bool:
     return any(path in url for path in AIRBNB_VALID_CONVERSION_PATHS)
 
@@ -674,6 +688,15 @@ def page_visible_text(page) -> str:
             return ""
 
 
+def expected_diagnostic_content_detected(page, target: CaptureTarget) -> tuple[bool, str]:
+    text = page_visible_text(page)
+    if has_diagnostic_hints(target.filename, text):
+        return True, "expected Airbnb diagnostic content detected in visible page text"
+    if not text.strip():
+        return False, "expected diagnostic content was not detected; visible page text was unavailable"
+    return False, "expected diagnostic content was not detected in visible page text"
+
+
 def date_selector_visible_text(page) -> str:
     try:
         return page.locator(DATE_RANGE_SELECTOR).inner_text(timeout=3000)
@@ -718,15 +741,35 @@ def date_range_presence_in_text(text: str, start_date: date, end_date: date) -> 
     return short_start in normalized or start_input in normalized, short_end in normalized or end_input in normalized
 
 
-def select_airbnb_metric(page, metric_link_name: str, expected_metric_text: str | None = None) -> tuple[bool, str]:
+def airbnb_metric_url(metric_path: str) -> str:
+    return urlunsplit(("https", "www.airbnb.com", metric_path, "", ""))
+
+
+def select_airbnb_metric(page, target: CaptureTarget) -> tuple[bool, str]:
+    target_url = airbnb_metric_url(target.metric_path)
+    errors: list[str] = []
     try:
-        page.get_by_role("link", name=metric_link_name).click(timeout=5000)
+        ok, error = safe_goto(page, target_url)
+        if ok:
+            metric_ok, metric_error = assert_airbnb_metric_ready(page, target.expected_metric_text)
+            if metric_ok:
+                return True, ""
+            errors.append(metric_error)
+        else:
+            errors.append(error)
+    except Exception as exc:
+        errors.append(str(exc))
+
+    try:
+        page.get_by_role("link", name=target.metric_link_name).click(timeout=5000)
         wait_for_page_idle(page)
     except Exception as exc:
-        return False, str(exc)
-    if expected_metric_text:
-        return assert_airbnb_metric_ready(page, expected_metric_text)
-    return True, ""
+        errors.append(str(exc))
+        return False, "; ".join(error for error in errors if error)
+    metric_ok, metric_error = assert_airbnb_metric_ready(page, target.expected_metric_text)
+    if not metric_ok:
+        errors.append(metric_error)
+    return metric_ok, "; ".join(error for error in errors if error)
 
 
 def assert_airbnb_metric_ready(page, expected_metric_text: str) -> tuple[bool, str]:
@@ -953,8 +996,8 @@ def open_airbnb_date_selector(page) -> None:
 def airbnb_date_query_url(current_url: str, start_date: date, end_date: date, anchor_date: date) -> str:
     parts = urlsplit(current_url)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    query["ds-start"] = str((start_date - anchor_date).days)
-    query["ds-end"] = str((end_date - anchor_date).days)
+    query["ds-start"] = str((start_date - anchor_date).days + 1)
+    query["ds-end"] = str((end_date - anchor_date).days + 1)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
@@ -1148,15 +1191,33 @@ def build_capture_manifest(
     manual_mfa_required: bool = False,
     manual_mfa_completed: bool = False,
     capture_continued_after_manual_login: bool = False,
+    current_page_url_value: str = "",
+    current_page_title_value: str = "",
+    capture_failure_reason: str = "",
 ) -> dict[str, object]:
     status = status_override or ("captured_all" if len(captured_files) == len(CAPTURE_TARGETS) else ("partial_capture" if captured_files else "capture_failed"))
+    missing_files = [target.filename for target in CAPTURE_TARGETS if target.filename not in captured_files]
+    if not capture_failure_reason and not captured_files:
+        if not performance_page_confirmed:
+            capture_failure_reason = "expected diagnostic content was not detected; Airbnb Performance > Conversion page was not confirmed"
+        elif not report_controls_ready:
+            capture_failure_reason = "expected diagnostic content was not detected; Airbnb diagnostic report controls were not ready"
+        elif skipped_files:
+            capture_failure_reason = "; ".join(str(item.get("reason", "")) for item in skipped_files if item.get("reason"))
+        else:
+            capture_failure_reason = "zero expected Airbnb diagnostic HTML files were saved"
     manifest: dict[str, object] = {
         "run_date": run_date,
         "generated_at": datetime.now(UTC).isoformat(),
         "mode": mode,
         "status": status,
+        "capture_mode": mode,
+        "capture_status": status,
+        "capture_failure_reason": capture_failure_reason,
         "staging_path": str(staging_path),
         "conversion_url": AIRBNB_CONVERSION_URL,
+        "current_page_url": current_page_url_value,
+        "current_page_title": current_page_title_value,
         "reporting_window_start": reporting_window_start.isoformat(),
         "reporting_window_end": reporting_window_end.isoformat(),
         "requested_start_date": reporting_window_start.isoformat(),
@@ -1183,9 +1244,11 @@ def build_capture_manifest(
         "visible_date_text_after_apply": visible_date_text_after_apply,
         "date_query_fallback_url": date_query_fallback_url,
         "expected_files": EXPECTED_FILES,
+        "expected_files_count": len(EXPECTED_FILES),
+        "saved_files_count": len(captured_files),
         "downloaded_files": captured_files,
         "captured_files": captured_files,
-        "missing_files": [target.filename for target in CAPTURE_TARGETS if target.filename not in captured_files],
+        "missing_files": missing_files,
         "skipped_files": skipped_files,
         "capture_results": capture_results or [],
         "promoted_files": [],
@@ -1340,6 +1403,8 @@ def capture_headed(
                 manual_mfa_required,
                 manual_mfa_completed,
                 capture_continued_after_manual_login,
+                current_page_url(page),
+                current_page_title(page),
             )
         if not report_controls_ready:
             status_override = "report_not_ready"
@@ -1398,6 +1463,8 @@ def capture_headed(
                 manual_mfa_required,
                 manual_mfa_completed,
                 capture_continued_after_manual_login,
+                current_page_url(page),
+                current_page_title(page),
             )
         report_controls_ready, report_controls_error = wait_for_report_ready(page)
         for target in CAPTURE_TARGETS:
@@ -1431,7 +1498,7 @@ def capture_headed(
                 "capture_error": "",
             }
             try:
-                metric_selected, metric_select_error = select_airbnb_metric(page, target.metric_link_name, target.expected_metric_text)
+                metric_selected, metric_select_error = select_airbnb_metric(page, target)
                 result["metric_navigation_status"] = "passed" if metric_selected else "failed"
                 date_details = set_airbnb_reporting_window(
                     page,
@@ -1504,14 +1571,19 @@ def capture_headed(
                         ]
                         if part
                     )
+                    content_detected, content_detection_reason = expected_diagnostic_content_detected(page, target)
+                    result["diagnostic_content_detected"] = content_detected
+                    result["diagnostic_content_detection_reason"] = content_detection_reason
                     result["capture_status"] = "skipped_not_ready"
-                    result["assertion_error"] = error
-                    skipped_files.append({"filename": target.filename, "reason": f"skipped_not_ready: {error}"})
+                    result["assertion_error"] = error or content_detection_reason
+                    skipped_files.append({"filename": target.filename, "reason": f"skipped_not_ready: {error or content_detection_reason}"})
                     capture_results.append(result)
                     continue
                 capture_page_html(page, staging_path / target.filename)
                 captured_files.append(target.filename)
                 result["capture_status"] = "captured"
+                result["diagnostic_content_detected"] = True
+                result["diagnostic_content_detection_reason"] = "report readiness assertions passed"
                 capture_results.append(result)
             except Exception as exc:
                 result["capture_error"] = str(exc)
@@ -1556,6 +1628,8 @@ def capture_headed(
         manual_mfa_required,
         manual_mfa_completed,
         capture_continued_after_manual_login,
+        current_page_url(page),
+        current_page_title(page),
     )
 
 
@@ -1607,6 +1681,12 @@ def main() -> int:
         use_persistent_profile=args.use_persistent_profile,
     )
     print(f"Wrote {output}")
+    if args.mode in {"capture-headed", "capture-headed-and-validate"}:
+        manifest = json.loads(output.read_text(encoding="utf-8"))
+        if int(manifest.get("saved_files_count", 0)) == 0:
+            reason = str(manifest.get("capture_failure_reason", "")) or "zero expected Airbnb diagnostic HTML files were saved"
+            print(f"error: Airbnb diagnostic capture saved zero expected HTML files: {reason}", file=sys.stderr)
+            return 1
     return 0
 
 
