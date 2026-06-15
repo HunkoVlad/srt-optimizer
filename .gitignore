@@ -36,6 +36,9 @@ __pycache__/
 # Test cache
 .pytest_cache/
 
+# Maven build outputs
+/target/
+
 # Gmail OAuth credentials
 config/gmail_oauth_client.json
 config/*oauth*.json
