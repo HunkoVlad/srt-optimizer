@@ -4,11 +4,16 @@ import org.testng.annotations.Test;
 public class SampleTestNGTest {
 
     @Test
-    public void shouldAddTwoNumbers() {
-        int actual = add(2, 3);
+    public void shouldSortArrayListInAscendingOrder() {
+        java.util.List<Integer> numbers = new java.util.ArrayList<>();
+        numbers.add(3);
+        numbers.add(1);
+        numbers.add(2);
 
-        Assert.assertEquals(actual, 5, "2 + 3 should equal 5");
-        System.out.println("Test 'shouldAddTwoNumbers' passed");
+        java.util.Collections.sort(numbers);
+
+        Assert.assertEquals(numbers, java.util.List.of(1, 2, 3), "ArrayList should be sorted in ascending order");
+        System.out.println("Test 'shouldSortArrayListInAscendingOrder' passed");
     }
 
     @Test(enabled = false)
