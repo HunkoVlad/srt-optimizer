@@ -46,6 +46,8 @@ END_DATE_INPUT_SELECTOR = "input#endDateString"
 DATE_RANGE_APPLY_SELECTOR = 'button[data-testid="dsDropdownApply"]'
 COMPARE_SELECTOR = 'select[name="chart-compare"][aria-label="Compare"]'
 DATE_INPUT_SETTLE_TIMEOUT_MS = 1500
+DATE_CALENDAR_HIGHLIGHT_TIMEOUT_MS = 2500
+DATE_INPUT_POST_ENTRY_SETTLE_MS = 750
 DATE_APPLY_PRE_CLICK_SETTLE_MS = 500
 DATE_APPLY_POST_CLICK_SETTLE_MS = 1000
 
@@ -175,6 +177,10 @@ def persistent_profile_path() -> Path:
 
 def manifest_path(staging_path: Path, run_date: str) -> Path:
     return staging_path / f"airbnb_download_manifest_{run_date}.json"
+
+
+def capture_manifest_path(staging_path: Path, run_date: str) -> Path:
+    return staging_path / f"airbnb_capture_manifest_{run_date}.json"
 
 
 def build_manifest(run_date: str, mode: str, staging_path: Path) -> dict[str, object]:
@@ -342,6 +348,34 @@ def raw_dir(run_dir: Path) -> Path:
 
 
 def build_promote_manifest(run_date: str, run_dir: Path, staging_path: Path) -> dict[str, object]:
+    prior_capture_path = capture_manifest_path(staging_path, run_date)
+    if prior_capture_path.exists():
+        try:
+            prior_capture_manifest = json.loads(prior_capture_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            prior_capture_manifest = {}
+        if prior_capture_manifest.get("capture_status") == "failed":
+            failure_reason = str(prior_capture_manifest.get("failure_reason", "") or prior_capture_manifest.get("capture_failure_reason", "capture_failed"))
+            return {
+                "run_date": run_date,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "mode": "promote-staged",
+                "status": "skipped_due_to_capture_failure",
+                "promotion_status": "skipped_due_to_capture_failure",
+                "failure_reason": failure_reason,
+                "staging_path": str(staging_path),
+                "capture_manifest_path": str(prior_capture_path),
+                "expected_files": EXPECTED_FILES,
+                "downloaded_files": [],
+                "missing_files": EXPECTED_FILES,
+                "promoted_files": [],
+                "skipped_files": [{"filename": filename, "reason": failure_reason} for filename in EXPECTED_FILES],
+                "notes": [
+                    "Promotion skipped because the capture-stage manifest recorded a failed capture.",
+                    "No files were promoted to raw.",
+                    "Raw promoted files and analysis outputs were not touched.",
+                ],
+            }
     manifest = build_validate_manifest(run_date, staging_path)
     raw_path = raw_dir(run_dir)
     promoted_files: list[str] = []
@@ -541,6 +575,12 @@ def capture_debug_date_flow_screenshot(page, debug_dir: Path | None, filename: s
         return str(path)
     except Exception:
         return ""
+
+
+def write_debug_date_flow_dom(page, debug_dom_path: Path | None, filename: str) -> str:
+    if debug_dom_path is None:
+        return ""
+    return write_date_picker_debug_dom(page, debug_dom_path.parent / filename)
 
 
 def write_date_picker_debug_dom(page, output_path: Path) -> str:
@@ -928,9 +968,116 @@ def wait_for_airbnb_ui_settle(page, milliseconds: int) -> None:
         time.sleep(milliseconds / 1000)
 
 
+def calendar_date_is_highlighted(page, target_date: date) -> bool:
+    month_year = target_date.strftime("%B %Y")
+    try:
+        return bool(
+            page.evaluate(
+                """({ day, monthYear }) => {
+                    const visible = (element) => {
+                        const style = window.getComputedStyle(element);
+                        const rect = element.getBoundingClientRect();
+                        return style.visibility !== "hidden"
+                            && style.display !== "none"
+                            && rect.width > 0
+                            && rect.height > 0;
+                    };
+                    const selectedByStyle = (element) => {
+                        const style = window.getComputedStyle(element);
+                        const text = `${style.backgroundColor} ${style.color}`.toLowerCase();
+                        return text.includes("rgb(34, 34, 34)")
+                            || text.includes("rgb(0, 0, 0)")
+                            || text.includes("rgb(255, 255, 255)");
+                    };
+                    const bodyText = document.body.textContent || "";
+                    const candidates = Array.from(document.querySelectorAll("button, [role='button'], [aria-label], [data-testid]"))
+                        .filter((element) => visible(element))
+                        .filter((element) => (element.textContent || "").trim() === String(day));
+                    for (const element of candidates) {
+                        const selectedText = [
+                            element.getAttribute("aria-pressed"),
+                            element.getAttribute("aria-selected"),
+                            element.getAttribute("aria-current"),
+                            element.getAttribute("data-state"),
+                            element.getAttribute("class"),
+                            element.getAttribute("aria-label"),
+                            element.parentElement ? element.parentElement.getAttribute("class") : "",
+                        ].join(" ").toLowerCase();
+                        if (!bodyText.includes(monthYear)) {
+                            continue;
+                        }
+                        if (
+                            selectedText.includes("true")
+                            || selectedText.includes("selected")
+                            || selectedText.includes("active")
+                            || selectedByStyle(element)
+                        ) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }""",
+                {"day": target_date.day, "monthYear": month_year},
+            )
+        )
+    except Exception:
+        return True
+
+
+def wait_for_calendar_date_highlighted(page, target_date: date, timeout_ms: int = DATE_CALENDAR_HIGHLIGHT_TIMEOUT_MS) -> bool:
+    deadline = datetime.now(UTC) + timedelta(milliseconds=timeout_ms)
+    while datetime.now(UTC) <= deadline:
+        if calendar_date_is_highlighted(page, target_date):
+            return True
+        wait_for_airbnb_ui_settle(page, 100)
+    return calendar_date_is_highlighted(page, target_date)
+
+
+def calendar_month_is_visible(page, target_date: date) -> bool:
+    month_year = target_date.strftime("%B %Y")
+    try:
+        return bool(page.evaluate("(monthYear) => (document.body.textContent || '').includes(monthYear)", month_year))
+    except Exception:
+        return True
+
+
+def calendar_date_highlight_status(page, target_date: date) -> str:
+    if not calendar_month_is_visible(page, target_date):
+        return "not_visible"
+    return "passed" if wait_for_calendar_date_highlighted(page, target_date) else "failed"
+
+
+def wait_for_airbnb_date_apply_enabled(page, timeout_ms: int = 5000) -> bool:
+    apply_button = page.locator(DATE_RANGE_APPLY_SELECTOR).first
+    deadline = datetime.now(UTC) + timedelta(milliseconds=timeout_ms)
+    while datetime.now(UTC) <= deadline:
+        try:
+            apply_button.wait_for(state="visible", timeout=1000)
+            if bool(
+                apply_button.evaluate(
+                    """(element) => {
+                        return !element.disabled
+                            && element.getAttribute("aria-disabled") !== "true"
+                            && element.getAttribute("data-disabled") !== "true";
+                    }"""
+                )
+            ):
+                return True
+        except Exception:
+            try:
+                apply_button.click(timeout=1000, trial=True)
+                return True
+            except Exception:
+                pass
+        wait_for_airbnb_ui_settle(page, 100)
+    return False
+
+
 def click_airbnb_date_apply(page) -> None:
     apply_button = page.locator(DATE_RANGE_APPLY_SELECTOR).first
     apply_button.wait_for(state="visible", timeout=5000)
+    if not wait_for_airbnb_date_apply_enabled(page):
+        raise RuntimeError("Airbnb date Apply button did not become enabled")
     wait_for_airbnb_ui_settle(page, DATE_APPLY_PRE_CLICK_SETTLE_MS)
     try:
         apply_button.click(timeout=5000, trial=True)
@@ -986,11 +1133,38 @@ def set_masked_date_input(locator, value: str) -> tuple[bool, str, str]:
     return False, "failed", read_input_value(locator)
 
 
+def airbnb_date_inputs_visible(page, timeout_ms: int = 500) -> bool:
+    try:
+        page.get_by_role("textbox", name="START DATE").wait_for(state="visible", timeout=timeout_ms)
+        page.get_by_role("textbox", name="END DATE").wait_for(state="visible", timeout=timeout_ms)
+        return True
+    except Exception:
+        return False
+
+
 def open_airbnb_date_selector(page) -> None:
+    if airbnb_date_inputs_visible(page):
+        return
     try:
         page.locator(DATE_RANGE_SELECTOR).click(timeout=3000)
     except Exception:
         page.get_by_role("button", name=re.compile("Filters applied")).click(timeout=3000)
+    if not airbnb_date_inputs_visible(page, timeout_ms=3000):
+        raise RuntimeError("Airbnb date picker did not open with visible START DATE and END DATE inputs")
+
+
+def reset_airbnb_date_picker_before_retry(page) -> None:
+    try:
+        page.reload(timeout=10000)
+        wait_for_page_idle(page)
+        return
+    except Exception:
+        pass
+    try:
+        safe_goto(page, current_page_url(page))
+        wait_for_page_idle(page)
+    except Exception:
+        pass
 
 
 def airbnb_date_query_url(current_url: str, start_date: date, end_date: date, anchor_date: date) -> str:
@@ -1022,11 +1196,13 @@ def set_airbnb_reporting_window(
     anchor_date: date,
     debug_dom_path: Path | None = None,
     debug_screenshot_dir: Path | None = None,
-    max_attempts: int = 2,
+    max_attempts: int = 3,
     attempt: int = 1,
     retry_date_fields: set[str] | None = None,
+    attempt_results: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     date_fields_to_set = retry_date_fields or {"start", "end"}
+    attempt_results = attempt_results or []
     details: dict[str, object] = {
         "date_range_automation_status": "failed",
         "date_range_automation_error": "",
@@ -1042,6 +1218,8 @@ def set_airbnb_reporting_window(
         "end_input_value_after_set": "",
         "start_input_value_after": "",
         "end_input_value_after": "",
+        "start_calendar_highlight_status": "not_checked",
+        "end_calendar_highlight_status": "not_checked",
         "apply_clicked": False,
         "date_picker_apply_clicked": False,
         "selected_date_control_text_before_apply": "",
@@ -1052,6 +1230,7 @@ def set_airbnb_reporting_window(
         "visible_date_text_after_apply": "",
         "date_query_fallback_url": "",
         "debug_date_flow_screenshots": [],
+        "date_range_attempt_results": attempt_results,
     }
     screenshots: list[str] = []
     start_value = format_airbnb_date_input(start_date)
@@ -1075,21 +1254,70 @@ def set_airbnb_reporting_window(
         details["end_input_value_before"] = read_input_value(end_locator)
         if "start" in date_fields_to_set:
             start_ok, start_strategy, start_after = set_masked_date_input(start_locator, start_value)
+            if start_ok:
+                wait_for_airbnb_ui_settle(page, DATE_INPUT_POST_ENTRY_SETTLE_MS)
+                details["start_calendar_highlight_status"] = calendar_date_highlight_status(page, start_date)
         else:
             start_ok, start_strategy, start_after = True, "skipped", read_input_value(start_locator)
+            details["start_calendar_highlight_status"] = "skipped"
         screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "03_after_start_date_set.png"))
+        write_debug_date_flow_dom(page, debug_dom_path, "03_after_start_date_set.html")
         if "end" in date_fields_to_set:
             end_ok, end_strategy, end_after = set_masked_date_input(end_locator, end_value)
+            if end_ok:
+                wait_for_airbnb_ui_settle(page, DATE_INPUT_POST_ENTRY_SETTLE_MS)
+                details["end_calendar_highlight_status"] = calendar_date_highlight_status(page, end_date)
         else:
             end_ok, end_strategy, end_after = True, "skipped", read_input_value(end_locator)
+            details["end_calendar_highlight_status"] = "skipped"
         screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "04_after_end_date_set.png"))
+        write_debug_date_flow_dom(page, debug_dom_path, "04_after_end_date_set.html")
+        if debug_screenshot_dir is not None and attempt == 1:
+            print("Debug pause after entering Airbnb date inputs. Inspect the filled dates, then resume to click Apply.")
+            page.pause()
         details["start_input_value_after_set"] = start_after
         details["end_input_value_after_set"] = end_after
         details["start_input_value_after"] = start_after
         details["end_input_value_after"] = end_after
         details["date_input_strategy_used"] = start_strategy if start_strategy == end_strategy else f"{start_strategy}+{end_strategy}"
         if not start_ok or not end_ok:
-            details["date_range_automation_error"] = f"date inputs not confirmed: start={start_after!r}, end={end_after!r}"
+            input_error = (
+                f"date inputs/highlights not confirmed: start={start_after!r} "
+                f"({details['start_calendar_highlight_status']}), end={end_after!r} "
+                f"({details['end_calendar_highlight_status']})"
+            )
+            attempt_result = {
+                "attempt": attempt,
+                "date_fields_attempted": details["date_fields_attempted"],
+                "selected_date_control_text": details["selected_date_control_text"],
+                "visible_date_text_after_apply": details["visible_date_text_after_apply"],
+                "date_range_match": False,
+                "error": input_error,
+            }
+            attempt_results.append(attempt_result)
+            details["date_range_attempt_results"] = attempt_results
+            if attempt < max_attempts:
+                next_retry_fields: set[str] = set()
+                if not start_ok or details["start_calendar_highlight_status"] == "failed":
+                    next_retry_fields.add("start")
+                if not end_ok or details["end_calendar_highlight_status"] == "failed":
+                    next_retry_fields.add("end")
+                reset_airbnb_date_picker_before_retry(page)
+                retry_details = set_airbnb_reporting_window(
+                    page,
+                    start_date,
+                    end_date,
+                    anchor_date,
+                    debug_dom_path,
+                    debug_screenshot_dir,
+                    max_attempts=max_attempts,
+                    attempt=attempt + 1,
+                    retry_date_fields=next_retry_fields or {"start", "end"},
+                    attempt_results=attempt_results,
+                )
+                retry_details["date_range_previous_attempt_error"] = input_error
+                return retry_details
+            details["date_range_automation_error"] = input_error
             details["debug_date_flow_screenshots"] = [path for path in screenshots if path]
             return details
         details["selected_date_control_text_before_apply"] = selected_date_control_text(page)
@@ -1102,7 +1330,34 @@ def set_airbnb_reporting_window(
         details["current_url_after_apply"] = current_page_url(page)
         screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "06_after_apply.png"))
     except Exception as exc:
-        details["date_range_automation_error"] = str(exc)
+        error = str(exc)
+        attempt_result = {
+            "attempt": attempt,
+            "date_fields_attempted": details["date_fields_attempted"],
+            "selected_date_control_text": details["selected_date_control_text"],
+            "visible_date_text_after_apply": details["visible_date_text_after_apply"],
+            "date_range_match": False,
+            "error": error,
+        }
+        attempt_results.append(attempt_result)
+        details["date_range_attempt_results"] = attempt_results
+        if attempt < max_attempts:
+            reset_airbnb_date_picker_before_retry(page)
+            retry_details = set_airbnb_reporting_window(
+                page,
+                start_date,
+                end_date,
+                anchor_date,
+                debug_dom_path,
+                debug_screenshot_dir,
+                max_attempts=max_attempts,
+                attempt=attempt + 1,
+                retry_date_fields=retry_date_fields or {"start", "end"},
+                attempt_results=attempt_results,
+            )
+            retry_details["date_range_previous_attempt_error"] = error
+            return retry_details
+        details["date_range_automation_error"] = error
         details["debug_date_flow_screenshots"] = [path for path in screenshots if path]
         return details
     details["selected_date_control_text"] = selected_date_control_text(page)
@@ -1110,6 +1365,16 @@ def set_airbnb_reporting_window(
     details["visible_date_text_after_apply"] = date_selector_visible_text(page)
     screenshots.append(capture_debug_date_flow_screenshot(page, debug_screenshot_dir, "07_selected_date_chip.png"))
     date_asserted, _date_status, date_error = assert_airbnb_date_range_applied(page, start_date, end_date)
+    attempt_result = {
+        "attempt": attempt,
+        "date_fields_attempted": details["date_fields_attempted"],
+        "selected_date_control_text": details["selected_date_control_text"],
+        "visible_date_text_after_apply": details["visible_date_text_after_apply"],
+        "date_range_match": date_asserted,
+        "error": "" if date_asserted else date_error,
+    }
+    attempt_results.append(attempt_result)
+    details["date_range_attempt_results"] = attempt_results
     if date_asserted:
         details["date_range_automation_status"] = "applied"
         details["debug_date_flow_screenshots"] = [path for path in screenshots if path]
@@ -1123,6 +1388,7 @@ def set_airbnb_reporting_window(
             next_retry_fields.add("end")
         if not next_retry_fields:
             next_retry_fields = {"start", "end"}
+        reset_airbnb_date_picker_before_retry(page)
         retry_details = set_airbnb_reporting_window(
             page,
             start_date,
@@ -1133,29 +1399,29 @@ def set_airbnb_reporting_window(
             max_attempts=max_attempts,
             attempt=attempt + 1,
             retry_date_fields=next_retry_fields,
+            attempt_results=attempt_results,
         )
         retry_details["date_range_previous_attempt_error"] = date_error
         return retry_details
-    fallback_url = airbnb_date_query_url(current_page_url(page), start_date, end_date, anchor_date)
-    details["date_query_fallback_url"] = fallback_url
-    fallback_ok, fallback_error = apply_airbnb_date_query_fallback(page, start_date, end_date, anchor_date)
-    details["selected_date_control_text"] = selected_date_control_text(page)
-    details["selected_date_control_text_after_apply"] = str(details["selected_date_control_text"])
-    details["visible_date_text_after_apply"] = date_selector_visible_text(page)
-    if fallback_ok:
-        details["date_range_automation_status"] = "applied_url_query"
-        details["date_range_automation_error"] = ""
-        details["debug_date_flow_screenshots"] = [path for path in screenshots if path]
-        return details
     details["date_range_automation_status"] = "failed"
-    details["date_range_automation_error"] = f"{date_error}; URL query fallback failed: {fallback_error}"
+    details["date_range_automation_error"] = date_error
     details["debug_date_flow_screenshots"] = [path for path in screenshots if path]
+    details["date_range_attempt_results"] = attempt_results
     return details
 
 
 def select_compare_mode(page, compare_value: str) -> None:
     page.locator(COMPARE_SELECTOR).select_option(compare_value, timeout=5000)
     wait_for_page_idle(page)
+
+
+def applied_date_range_values(selected_text: str, start_date: date, end_date: date) -> tuple[str, str, bool]:
+    start_present, end_present = date_range_presence_in_text(selected_text, start_date, end_date)
+    return (
+        start_date.isoformat() if start_present else "",
+        end_date.isoformat() if end_present else "",
+        start_present and end_present,
+    )
 
 
 def build_capture_manifest(
@@ -1196,6 +1462,7 @@ def build_capture_manifest(
     capture_failure_reason: str = "",
 ) -> dict[str, object]:
     status = status_override or ("captured_all" if len(captured_files) == len(CAPTURE_TARGETS) else ("partial_capture" if captured_files else "capture_failed"))
+    public_capture_status = "completed" if status in {"captured_all", "partial_capture"} else "failed"
     missing_files = [target.filename for target in CAPTURE_TARGETS if target.filename not in captured_files]
     if not capture_failure_reason and not captured_files:
         if not performance_page_confirmed:
@@ -1206,14 +1473,19 @@ def build_capture_manifest(
             capture_failure_reason = "; ".join(str(item.get("reason", "")) for item in skipped_files if item.get("reason"))
         else:
             capture_failure_reason = "zero expected Airbnb diagnostic HTML files were saved"
+    failure_reason = capture_failure_reason
+    if capture_failure_reason == "date_range_not_able_to_set_up":
+        failure_reason = "date_range_not_able_to_set_up"
+    applied_start, applied_end, date_range_match = applied_date_range_values(selected_date_control_text, reporting_window_start, reporting_window_end)
     manifest: dict[str, object] = {
         "run_date": run_date,
         "generated_at": datetime.now(UTC).isoformat(),
         "mode": mode,
         "status": status,
         "capture_mode": mode,
-        "capture_status": status,
+        "capture_status": public_capture_status,
         "capture_failure_reason": capture_failure_reason,
+        "failure_reason": failure_reason,
         "staging_path": str(staging_path),
         "conversion_url": AIRBNB_CONVERSION_URL,
         "current_page_url": current_page_url_value,
@@ -1222,6 +1494,13 @@ def build_capture_manifest(
         "reporting_window_end": reporting_window_end.isoformat(),
         "requested_start_date": reporting_window_start.isoformat(),
         "requested_end_date": reporting_window_end.isoformat(),
+        "expected_date_range_start": reporting_window_start.isoformat(),
+        "expected_date_range_end": reporting_window_end.isoformat(),
+        "attempted_date_range_start": reporting_window_start.isoformat(),
+        "attempted_date_range_end": reporting_window_end.isoformat(),
+        "applied_date_range_start": applied_start,
+        "applied_date_range_end": applied_end,
+        "date_range_match": date_range_match,
         "requested_start_date_input": format_airbnb_date_input(reporting_window_start),
         "requested_end_date_input": format_airbnb_date_input(reporting_window_end),
         "navigation_status": navigation_status,
@@ -1243,9 +1522,12 @@ def build_capture_manifest(
         "selected_date_control_text": selected_date_control_text,
         "visible_date_text_after_apply": visible_date_text_after_apply,
         "date_query_fallback_url": date_query_fallback_url,
+        "date_range_attempts": (debug_date_flow_fields or {}).get("date_range_attempt", 0),
+        "date_range_attempt_results": (debug_date_flow_fields or {}).get("date_range_attempt_results", []),
         "expected_files": EXPECTED_FILES,
         "expected_files_count": len(EXPECTED_FILES),
         "saved_files_count": len(captured_files),
+        "saved_files": captured_files,
         "downloaded_files": captured_files,
         "captured_files": captured_files,
         "missing_files": missing_files,
@@ -1485,6 +1767,8 @@ def capture_headed(
                     "date_range_max_attempts": 0,
                     "date_fields_attempted": "",
                     "date_input_strategy_used": "",
+                "start_calendar_highlight_status": "not_checked",
+                "end_calendar_highlight_status": "not_checked",
                 "start_input_value_after_set": "",
                 "end_input_value_after_set": "",
                 "apply_clicked": False,
@@ -1513,6 +1797,8 @@ def capture_headed(
                     "end_input_value_before": date_details.get("end_input_value_before", ""),
                     "start_input_value_after": date_details.get("start_input_value_after", ""),
                     "end_input_value_after": date_details.get("end_input_value_after", ""),
+                    "start_calendar_highlight_status": date_details.get("start_calendar_highlight_status", ""),
+                    "end_calendar_highlight_status": date_details.get("end_calendar_highlight_status", ""),
                     "selected_date_control_text_before_apply": date_details.get("selected_date_control_text_before_apply", ""),
                     "selected_date_control_text_after_apply": date_details.get("selected_date_control_text_after_apply", ""),
                     "current_url_before_apply": date_details.get("current_url_before_apply", ""),
@@ -1523,6 +1809,7 @@ def capture_headed(
                     "debug_date_flow_screenshots": date_details.get("debug_date_flow_screenshots", []),
                     "date_range_attempt": date_details.get("date_range_attempt", 0),
                     "date_range_max_attempts": date_details.get("date_range_max_attempts", 0),
+                    "date_range_attempt_results": date_details.get("date_range_attempt_results", []),
                     "date_fields_attempted": date_details.get("date_fields_attempted", ""),
                     "date_range_previous_attempt_error": date_details.get("date_range_previous_attempt_error", ""),
                 }
@@ -1538,23 +1825,92 @@ def capture_headed(
                 result["date_range_automation_status"] = date_range_automation_status
                 result["date_range_attempt"] = date_details.get("date_range_attempt", 0)
                 result["date_range_max_attempts"] = date_details.get("date_range_max_attempts", 0)
+                result["date_range_attempt_results"] = date_details.get("date_range_attempt_results", [])
                 result["date_fields_attempted"] = date_details.get("date_fields_attempted", "")
                 result["date_range_previous_attempt_error"] = date_details.get("date_range_previous_attempt_error", "")
                 result["date_input_strategy_used"] = date_input_strategy_used
+                result["start_calendar_highlight_status"] = date_details.get("start_calendar_highlight_status", "")
+                result["end_calendar_highlight_status"] = date_details.get("end_calendar_highlight_status", "")
                 result["start_input_value_after_set"] = start_input_value_after_set
                 result["end_input_value_after_set"] = end_input_value_after_set
                 result["apply_clicked"] = apply_clicked
                 result["selected_date_control_text"] = selected_date_control_text_value
                 result["visible_date_text_after_apply"] = visible_date_text_after_apply
                 result["date_query_fallback_url"] = date_query_fallback_url
-                if date_range_automation_status != "applied" and date_range_automation_status != "applied_url_query":
+                if date_range_automation_status != "applied":
                     result["date_range_assertion_status"] = "failed_visible_range_mismatch" if apply_clicked else "failed"
                     result["capture_status"] = "skipped_not_ready"
                     result["assertion_error"] = date_range_automation_error
                     result["final_url"] = current_page_url(page)
                     skipped_files.append({"filename": target.filename, "reason": f"date_range_not_applied: {date_range_automation_error}"})
                     capture_results.append(result)
-                    continue
+                    remaining_targets = [
+                        remaining
+                        for remaining in CAPTURE_TARGETS
+                        if remaining.filename != target.filename and remaining.filename not in captured_files
+                    ]
+                    skipped_files.extend(
+                        {"filename": remaining.filename, "reason": "date_range_not_able_to_set_up"}
+                        for remaining in remaining_targets
+                    )
+                    capture_results.extend(
+                        {
+                            "filename": remaining.filename,
+                            "metric_name": remaining.metric_name,
+                            "metric_link_name": remaining.metric_link_name,
+                            "expected_metric_text": remaining.expected_metric_text,
+                            "compare_value": remaining.compare_value,
+                            "requested_start_date": reporting_window_start.isoformat(),
+                            "requested_end_date": reporting_window_end.isoformat(),
+                            "metric_navigation_status": "not_checked",
+                            "metric_assertion_status": "not_checked",
+                            "date_range_assertion_status": "failed_visible_range_mismatch",
+                            "compare_assertion_status": "not_checked",
+                            "capture_status": "skipped_not_ready",
+                            "report_ready_before_capture": False,
+                            "final_url": current_page_url(page),
+                            "assertion_error": "date_range_not_able_to_set_up",
+                            "capture_error": "",
+                        }
+                        for remaining in remaining_targets
+                    )
+                    return build_capture_manifest(
+                        run_date,
+                        mode,
+                        staging_path,
+                        captured_files,
+                        skipped_files,
+                        reporting_window_start,
+                        reporting_window_end,
+                        date_range_automation_status,
+                        date_range_automation_error,
+                        date_input_strategy_used,
+                        start_input_value_after_set,
+                        end_input_value_after_set,
+                        apply_clicked,
+                        selected_date_control_text_value,
+                        visible_date_text_after_apply,
+                        date_query_fallback_url,
+                        debug_date_flow,
+                        str(debug_dir) if debug_dir else "",
+                        debug_fields,
+                        report_controls_ready,
+                        capture_results,
+                        navigation_status,
+                        navigation_error,
+                        performance_page_confirmed,
+                        "capture_failed",
+                        None,
+                        use_persistent_profile,
+                        str(profile_path or "") if use_persistent_profile else "",
+                        login_status,
+                        manual_mfa_required,
+                        manual_mfa_completed,
+                        capture_continued_after_manual_login,
+                        current_page_url(page),
+                        current_page_title(page),
+                        "date_range_not_able_to_set_up",
+                    )
                 compare_selected, compare_select_error = select_airbnb_compare_mode(page, target.compare_value)
                 ready_result = assert_airbnb_capture_ready(page, target, reporting_window_start, reporting_window_end)
                 result.update(ready_result)
@@ -1668,6 +2024,8 @@ def run(
     else:
         manifest = build_manifest(run_date, mode, resolved_staging_dir)
     write_manifest(manifest, resolved_manifest_path)
+    if mode in {"capture-headed", "capture-headed-and-validate"}:
+        write_manifest(manifest, capture_manifest_path(resolved_staging_dir, run_date))
     return resolved_manifest_path
 
 
@@ -1683,6 +2041,16 @@ def main() -> int:
     print(f"Wrote {output}")
     if args.mode in {"capture-headed", "capture-headed-and-validate"}:
         manifest = json.loads(output.read_text(encoding="utf-8"))
+        print("Airbnb date range setup: started")
+        attempts = manifest.get("date_range_attempt_results", [])
+        if isinstance(attempts, list):
+            total = len(attempts) or int(manifest.get("date_range_attempts", 0) or 0)
+            for item in attempts:
+                if isinstance(item, dict):
+                    print(f"Airbnb date range setup: attempt {item.get('attempt', '?')}/{total or '?'}")
+        print(f"Airbnb date range setup: {'matched' if manifest.get('date_range_match') else 'failed'}")
+        if manifest.get("failure_reason") == "date_range_not_able_to_set_up":
+            print("Airbnb capture: skipped due to date_range_not_able_to_set_up")
         if int(manifest.get("saved_files_count", 0)) == 0:
             reason = str(manifest.get("capture_failure_reason", "")) or "zero expected Airbnb diagnostic HTML files were saved"
             print(f"error: Airbnb diagnostic capture saved zero expected HTML files: {reason}", file=sys.stderr)

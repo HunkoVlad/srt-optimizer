@@ -1,7 +1,9 @@
 import csv
+import json
 import sys
+from pathlib import Path
 
-from pricelabs.transform.email_revenue_report import build_markdown, run
+from pricelabs.transform.email_revenue_report import airbnb_summary_status, build_markdown, run
 
 
 def rolling_row(
@@ -621,10 +623,17 @@ def test_airbnb_funnel_week_over_week_section_uses_history_comparison() -> None:
 
 
 def test_airbnb_funnel_week_over_week_unavailable_does_not_fail_report() -> None:
-    markdown = build_markdown("2026-05-08", sample_rows(), airbnb_summary_rows=[airbnb_summary_row()])
+    history_path = Path("data/runs/2026-05-08/analysis/airbnb_weekly_history_comparison_2026-05-08.csv")
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        airbnb_summary_rows=[airbnb_summary_row()],
+        airbnb_weekly_history_path=history_path,
+    )
     section = markdown.split("## Airbnb Funnel Week-over-Week", 1)[1].split("## Open Diagnostic Issues", 1)[0]
 
     assert "Airbnb funnel week-over-week comparison unavailable for this run." in section
+    assert f"Expected Airbnb weekly history file: {history_path}." in section
 
 
 def test_airbnb_funnel_section_handles_missing_summary() -> None:
@@ -638,6 +647,103 @@ def test_airbnb_funnel_section_handles_missing_summary() -> None:
     assert "airbnb.run_diagnostics --run-date <run_date>" in section
     assert "Airbnb funnel signals are diagnostic only." in section
     assert "- 2026-06: Monitor" in markdown
+
+
+def test_airbnb_funnel_section_shows_exact_missing_paths() -> None:
+    summary_path = Path("data/runs/2026-05-08/analysis/airbnb_weekly_conversion_summary_2026-05-08.csv")
+    history_path = Path("data/runs/2026-05-08/analysis/airbnb_weekly_history_comparison_2026-05-08.csv")
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        airbnb_summary_rows=[],
+        airbnb_summary_diagnostics={"status": "missing_file", "path": str(summary_path), "missing_columns": []},
+        airbnb_weekly_history_path=history_path,
+    )
+    section = markdown.split("## Airbnb Funnel Signals", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Reason: missing_file." in section
+    assert f"Expected Airbnb summary file: {summary_path}." in section
+    assert f"Expected Airbnb weekly history file: {history_path}." in section
+    assert "Missing Airbnb summary columns:" not in section
+
+
+def test_airbnb_summary_status_missing_file_does_not_report_missing_columns(tmp_path: Path) -> None:
+    path = tmp_path / "airbnb_weekly_conversion_summary_2026-05-08.csv"
+
+    rows, diagnostics = airbnb_summary_status(path)
+
+    assert rows == []
+    assert diagnostics["status"] == "missing_file"
+    assert diagnostics["missing_columns"] == []
+
+
+def test_airbnb_funnel_section_shows_date_range_root_cause(tmp_path: Path) -> None:
+    run_date = "2026-05-08"
+    run_dir = tmp_path / "data" / "runs" / run_date
+    capture_dir = run_dir / "downloads_staging" / "airbnb"
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    (capture_dir / f"airbnb_capture_manifest_{run_date}.json").write_text(
+        json.dumps(
+            {
+                "run_date": run_date,
+                "capture_status": "failed",
+                "failure_reason": "date_range_not_able_to_set_up",
+                "expected_date_range_start": "2026-04-26",
+                "expected_date_range_end": "2026-05-03",
+                "applied_date_range_start": "2026-04-25",
+                "applied_date_range_end": "2026-05-25",
+                "date_range_attempts": 3,
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary_path = run_dir / "analysis" / f"airbnb_weekly_conversion_summary_{run_date}.csv"
+    history_path = run_dir / "analysis" / f"airbnb_weekly_history_comparison_{run_date}.csv"
+
+    rows, diagnostics = airbnb_summary_status(summary_path)
+    markdown = build_markdown(
+        run_date,
+        sample_rows(),
+        airbnb_summary_rows=rows,
+        airbnb_summary_diagnostics=diagnostics,
+        airbnb_weekly_history_path=history_path,
+    )
+    section = markdown.split("## Airbnb Diagnostics Root Cause", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "- Status: unavailable" in section
+    assert "- Root cause: date_range_not_able_to_set_up" in section
+    assert "- Expected date range: 2026-04-26 to 2026-05-03" in section
+    assert "- Applied date range: 2026-04-25 to 2026-05-25" in section
+    assert "- Attempts: 3" in section
+    assert "Missing Airbnb summary columns:" not in section
+
+
+def test_airbnb_funnel_section_shows_missing_summary_columns() -> None:
+    markdown = build_markdown(
+        "2026-05-08",
+        sample_rows(),
+        airbnb_summary_rows=[],
+        airbnb_summary_diagnostics={
+            "status": "missing_columns",
+            "path": "data/runs/2026-05-08/analysis/airbnb_weekly_conversion_summary_2026-05-08.csv",
+            "missing_columns": ["first_page_search_impressions", "search_to_listing_conversion_rate"],
+        },
+    )
+    section = markdown.split("## Airbnb Funnel Signals", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Reason: missing_columns." in section
+    assert "Missing Airbnb summary columns: first_page_search_impressions, search_to_listing_conversion_rate." in section
+
+
+def test_airbnb_summary_status_detects_incomplete_schema(tmp_path: Path) -> None:
+    path = tmp_path / "airbnb_weekly_conversion_summary_2026-05-08.csv"
+    path.write_text("run_date,page_views\n2026-05-08,335\n", encoding="utf-8")
+
+    rows, diagnostics = airbnb_summary_status(path)
+
+    assert rows == []
+    assert diagnostics["status"] == "missing_columns"
+    assert "first_page_search_impressions" in diagnostics["missing_columns"]
 
 
 def test_airbnb_funnel_section_does_not_change_recommendation_logic() -> None:

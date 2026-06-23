@@ -1,4 +1,5 @@
 import csv
+import json
 from pathlib import Path
 
 from airbnb import parse_conversion_html, run_diagnostics
@@ -117,6 +118,35 @@ def test_missing_airbnb_raw_inputs_do_not_crash_optional_diagnostics(tmp_path: P
     assert outputs == []
     assert not (run_dir / "analysis").exists()
     assert not (run_dir / "raw").exists()
+
+
+def test_failed_capture_manifest_skips_airbnb_diagnostics_with_date_range_reason(tmp_path: Path) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    staging_dir = run_dir / "downloads_staging" / "airbnb"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    capture_manifest = {
+        "run_date": RUN_DATE,
+        "capture_status": "failed",
+        "failure_reason": "date_range_not_able_to_set_up",
+        "expected_date_range_start": "2026-05-10",
+        "expected_date_range_end": "2026-05-17",
+        "applied_date_range_start": "",
+        "applied_date_range_end": "",
+        "date_range_attempts": 3,
+    }
+    (staging_dir / f"airbnb_capture_manifest_{RUN_DATE}.json").write_text(json.dumps(capture_manifest), encoding="utf-8")
+    write_daily_raw_html(run_dir)
+
+    outputs = run_diagnostics.run(RUN_DATE, run_dir=run_dir)
+
+    status_path = run_dir / "analysis" / f"airbnb_diagnostics_status_{RUN_DATE}.json"
+    assert outputs == [status_path]
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["status"] == "skipped"
+    assert status["failure_reason"] == "date_range_not_able_to_set_up"
+    assert status["expected_date_range_start"] == "2026-05-10"
+    assert status["date_range_attempts"] == 3
+    assert not (run_dir / "raw" / f"airbnb_daily_conversion_parsed_{RUN_DATE}.csv").exists()
 
 
 def test_existing_parsed_csv_runs_downstream_without_raw_html(tmp_path: Path) -> None:

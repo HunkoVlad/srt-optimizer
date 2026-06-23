@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from pathlib import Path
+import re
 import sys
 
 from analysis.listing_competitor_review import build_competitor_calendar_context
@@ -262,6 +264,67 @@ def read_airbnb_summary_rows(path: Path) -> list[dict[str, str]]:
         return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
 
 
+def read_csv_rows_and_columns(path: Path) -> tuple[list[dict[str, str]], list[str]]:
+    if not path.exists():
+        return [], []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        reader = csv.DictReader(csv_file)
+        rows = [{key: value or "" for key, value in row.items()} for row in reader]
+        return rows, list(reader.fieldnames or [])
+
+
+def airbnb_summary_status(path: Path) -> tuple[list[dict[str, str]], dict[str, object]]:
+    if not path.exists():
+        rows: list[dict[str, str]] = []
+        missing_columns: list[str] = []
+        status = "missing_file"
+    else:
+        rows, columns = read_csv_rows_and_columns(path)
+        missing_columns = [column for column in AIRBNB_REQUIRED_SUMMARY_COLUMNS if column not in columns]
+        if missing_columns:
+            status = "missing_columns"
+        elif not rows:
+            status = "empty_file"
+        else:
+            status = "available"
+    diagnostics: dict[str, object] = {
+        "status": status,
+        "path": str(path),
+        "missing_columns": missing_columns,
+        "row_count": len(rows),
+    }
+    if status == "missing_file":
+        diagnostics.update(airbnb_capture_failure_context(path))
+    return rows if status == "available" else [], diagnostics
+
+
+def airbnb_capture_failure_context(summary_path: Path) -> dict[str, object]:
+    match = re.search(r"airbnb_weekly_conversion_summary_(\d{4}-\d{2}-\d{2})\.csv$", summary_path.name)
+    if not match:
+        return {}
+    run_date = match.group(1)
+    run_dir = summary_path.parent.parent
+    capture_path = run_dir / "downloads_staging" / "airbnb" / f"airbnb_capture_manifest_{run_date}.json"
+    if not capture_path.exists():
+        return {}
+    try:
+        manifest = json.loads(capture_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if manifest.get("failure_reason") != "date_range_not_able_to_set_up":
+        return {}
+    return {
+        "status": "capture_failed",
+        "root_cause": "date_range_not_able_to_set_up",
+        "capture_manifest_path": str(capture_path),
+        "expected_date_range_start": manifest.get("expected_date_range_start", ""),
+        "expected_date_range_end": manifest.get("expected_date_range_end", ""),
+        "applied_date_range_start": manifest.get("applied_date_range_start", ""),
+        "applied_date_range_end": manifest.get("applied_date_range_end", ""),
+        "date_range_attempts": manifest.get("date_range_attempts", ""),
+    }
+
+
 def read_airbnb_weekly_history_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
@@ -472,6 +535,12 @@ AIRBNB_FUNNEL_SIGNALS = (
     ("listing_to_booking_conversion_rate", "Listing-to-booking conversion rate", "rate"),
 )
 
+AIRBNB_REQUIRED_SUMMARY_COLUMNS = (
+    "metric_window_start",
+    "metric_window_end",
+    *(key for key, _label, _metric_type in AIRBNB_FUNNEL_SIGNALS),
+)
+
 
 def signed_number(value: str, *, decimals: int | None = None) -> str:
     if value == "":
@@ -501,10 +570,13 @@ def airbnb_wow_value(metric_name: str, value: str, metric_type: str) -> str:
     return str(int(number)) if number.is_integer() else f"{number:g}"
 
 
-def airbnb_funnel_wow_section(history_rows: list[dict[str, str]] | None) -> list[str]:
+def airbnb_funnel_wow_section(history_rows: list[dict[str, str]] | None, *, history_path: Path | None = None) -> list[str]:
     lines = ["## Airbnb Funnel Week-over-Week", ""]
     if not history_rows:
-        lines.extend(["- Airbnb funnel week-over-week comparison unavailable for this run.", ""])
+        lines.append("- Airbnb funnel week-over-week comparison unavailable for this run.")
+        if history_path is not None:
+            lines.append(f"- Expected Airbnb weekly history file: {history_path}.")
+        lines.append("")
         return lines
 
     rows_by_metric = {row.get("metric_name", ""): row for row in history_rows}
@@ -604,12 +676,44 @@ def market_vs_listing_signal_section(signal_rows: list[dict[str, str]] | None) -
     return lines
 
 
-def airbnb_funnel_signals_section(summary_rows: list[dict[str, str]] | None) -> list[str]:
+def airbnb_funnel_signals_section(
+    summary_rows: list[dict[str, str]] | None,
+    *,
+    summary_diagnostics: dict[str, object] | None = None,
+    weekly_history_path: Path | None = None,
+) -> list[str]:
     lines = ["## Airbnb Funnel Signals", ""]
     if not summary_rows:
+        diagnostics = summary_diagnostics or {}
+        missing_columns = diagnostics.get("missing_columns", [])
         lines.extend(
             [
                 "- Airbnb funnel diagnostics unavailable for this run.",
+                f"- Reason: {diagnostics.get('status', 'unavailable')}.",
+                f"- Expected Airbnb summary file: {diagnostics.get('path', 'unknown')}.",
+            ]
+        )
+        if weekly_history_path is not None:
+            lines.append(f"- Expected Airbnb weekly history file: {weekly_history_path}.")
+        if missing_columns:
+            lines.append("- Missing Airbnb summary columns: " + ", ".join(str(column) for column in missing_columns) + ".")
+        if diagnostics.get("root_cause") == "date_range_not_able_to_set_up":
+            lines.extend(
+                [
+                    "",
+                    "## Airbnb Diagnostics Root Cause",
+                    "",
+                    "- Status: unavailable",
+                    "- Root cause: date_range_not_able_to_set_up",
+                    "- Evidence: Airbnb capture attempted date setup but applied date range did not match expected range after retries.",
+                    f"- Expected date range: {diagnostics.get('expected_date_range_start', '') or 'unavailable'} to {diagnostics.get('expected_date_range_end', '') or 'unavailable'}",
+                    f"- Applied date range: {diagnostics.get('applied_date_range_start', '') or 'unavailable'} to {diagnostics.get('applied_date_range_end', '') or 'unavailable'}",
+                    f"- Attempts: {diagnostics.get('date_range_attempts', '') or 'unavailable'}",
+                    "- Recovery: rerun Airbnb capture manually and confirm date range is set before continuing.",
+                ]
+            )
+        lines.extend(
+            [
                 "- Manual action required before final report: run Airbnb capture with browser login/MFA, then promote staged files and rerun diagnostics.",
                 "- Commands:",
                 '  `$env:PYTHONPATH = "src"`',
@@ -969,7 +1073,9 @@ def build_markdown(
     reason_rows: list[dict[str, str]] | None = None,
     combined_signal_rows: list[dict[str, str]] | None = None,
     airbnb_summary_rows: list[dict[str, str]] | None = None,
+    airbnb_summary_diagnostics: dict[str, object] | None = None,
     airbnb_weekly_history_rows: list[dict[str, str]] | None = None,
+    airbnb_weekly_history_path: Path | None = None,
     diagnostic_issue_rows: list[dict[str, str]] | None = None,
     diagnostic_issue_tracker_available: bool = False,
     listing_review_rows: list[dict[str, str]] | None = None,
@@ -1020,8 +1126,19 @@ def build_markdown(
     )
     lines.extend(reason_review_section(reason_rows or []))
     lines.extend(market_vs_listing_signal_section(combined_signal_rows))
-    lines.extend(airbnb_funnel_signals_section(airbnb_summary_rows))
-    lines.extend(airbnb_funnel_wow_section(airbnb_weekly_history_rows if airbnb_summary_rows else None))
+    lines.extend(
+        airbnb_funnel_signals_section(
+            airbnb_summary_rows,
+            summary_diagnostics=airbnb_summary_diagnostics,
+            weekly_history_path=airbnb_weekly_history_path,
+        )
+    )
+    lines.extend(
+        airbnb_funnel_wow_section(
+            airbnb_weekly_history_rows if airbnb_summary_rows else None,
+            history_path=airbnb_weekly_history_path,
+        )
+    )
     lines.extend(open_diagnostic_issues_section(diagnostic_issue_rows if diagnostic_issue_tracker_available else None, run_date=run_date))
     lines.extend(
         listing_review_needed_section(
@@ -1201,7 +1318,7 @@ def run() -> int:
     rows = read_monthly_rows(rolling_path)
     reason_rows = read_reason_rows(reason_path)
     combined_signal_rows = read_combined_signal_rows(combined_signal_path)
-    airbnb_summary_rows = read_airbnb_summary_rows(airbnb_summary_path)
+    airbnb_summary_rows, airbnb_summary_diagnostics = airbnb_summary_status(airbnb_summary_path)
     airbnb_weekly_history_rows = read_airbnb_weekly_history_rows(airbnb_weekly_history_path)
     diagnostic_issue_rows = read_diagnostic_issue_rows(diagnostic_issue_path)
     listing_review_rows = read_listing_review_rows(listing_review_path)
@@ -1218,7 +1335,9 @@ def run() -> int:
             reason_rows,
             combined_signal_rows,
             airbnb_summary_rows,
+            airbnb_summary_diagnostics,
             airbnb_weekly_history_rows,
+            airbnb_weekly_history_path,
             diagnostic_issue_rows,
             diagnostic_issue_path.exists(),
             listing_review_rows,

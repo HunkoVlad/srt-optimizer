@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="SampleTestNGTest" time="0.33" tests="1" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="SampleTestNGTest" time="0.316" tests="1" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="21"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -15,7 +15,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="US"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot\bin"/>
-    <property name="sun.java.command" value="C:\Users\Volodymyr\AppData\Local\Temp\surefire1538871820483620035\surefirebooter-20260615115508324_3.jar C:\Users\Volodymyr\AppData\Local\Temp\surefire1538871820483620035 2026-06-15T11-55-08_199-jvmRun1 surefire-20260615115508324_1tmp surefire_0-20260615115508324_2tmp"/>
+    <property name="sun.java.command" value="C:\Users\Volodymyr\AppData\Local\Temp\surefire8672833453433861897\surefirebooter-20260615120657199_3.jar C:\Users\Volodymyr\AppData\Local\Temp\surefire8672833453433861897 2026-06-15T12-06-57_080-jvmRun1 surefire-20260615120657199_1tmp surefire_0-20260615120657199_2tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="C:\Users\Volodymyr\srt-optimizer\target\test-classes;C:\Users\Volodymyr\srt-optimizer\target\classes;C:\Users\Volodymyr\.m2\repository\org\testng\testng\7.10.2\testng-7.10.2.jar;C:\Users\Volodymyr\.m2\repository\org\slf4j\slf4j-api\1.7.36\slf4j-api-1.7.36.jar;C:\Users\Volodymyr\.m2\repository\com\beust\jcommander\1.82\jcommander-1.82.jar;C:\Users\Volodymyr\.m2\repository\org\webjars\jquery\3.7.1\jquery-3.7.1.jar;"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -30,7 +30,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
-    <property name="surefire.real.class.path" value="C:\Users\Volodymyr\AppData\Local\Temp\surefire1538871820483620035\surefirebooter-20260615115508324_3.jar"/>
+    <property name="surefire.real.class.path" value="C:\Users\Volodymyr\AppData\Local\Temp\surefire8672833453433861897\surefirebooter-20260615120657199_3.jar"/>
     <property name="user.script" value=""/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="21.0.11+10-LTS"/>
@@ -59,8 +59,8 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="65.0"/>
   </properties>
-  <testcase name="shouldAddTwoNumbers" classname="SampleTestNGTest" time="0.0">
-    <system-out><![CDATA[Test 'shouldAddTwoNumbers' passed
+  <testcase name="shouldSortArrayListInAscendingOrder" classname="SampleTestNGTest" time="0.01">
+    <system-out><![CDATA[Test 'shouldSortArrayListInAscendingOrder' passed
 ]]></system-out>
     <system-err><![CDATA[SLF4J: Failed to load class "org.slf4j.impl.StaticLoggerBinder".
 SLF4J: Defaulting to no-operation (NOP) logger implementation

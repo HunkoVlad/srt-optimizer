@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
+import json
 from pathlib import Path
 import sys
 
@@ -36,6 +38,50 @@ def parsed_conversion_path(run_dir: Path, run_date: str) -> Path:
     return run_dir / "raw" / f"airbnb_daily_conversion_parsed_{run_date}.csv"
 
 
+def capture_manifest_path(run_dir: Path, run_date: str) -> Path:
+    return run_dir / "downloads_staging" / "airbnb" / f"airbnb_capture_manifest_{run_date}.json"
+
+
+def diagnostics_status_path(run_dir: Path, run_date: str) -> Path:
+    return run_dir / "analysis" / f"airbnb_diagnostics_status_{run_date}.json"
+
+
+def capture_failed_due_to_date_range(run_dir: Path, run_date: str) -> dict[str, object] | None:
+    path = capture_manifest_path(run_dir, run_date)
+    if not path.exists():
+        return None
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if manifest.get("capture_status") == "failed" and manifest.get("failure_reason") == "date_range_not_able_to_set_up":
+        return manifest
+    return None
+
+
+def write_diagnostics_status(run_dir: Path, run_date: str, capture_manifest: dict[str, object]) -> Path:
+    path = diagnostics_status_path(run_dir, run_date)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    status = {
+        "run_date": run_date,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "status": "skipped",
+        "failure_reason": "date_range_not_able_to_set_up",
+        "expected_date_range_start": capture_manifest.get("expected_date_range_start", ""),
+        "expected_date_range_end": capture_manifest.get("expected_date_range_end", ""),
+        "applied_date_range_start": capture_manifest.get("applied_date_range_start", ""),
+        "applied_date_range_end": capture_manifest.get("applied_date_range_end", ""),
+        "date_range_attempts": capture_manifest.get("date_range_attempts", 0),
+        "capture_manifest_path": str(capture_manifest_path(run_dir, run_date)),
+        "notes": [
+            "Airbnb diagnostics skipped because capture failed before valid HTML was staged.",
+            "Root cause: date_range_not_able_to_set_up.",
+        ],
+    }
+    path.write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
 def has_any_existing(paths: list[Path]) -> bool:
     return any(path.exists() for path in paths)
 
@@ -43,6 +89,9 @@ def has_any_existing(paths: list[Path]) -> bool:
 def run(run_date: str, *, run_dir: Path | None = None) -> list[Path]:
     resolved_run_dir = run_dir or Path("data") / "runs" / run_date
     outputs: list[Path] = []
+    failed_capture_manifest = capture_failed_due_to_date_range(resolved_run_dir, run_date)
+    if failed_capture_manifest is not None:
+        return [write_diagnostics_status(resolved_run_dir, run_date, failed_capture_manifest)]
 
     parsed_path = parsed_conversion_path(resolved_run_dir, run_date)
     if has_any_existing(overtime_raw_files(resolved_run_dir)):
@@ -69,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     outputs = run(args.run_date, run_dir=Path(args.run_dir) if args.run_dir else None)
     if outputs:
+        if any(output.name.startswith("airbnb_diagnostics_status_") for output in outputs):
+            print("Airbnb diagnostics: skipped due to date_range_not_able_to_set_up")
         print("Airbnb diagnostics outputs:")
         for output in outputs:
             print(f"- {output}")

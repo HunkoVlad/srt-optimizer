@@ -22,6 +22,7 @@ public class SampleTestNGTest {
 
         Assert.assertFalse(name.isBlank(), "Name should not be blank");
         System.out.println("Test 'shouldDetectNonEmptyName' passed");
+        System.out.println(add(2, 3));
     }
 
     private int add(int left, int right) {

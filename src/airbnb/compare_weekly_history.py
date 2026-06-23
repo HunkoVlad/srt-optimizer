@@ -191,7 +191,21 @@ def conversion_status(percent_vs_benchmark: float | None) -> str:
     return "weak" if percent_vs_benchmark <= -15 else "stable_or_strong"
 
 
-def diagnostic_category(market: str, search_card: str, listing: str) -> str:
+def diagnostic_category(
+    market: str,
+    search_card: str,
+    listing: str,
+    first_page_search_impressions_vs_benchmark: float | None = None,
+    page_views_vs_benchmark: float | None = None,
+) -> str:
+    high_visibility = (
+        first_page_search_impressions_vs_benchmark is not None
+        and first_page_search_impressions_vs_benchmark > 0
+        and page_views_vs_benchmark is not None
+        and page_views_vs_benchmark > 0
+    )
+    if market == "unknown" and search_card == "weak" and high_visibility:
+        return "high_visibility_weak_search_card"
     if market == "strong" and search_card == "weak":
         return "strong_market_weak_search_card"
     if market == "soft" and search_card != "weak" and listing != "weak":
@@ -207,6 +221,10 @@ def build_summary_benchmark_fields(current: dict[str, str], prior_rows: list[dic
     relevant_total_previous = parse_number(prior_rows[0].get("estimated_relevant_searches", "")) if prior_rows else None
     relevant_current = parse_number(current.get("estimated_relevant_searches_per_day", ""))
     relevant_benchmark = average_metric(benchmark_source, "estimated_relevant_searches_per_day")
+    page_views_current = parse_number(current.get("page_views", ""))
+    page_views_benchmark = average_metric(benchmark_source, "page_views")
+    first_page_search_impressions_current = parse_number(current.get("first_page_search_impressions", ""))
+    first_page_search_impressions_benchmark = average_metric(benchmark_source, "first_page_search_impressions")
     visibility_current = parse_number(current.get("first_page_search_impression_rate", ""))
     visibility_benchmark = average_metric(benchmark_source, "first_page_search_impression_rate")
     search_current = parse_number(current.get("search_to_listing_conversion_rate", ""))
@@ -215,6 +233,10 @@ def build_summary_benchmark_fields(current: dict[str, str], prior_rows: list[dic
     listing_benchmark = average_metric(benchmark_source, "listing_to_booking_conversion_rate")
 
     relevant_vs_benchmark = percent_change(relevant_current, relevant_benchmark)
+    page_views_vs_benchmark = percent_change(page_views_current, page_views_benchmark)
+    first_page_search_impressions_vs_benchmark = percent_change(
+        first_page_search_impressions_current, first_page_search_impressions_benchmark
+    )
     visibility_vs_benchmark = percent_change(visibility_current, visibility_benchmark)
     search_vs_benchmark = percent_change(search_current, search_benchmark)
     listing_vs_benchmark = percent_change(listing_current, listing_benchmark)
@@ -236,7 +258,13 @@ def build_summary_benchmark_fields(current: dict[str, str], prior_rows: list[dic
         "visibility_status": visibility_status,
         "search_card_status": search_card_status,
         "listing_conversion_status": listing_status,
-        "airbnb_diagnostic_category": diagnostic_category(market_status, search_card_status, listing_status),
+        "airbnb_diagnostic_category": diagnostic_category(
+            market_status,
+            search_card_status,
+            listing_status,
+            first_page_search_impressions_vs_benchmark,
+            page_views_vs_benchmark,
+        ),
     }
 
 

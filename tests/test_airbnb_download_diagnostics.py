@@ -286,6 +286,10 @@ class FakeLocator:
         self.page.clicked_selectors.append(self.selector)
         if self.selector == download_diagnostics.CONVERSION_LINK_SELECTOR:
             self.page.url = download_diagnostics.AIRBNB_CONVERSION_URL
+        if self.selector == download_diagnostics.DATE_RANGE_SELECTOR or self.selector.startswith("role:button:"):
+            self.page.date_picker_open = True
+        if self.selector == download_diagnostics.DATE_RANGE_APPLY_SELECTOR:
+            self.page.date_picker_open = False
 
     def fill(self, value, timeout=None) -> None:
         self.page.filled_inputs.append((self.selector, value))
@@ -329,6 +333,8 @@ class FakeLocator:
     def wait_for(self, state=None, timeout=None) -> None:
         if self.page.fail_performance_indicator:
             raise RuntimeError("performance indicator unavailable")
+        if self.selector in {download_diagnostics.START_DATE_INPUT_SELECTOR, download_diagnostics.END_DATE_INPUT_SELECTOR} and not self.page.date_picker_open:
+            raise RuntimeError("date input unavailable")
         self.page.waited_selectors.append(self.selector)
 
 
@@ -369,11 +375,16 @@ class FakePage:
         self.load_states: list[str] = []
         self.waited_selectors: list[str] = []
         self.waited_timeouts: list[int] = []
+        self.calendar_highlight_checks: list[dict[str, object]] = []
+        self.calendar_highlight_results: list[bool] = []
+        self.date_picker_open = False
+        self.reload_count = 0
         self.pause_count = 0
         self.screenshots: list[str] = []
 
     def goto(self, url: str) -> None:
         self.goto_urls.append(url)
+        self.date_picker_open = False
         if self.goto_error:
             self.url = self.goto_final_url
             raise RuntimeError(self.goto_error)
@@ -381,6 +392,10 @@ class FakePage:
         if "ds-start=-7" in url and "ds-end=0" in url:
             self.visible_text = "Airbnb Performance Booking conversion Page views Wishlist additions May 17 May 24"
             self.selected_date_control_text = "May 17 → May 24"
+
+    def reload(self, timeout=None) -> None:
+        self.reload_count += 1
+        self.date_picker_open = False
 
     def locator(self, selector: str) -> FakeLocator:
         return FakeLocator(self, selector)
@@ -407,6 +422,13 @@ class FakePage:
 
     def wait_for_timeout(self, milliseconds: int) -> None:
         self.waited_timeouts.append(milliseconds)
+
+    def evaluate(self, script, arg=None):
+        if isinstance(arg, dict) and "day" in arg and "monthYear" in arg:
+            self.calendar_highlight_checks.append(arg)
+            if self.calendar_highlight_results:
+                return self.calendar_highlight_results.pop(0)
+        return True
 
     def pause(self) -> None:
         self.pause_count += 1
@@ -573,7 +595,7 @@ def test_capture_headed_writes_only_allowed_staged_filenames(tmp_path, monkeypat
     assert manifest["current_page_title"] == ""
     assert manifest["expected_files_count"] == 6
     assert manifest["saved_files_count"] == 6
-    assert manifest["capture_status"] == "captured_all"
+    assert manifest["capture_status"] == "completed"
     assert manifest["capture_failure_reason"] == ""
     assert page.pause_count == 0
     assert download_diagnostics.COMPARE_SELECTOR in page.waited_selectors
@@ -752,7 +774,8 @@ def test_capture_headed_blocks_when_visible_date_text_is_wrong_even_after_apply(
     assert manifest["visible_date_text_after_apply"] == "Airbnb Performance Booking conversion Page views Wishlist additions Apr 25 May 25"
     assert all(result["capture_status"] == "skipped_not_ready" for result in manifest["capture_results"])
     assert all(result["date_range_assertion_status"] == "failed_visible_range_mismatch" for result in manifest["capture_results"])
-    assert all("Apr 25" in result["assertion_error"] for result in manifest["capture_results"])
+    assert "Apr 25" in manifest["capture_results"][0]["assertion_error"]
+    assert all(result["assertion_error"] == "date_range_not_able_to_set_up" for result in manifest["capture_results"][1:])
     assert list((run_dir / "downloads_staging" / "airbnb").glob("*.html")) == []
     assert not (run_dir / "raw").exists()
 
@@ -871,6 +894,28 @@ def test_capture_headed_records_failed_date_range_automation(tmp_path, monkeypat
     assert manifest["captured_files"] == []
 
 
+def test_capture_date_range_failure_writes_separate_capture_manifest(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    install_fake_capture(monkeypatch, visible_text="Airbnb Performance Booking conversion Page views Wishlist additions Apr 25 May 25")
+
+    manifest_path = download_diagnostics.run(RUN_DATE, mode="capture-headed", run_dir=run_dir)
+    manifest = read_json(manifest_path)
+    capture_manifest_path = download_diagnostics.capture_manifest_path(run_dir / "downloads_staging" / "airbnb", RUN_DATE)
+    capture_manifest = read_json(capture_manifest_path)
+
+    assert capture_manifest_path.exists()
+    assert manifest["capture_status"] == "failed"
+    assert manifest["failure_reason"] == "date_range_not_able_to_set_up"
+    assert capture_manifest["failure_reason"] == "date_range_not_able_to_set_up"
+    assert capture_manifest["expected_date_range_start"] == "2026-05-10"
+    assert capture_manifest["expected_date_range_end"] == "2026-05-17"
+    assert capture_manifest["date_range_match"] is False
+    assert capture_manifest["saved_files_count"] == 0
+    assert capture_manifest["saved_files"] == []
+    assert capture_manifest["date_range_attempts"] == 3
+    assert len(capture_manifest["date_range_attempt_results"]) == 3
+
+
 def test_set_airbnb_reporting_window_uses_known_date_selectors() -> None:
     page = FakePage(visible_text="Airbnb Performance Booking conversion May 17 May 24")
 
@@ -881,6 +926,12 @@ def test_set_airbnb_reporting_window_uses_known_date_selectors() -> None:
     assert details["date_input_strategy_used"] == "type_clear"
     assert details["start_input_value_after_set"] == "05/17/2026"
     assert details["end_input_value_after_set"] == "05/24/2026"
+    assert details["start_calendar_highlight_status"] == "passed"
+    assert details["end_calendar_highlight_status"] == "passed"
+    assert page.calendar_highlight_checks == [
+        {"day": 17, "monthYear": "May 2026"},
+        {"day": 24, "monthYear": "May 2026"},
+    ]
     assert details["apply_clicked"] is True
     assert page.clicked_selectors[0] == download_diagnostics.DATE_RANGE_SELECTOR
     assert page.clicked_selectors[-1] == download_diagnostics.DATE_RANGE_APPLY_SELECTOR
@@ -901,7 +952,7 @@ def test_click_airbnb_date_apply_waits_until_clickable_and_hidden() -> None:
 
     download_diagnostics.click_airbnb_date_apply(page)
 
-    assert page.waited_selectors.count(download_diagnostics.DATE_RANGE_APPLY_SELECTOR) == 2
+    assert page.waited_selectors.count(download_diagnostics.DATE_RANGE_APPLY_SELECTOR) == 3
     assert download_diagnostics.DATE_RANGE_APPLY_SELECTOR in page.trial_clicked_selectors
     assert download_diagnostics.DATE_RANGE_APPLY_SELECTOR in page.clicked_selectors
     assert page.waited_timeouts == [
@@ -1003,13 +1054,61 @@ def test_set_airbnb_reporting_window_retries_when_airbnb_snaps_to_wrong_date(mon
 
     assert details["date_range_automation_status"] == "applied"
     assert details["date_range_attempt"] == 2
-    assert details["date_range_max_attempts"] == 2
+    assert details["date_range_max_attempts"] == 3
     assert details["date_fields_attempted"] == "end"
     assert details["selected_date_control_text"] == "May 24 \u2192 May 31"
     assert "May 28" in details["date_range_previous_attempt_error"]
     assert apply_count == 2
     assert page.typed_inputs.count((download_diagnostics.START_DATE_INPUT_SELECTOR, "05/24/2026")) == 1
     assert page.typed_inputs.count((download_diagnostics.END_DATE_INPUT_SELECTOR, "05/31/2026")) == 2
+
+
+def test_set_airbnb_reporting_window_continues_when_calendar_month_is_not_visible(monkeypatch) -> None:
+    page = FakePage(visible_text="Airbnb Performance Booking conversion May 10 May 17")
+    highlight_checks: list[date] = []
+
+    def fake_highlight_status(_page, target_date):
+        highlight_checks.append(target_date)
+        return "not_visible"
+
+    monkeypatch.setattr(download_diagnostics, "calendar_date_highlight_status", fake_highlight_status)
+
+    details = download_diagnostics.set_airbnb_reporting_window(
+        page,
+        date(2026, 5, 10),
+        date(2026, 5, 17),
+        date(2026, 5, 20),
+    )
+
+    assert details["date_range_automation_status"] == "applied"
+    assert details["date_range_attempt"] == 1
+    assert len(details["date_range_attempt_results"]) == 1
+    assert details["start_calendar_highlight_status"] == "not_visible"
+    assert details["end_calendar_highlight_status"] == "not_visible"
+    assert page.reload_count == 0
+    assert highlight_checks == [
+        date(2026, 5, 10),
+        date(2026, 5, 17),
+    ]
+
+
+def test_set_airbnb_reporting_window_fails_after_three_attempts() -> None:
+    page = FakePage(
+        visible_text="Airbnb Performance Booking conversion Apr 25 May 25",
+        selected_date_control_text="Apr 25 \u2192 May 25",
+    )
+
+    details = download_diagnostics.set_airbnb_reporting_window(
+        page,
+        date(2026, 5, 24),
+        date(2026, 5, 31),
+        date(2026, 6, 1),
+    )
+
+    assert details["date_range_automation_status"] == "failed"
+    assert details["date_range_attempt"] == 3
+    assert details["date_range_max_attempts"] == 3
+    assert len(details["date_range_attempt_results"]) == 3
 
 
 def test_set_airbnb_reporting_window_falls_back_to_fill_clear() -> None:
@@ -1060,15 +1159,14 @@ def test_airbnb_date_query_url_uses_run_date_relative_offsets() -> None:
     assert "ds-end=0" in url
 
 
-def test_set_airbnb_reporting_window_uses_query_fallback_when_visible_range_does_not_update() -> None:
+def test_set_airbnb_reporting_window_does_not_use_query_fallback_when_visible_range_does_not_update() -> None:
     page = FakePage(visible_text="Airbnb Performance Booking conversion Apr 25 May 25")
 
     details = download_diagnostics.set_airbnb_reporting_window(page, date(2026, 5, 17), date(2026, 5, 24), date(2026, 5, 25))
 
-    assert details["date_range_automation_status"] == "applied_url_query"
-    assert "ds-start=-7" in details["date_query_fallback_url"]
-    assert "ds-end=0" in details["date_query_fallback_url"]
-    assert details["visible_date_text_after_apply"] == "Airbnb Performance Booking conversion Page views Wishlist additions May 17 May 24"
+    assert details["date_range_automation_status"] == "failed"
+    assert details["date_query_fallback_url"] == ""
+    assert details["visible_date_text_after_apply"] == "Airbnb Performance Booking conversion Apr 25 May 25"
 
 
 def test_capture_headed_playwright_unavailable_fails_clearly(tmp_path, monkeypatch) -> None:
@@ -1159,6 +1257,27 @@ def test_promote_staged_records_nothing_promoted_when_no_valid_files(tmp_path) -
     manifest = read_json(download_diagnostics.run(RUN_DATE, mode="promote-staged", run_dir=run_dir))
 
     assert manifest["status"] == "nothing_promoted"
+    assert manifest["promoted_files"] == []
+    assert not (run_dir / "raw").exists()
+
+
+def test_promote_staged_skips_when_capture_manifest_failed_date_range(tmp_path) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    staging = run_dir / "downloads_staging" / "airbnb"
+    staging.mkdir(parents=True, exist_ok=True)
+    failed_manifest = {
+        "run_date": RUN_DATE,
+        "capture_status": "failed",
+        "failure_reason": "date_range_not_able_to_set_up",
+    }
+    download_diagnostics.capture_manifest_path(staging, RUN_DATE).write_text(json.dumps(failed_manifest), encoding="utf-8")
+    write_all_valid_staged_files(run_dir)
+
+    manifest = read_json(download_diagnostics.run(RUN_DATE, mode="promote-staged", run_dir=run_dir))
+
+    assert manifest["status"] == "skipped_due_to_capture_failure"
+    assert manifest["promotion_status"] == "skipped_due_to_capture_failure"
+    assert manifest["failure_reason"] == "date_range_not_able_to_set_up"
     assert manifest["promoted_files"] == []
     assert not (run_dir / "raw").exists()
 

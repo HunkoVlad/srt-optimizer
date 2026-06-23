@@ -106,6 +106,13 @@ def test_monday_full_report_wrapper_exists_and_orders_steps() -> None:
     assert "-m airbnb.run_diagnostics --run-date $RunDate" in script
     assert "run_weekly_pipeline.ps1" in script
     assert "Weekly report email: $weeklyReportEmailStatus" in script
+    assert "Airbnb report integration: $airbnbIntegrationStatus - $airbnbIntegrationReason" in script
+    assert "Email markdown Airbnb section: $emailMarkdownAirbnbSectionStatus" in script
+    assert "root cause date_range_not_able_to_set_up" in script
+    assert "Airbnb date range setup: started" in script
+    assert "Airbnb date range setup: attempt" in script
+    assert "Airbnb date range setup: matched" in script
+    assert "Airbnb date range setup: failed" in script
 
 
 def test_send_weekly_revenue_report_script_is_explicit_manual_send_only() -> None:
@@ -132,6 +139,10 @@ def test_monday_full_report_wrapper_keeps_airbnb_steps_nonblocking() -> None:
     assert "-Blocking $true" in script
     assert "failure_nonblocking" in script
     assert "Airbnb funnel capture uses persistent profile with manual MFA fallback" in script
+    assert "Airbnb capture:" in script
+    assert "Airbnb staged promotion:" in script
+    assert "Airbnb diagnostics:" in script
+    assert "failed_or_missing_inputs" in script
 
 
 def test_monday_full_report_wrapper_stops_when_pricelabs_raw_files_missing() -> None:
@@ -243,6 +254,17 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert "stayfi_anniversary_email_summary output path:" in script
     assert "evidence_bundle manifest path:" in script
     assert "Airbnb funnel diagnostics require manual MFA capture before final email report." in script
+    assert "Airbnb diagnostics: completed" in script
+    assert "Airbnb date range setup: started" in script
+    assert "Airbnb date range setup: attempt" in script
+    assert "Airbnb date range setup: matched" in script
+    assert "Airbnb date range setup: failed" in script
+    assert "Airbnb capture: skipped due to date_range_not_able_to_set_up" in script
+    assert "Airbnb diagnostics: skipped due to date_range_not_able_to_set_up" in script
+    assert "Airbnb report integration: included" in script
+    assert "Airbnb report integration: unavailable" in script
+    assert "Airbnb report integration: unavailable, root cause date_range_not_able_to_set_up" in script
+    assert "Email markdown Airbnb section: included" in script
 
 
 def test_weekly_with_pricelabs_downloads_cleans_staging_only_after_success() -> None:

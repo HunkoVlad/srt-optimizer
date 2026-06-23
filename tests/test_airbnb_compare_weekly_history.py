@@ -179,6 +179,51 @@ def test_benchmark_comparison_and_classification_updates_summary(tmp_path: Path)
     assert summary["airbnb_diagnostic_category"] == "strong_market_weak_search_card"
 
 
+def test_unknown_demand_high_visibility_weak_search_card_gets_specific_category(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "data" / "runs"
+    write_summary(
+        runs_dir,
+        "2026-05-21",
+        "2026-05-10",
+        "2026-05-17",
+        {
+            "page_views": "220",
+            "first_page_search_impressions": "1200",
+            "search_to_listing_conversion_rate": "8%",
+            "listing_to_booking_conversion_rate": "2%",
+            "estimated_relevant_searches": "",
+            "estimated_relevant_searches_per_day": "",
+        },
+    )
+    write_summary(
+        runs_dir,
+        "2026-05-14",
+        "2026-05-03",
+        "2026-05-10",
+        {
+            "page_views": "100",
+            "first_page_search_impressions": "600",
+            "search_to_listing_conversion_rate": "20%",
+            "listing_to_booking_conversion_rate": "2%",
+            "estimated_relevant_searches": "",
+            "estimated_relevant_searches_per_day": "",
+        },
+    )
+
+    compare_weekly_history.run("2026-05-21", runs_dir=runs_dir)
+    summary = list(
+        csv.DictReader(
+            (runs_dir / "2026-05-21" / "analysis" / "airbnb_weekly_conversion_summary_2026-05-21.csv").open(
+                "r", encoding="utf-8"
+            )
+        )
+    )[0]
+
+    assert summary["market_demand_status"] == "unknown"
+    assert summary["search_card_status"] == "weak"
+    assert summary["airbnb_diagnostic_category"] == "high_visibility_weak_search_card"
+
+
 def test_history_comparison_columns_exclude_performance_truth_fields() -> None:
     prohibited = {
         "adr",

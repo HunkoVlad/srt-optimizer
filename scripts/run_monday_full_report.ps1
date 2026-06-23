@@ -21,6 +21,7 @@ $rawDir = Join-Path $runRoot "raw"
 $logsDir = Join-Path $runRoot "logs"
 $analysisDir = Join-Path $runRoot "analysis"
 $logFile = Join-Path $logsDir "monday_full_report_$RunDate.log"
+$airbnbCaptureManifestFile = Join-Path (Join-Path $runRoot "downloads_staging\airbnb") "airbnb_capture_manifest_$RunDate.json"
 
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
@@ -137,6 +138,33 @@ try {
         & $pythonExe -m airbnb.download_diagnostics --run-date $RunDate --mode capture-headed-and-validate --use-persistent-profile
     } -Blocking $false
     $airbnbCaptureSuccess = $script:LastMondayStepSuccess
+    if (Test-Path $airbnbCaptureManifestFile) {
+        try {
+            $airbnbCaptureManifest = Get-Content -Raw -Path $airbnbCaptureManifestFile | ConvertFrom-Json
+            Write-MondayLog "Airbnb date range setup: started"
+            $airbnbDateRangeAttempts = @($airbnbCaptureManifest.date_range_attempt_results)
+            if ($airbnbDateRangeAttempts.Count -gt 0) {
+                foreach ($attempt in $airbnbDateRangeAttempts) {
+                    Write-MondayLog "Airbnb date range setup: attempt $($attempt.attempt)/$($airbnbDateRangeAttempts.Count)"
+                }
+            }
+            elseif ($airbnbCaptureManifest.date_range_attempts) {
+                Write-MondayLog "Airbnb date range setup: attempt $($airbnbCaptureManifest.date_range_attempts)/$($airbnbCaptureManifest.date_range_attempts)"
+            }
+            if ($airbnbCaptureManifest.date_range_match) {
+                Write-MondayLog "Airbnb date range setup: matched"
+            }
+            else {
+                Write-MondayLog "Airbnb date range setup: failed"
+            }
+            if ($airbnbCaptureManifest.failure_reason -eq "date_range_not_able_to_set_up") {
+                Write-MondayLog "Airbnb capture: skipped due to date_range_not_able_to_set_up"
+            }
+        }
+        catch {
+            Write-MondayLog "Airbnb capture manifest could not be read: $airbnbCaptureManifestFile"
+        }
+    }
 
     Invoke-MondayStep "Promote Airbnb staged diagnostics" {
         & $pythonExe -m airbnb.download_diagnostics --run-date $RunDate --mode promote-staged
@@ -162,6 +190,31 @@ $emailHtmlPath = Join-Path $analysisDir "email_revenue_report_$RunDate.html"
 $evidenceBundlePath = Join-Path $analysisDir "evidence_bundle_$RunDate"
 $emailDraftPath = Join-Path $analysisDir "email_revenue_report_$RunDate.eml"
 $emailSendResultPath = Join-Path $analysisDir "email_revenue_report_send_result_$RunDate.csv"
+$airbnbIntegrationStatus = "failed"
+$airbnbIntegrationReason = "email markdown file was not created"
+$emailMarkdownAirbnbSectionStatus = "missing"
+if (Test-Path $emailMarkdownPath) {
+    $emailMarkdownText = Get-Content -Raw -Path $emailMarkdownPath
+    if ($emailMarkdownText -match "## Airbnb Funnel Signals") {
+        $emailMarkdownAirbnbSectionStatus = "included"
+        if ($emailMarkdownText -match "Airbnb funnel diagnostics unavailable") {
+            $airbnbIntegrationStatus = "unavailable"
+            if ($emailMarkdownText -match "date_range_not_able_to_set_up") {
+                $airbnbIntegrationReason = "root cause date_range_not_able_to_set_up"
+            }
+            else {
+                $airbnbIntegrationReason = "see Airbnb Funnel Signals section for exact reason"
+            }
+        }
+        else {
+            $airbnbIntegrationStatus = "included"
+            $airbnbIntegrationReason = "Airbnb summary rows rendered in weekly report"
+        }
+    }
+    else {
+        $airbnbIntegrationReason = "email markdown does not contain Airbnb Funnel Signals"
+    }
+}
 
 $weeklyReportEmailStatus = "skipped"
 if (Test-Path $emailSendResultPath) {
@@ -185,13 +238,23 @@ Write-Host "Monday full report completed."
 Write-MondayLog "Monday full report completed."
 Write-MondayLog "PriceLabs core: success"
 Write-MondayLog "Airbnb search screening: $(if ($airbnbSearchSuccess) { 'success' } else { 'failure_nonblocking' })"
+Write-MondayLog "Airbnb capture: $(if ($airbnbCaptureSuccess) { 'completed' } else { 'failed_or_skipped' })"
+Write-MondayLog "Airbnb staged promotion: $(if ($airbnbPromoteSuccess) { 'completed' } else { 'failed_or_nothing_promoted' })"
+Write-MondayLog "Airbnb diagnostics: $(if ($airbnbDiagnosticsSuccess) { 'completed' } else { 'failed_or_missing_inputs' })"
 Write-MondayLog "Airbnb funnel diagnostics: $(if ($airbnbCaptureSuccess -and $airbnbPromoteSuccess -and $airbnbDiagnosticsSuccess) { 'success' } else { 'failure_nonblocking_or_unavailable' })"
+Write-MondayLog "Airbnb report integration: $airbnbIntegrationStatus - $airbnbIntegrationReason"
+Write-MondayLog "Email markdown Airbnb section: $emailMarkdownAirbnbSectionStatus"
 Write-MondayLog "Weekly report: $(if ($weeklyReportSuccess) { 'success' } else { 'failure' })"
 Write-MondayLog "Weekly report email: $weeklyReportEmailStatus"
 
 Write-Host "PriceLabs core: success"
 Write-Host "Airbnb search screening: $(if ($airbnbSearchSuccess) { 'success' } else { 'failure_nonblocking' })"
+Write-Host "Airbnb capture: $(if ($airbnbCaptureSuccess) { 'completed' } else { 'failed_or_skipped' })"
+Write-Host "Airbnb staged promotion: $(if ($airbnbPromoteSuccess) { 'completed' } else { 'failed_or_nothing_promoted' })"
+Write-Host "Airbnb diagnostics: $(if ($airbnbDiagnosticsSuccess) { 'completed' } else { 'failed_or_missing_inputs' })"
 Write-Host "Airbnb funnel diagnostics: $(if ($airbnbCaptureSuccess -and $airbnbPromoteSuccess -and $airbnbDiagnosticsSuccess) { 'success' } else { 'failure_nonblocking_or_unavailable' })"
+Write-Host "Airbnb report integration: $airbnbIntegrationStatus - $airbnbIntegrationReason"
+Write-Host "Email markdown Airbnb section: $emailMarkdownAirbnbSectionStatus"
 Write-Host "Weekly report: $(if ($weeklyReportSuccess) { 'success' } else { 'failure' })"
 Write-Host "Weekly report email: $weeklyReportEmailStatus"
 Write-Host "Report path: $emailMarkdownPath"

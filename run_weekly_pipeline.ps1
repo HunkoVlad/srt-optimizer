@@ -136,6 +136,10 @@ $signalReviewFile = Join-Path $analysisDir "future_signal_change_review_$RunDate
 $performanceReasonReviewFile = Join-Path $analysisDir "performance_reason_review_$RunDate.csv"
 $combinedMarketListingSignalFile = Join-Path $analysisDir "combined_market_listing_signal_$RunDate.csv"
 $diagnosticIssueTrackerFile = Join-Path $analysisDir "diagnostic_issue_tracker_$RunDate.csv"
+$airbnbWeeklySummaryFile = Join-Path $analysisDir "airbnb_weekly_conversion_summary_$RunDate.csv"
+$airbnbWeeklyHistoryFile = Join-Path $analysisDir "airbnb_weekly_history_comparison_$RunDate.csv"
+$airbnbDiagnosticReportFile = Join-Path $analysisDir "airbnb_conversion_diagnostic_report_$RunDate.md"
+$airbnbCaptureManifestFile = Join-Path (Join-Path $runRoot "downloads_staging\airbnb") "airbnb_capture_manifest_$RunDate.json"
 $pricelabsCompetitorCalendarFile = Join-Path $analysisDir "pricelabs_competitor_calendar_$RunDate.csv"
 $pricelabsCompetitorListFile = Join-Path $rawDir "pricelabs_competitor_list_$RunDate.csv"
 $listingCompetitorReviewFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.md"
@@ -298,6 +302,40 @@ $airbnbRawFiles = @(
 $missingAirbnbRawFiles = @($airbnbRawFiles | Where-Object { -not (Test-Path $_) })
 if ($missingAirbnbRawFiles.Count -gt 0) {
     Write-Host "Airbnb funnel diagnostics require manual MFA capture before final email report."
+    Write-Host ("Airbnb diagnostics: missing inputs - " + ($missingAirbnbRawFiles -join "; "))
+}
+else {
+    Write-Host "Airbnb diagnostics: raw inputs present."
+}
+$airbnbDateRangeCaptureFailed = $false
+if (Test-Path $airbnbCaptureManifestFile) {
+    try {
+        $airbnbCaptureManifest = Get-Content -Raw -Path $airbnbCaptureManifestFile | ConvertFrom-Json
+        Write-Host "Airbnb date range setup: started"
+        $airbnbDateRangeAttempts = @($airbnbCaptureManifest.date_range_attempt_results)
+        if ($airbnbDateRangeAttempts.Count -gt 0) {
+            foreach ($attempt in $airbnbDateRangeAttempts) {
+                Write-Host "Airbnb date range setup: attempt $($attempt.attempt)/$($airbnbDateRangeAttempts.Count)"
+            }
+        }
+        elseif ($airbnbCaptureManifest.date_range_attempts) {
+            Write-Host "Airbnb date range setup: attempt $($airbnbCaptureManifest.date_range_attempts)/$($airbnbCaptureManifest.date_range_attempts)"
+        }
+        if ($airbnbCaptureManifest.date_range_match) {
+            Write-Host "Airbnb date range setup: matched"
+        }
+        else {
+            Write-Host "Airbnb date range setup: failed"
+        }
+        if ($airbnbCaptureManifest.failure_reason -eq "date_range_not_able_to_set_up") {
+            $airbnbDateRangeCaptureFailed = $true
+            Write-Host "Airbnb capture: skipped due to date_range_not_able_to_set_up"
+            Write-Host "Airbnb diagnostics: skipped due to date_range_not_able_to_set_up"
+        }
+    }
+    catch {
+        Write-Host "Airbnb capture manifest could not be read: $airbnbCaptureManifestFile"
+    }
 }
 
 Invoke-PythonStep "Airbnb diagnostics" @(
@@ -305,6 +343,21 @@ Invoke-PythonStep "Airbnb diagnostics" @(
     "--run-date", $RunDate,
     "--run-dir", $runRoot
 )
+if ((Test-Path $airbnbWeeklySummaryFile) -and (Test-Path $airbnbWeeklyHistoryFile) -and (Test-Path $airbnbDiagnosticReportFile)) {
+    Write-Host "Airbnb diagnostics: completed"
+    Write-Host "Airbnb weekly summary: $airbnbWeeklySummaryFile"
+    Write-Host "Airbnb weekly history: $airbnbWeeklyHistoryFile"
+    Write-Host "Airbnb diagnostic report: $airbnbDiagnosticReportFile"
+}
+else {
+    $missingAirbnbOutputs = @()
+    foreach ($path in @($airbnbWeeklySummaryFile, $airbnbWeeklyHistoryFile, $airbnbDiagnosticReportFile)) {
+        if (-not (Test-Path $path)) {
+            $missingAirbnbOutputs += $path
+        }
+    }
+    Write-Host ("Airbnb diagnostics: missing inputs - expected output(s) not found: " + ($missingAirbnbOutputs -join "; "))
+}
 
 Invoke-PythonStep "combined_market_listing_signal" @(
     "-m", "analysis.combined_market_listing_signal",
@@ -379,6 +432,31 @@ Invoke-PythonStep "Email revenue report" @(
     "--listing-review-file", $listingCompetitorReviewCsvFile,
     "--output-file", $emailRevenueReportFile
 )
+if (Test-Path $emailRevenueReportFile) {
+    $emailReportText = Get-Content -Raw -Path $emailRevenueReportFile
+    if ($emailReportText -match "## Airbnb Funnel Signals") {
+        Write-Host "Email markdown Airbnb section: included"
+        if ($emailReportText -match "Airbnb funnel diagnostics unavailable") {
+            if ($emailReportText -match "date_range_not_able_to_set_up") {
+                Write-Host "Airbnb report integration: unavailable, root cause date_range_not_able_to_set_up"
+            }
+            else {
+                Write-Host "Airbnb report integration: unavailable - see Airbnb Funnel Signals section for exact reason."
+            }
+        }
+        else {
+            Write-Host "Airbnb report integration: included"
+        }
+    }
+    else {
+        Write-Host "Email markdown Airbnb section: missing"
+        Write-Host "Airbnb report integration: failed - email markdown does not contain Airbnb Funnel Signals."
+    }
+}
+else {
+    Write-Host "Email markdown Airbnb section: missing"
+    Write-Host "Airbnb report integration: failed - email markdown file was not created."
+}
 
 Invoke-PythonStep "Email evidence bundle" @(
     "-m", "pricelabs.transform.evidence_bundle",
