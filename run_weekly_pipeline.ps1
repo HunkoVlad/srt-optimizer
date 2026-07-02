@@ -146,6 +146,7 @@ $listingCompetitorReviewFile = Join-Path $analysisDir "listing_competitor_review
 $listingCompetitorReviewCsvFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.csv"
 $listingStateSnapshotFile = Join-Path $analysisDir "listing_state_snapshot_$RunDate.md"
 $airbnbSearchVisibilityFile = Join-Path $analysisDir "airbnb_search_visibility_$RunDate.md"
+$activeTestsFile = Join-Path $analysisDir "active_tests_$RunDate.csv"
 $stayfiAnniversarySummaryFile = Join-Path $analysisDir "stayfi_anniversary_email_summary_$RunDate.csv"
 $runtimeConfig = Join-Path $settingsDir "pricelabs_transform_config.toml"
 
@@ -406,6 +407,13 @@ Invoke-PythonStep "airbnb_search_visibility" @(
 )
 Write-Host "airbnb_search_visibility output path: $airbnbSearchVisibilityFile"
 
+Invoke-PythonStep "active_tests" @(
+    "-m", "analysis.active_tests",
+    "--run-date", $RunDate,
+    "--run-dir", $runRoot
+)
+Write-Host "active_tests output path: $activeTestsFile"
+
 Invoke-PythonStep "StayFi anniversary email drafts" @(
     "-m", "marketing.stayfi_anniversary_email",
     "--run-date", $RunDate,
@@ -430,6 +438,7 @@ Invoke-PythonStep "Email revenue report" @(
     "--combined-signal-file", $combinedMarketListingSignalFile,
     "--diagnostic-issue-file", $diagnosticIssueTrackerFile,
     "--listing-review-file", $listingCompetitorReviewCsvFile,
+    "--active-tests-file", $activeTestsFile,
     "--output-file", $emailRevenueReportFile
 )
 if (Test-Path $emailRevenueReportFile) {

@@ -80,6 +80,10 @@ def parse_args() -> argparse.Namespace:
         help="Optional listing change log CSV. Defaults to data/history/listing_change_log.csv.",
     )
     parser.add_argument(
+        "--active-tests-file",
+        help="Optional active tests CSV. Defaults to analysis/active_tests_<run-date>.csv.",
+    )
+    parser.add_argument(
         "--airbnb-search-visibility-file",
         help="Optional Airbnb search visibility diagnostic CSV. Defaults to analysis/airbnb_search_visibility_<run-date>.csv.",
     )
@@ -360,6 +364,13 @@ def read_listing_change_rows(path: Path) -> list[dict[str, str]]:
         return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
 
 
+def read_active_test_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", newline="", encoding="utf-8-sig") as csv_file:
+        return [{key: value or "" for key, value in row.items()} for row in csv.DictReader(csv_file)]
+
+
 def read_airbnb_search_visibility_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
@@ -452,6 +463,12 @@ def default_listing_change_log_path(output_path: Path) -> Path:
         except IndexError:
             pass
     return Path("data") / "history" / "listing_change_log.csv"
+
+
+def default_active_tests_path(run_date: str, output_path: Path) -> Path:
+    if output_path.parent.name == "analysis":
+        return output_path.parent / f"active_tests_{run_date}.csv"
+    return Path("data") / "runs" / run_date / "analysis" / f"active_tests_{run_date}.csv"
 
 
 def default_airbnb_search_visibility_path(run_date: str, output_path: Path) -> Path:
@@ -938,6 +955,82 @@ def active_listing_changes_section(
     return lines
 
 
+def active_test_rows_by_type(rows: list[dict[str, str]] | None, test_type: str) -> list[dict[str, str]]:
+    return [
+        row
+        for row in rows or []
+        if row.get("test_type", "").strip().lower() == test_type
+        and row.get("status", "").strip().lower() == "active"
+    ]
+
+
+def active_tests_section(
+    run_date: str,
+    rows: list[dict[str, str]] | None,
+    *,
+    active_tests_available: bool = False,
+    test_type: str,
+    heading: str,
+    visual_baseline_available: bool = False,
+) -> list[str]:
+    if not active_tests_available:
+        return []
+    active_rows = active_test_rows_by_type(rows, test_type)
+    if not active_rows:
+        return []
+
+    lines = [heading, ""]
+    for row in active_rows:
+        lines.append(f"- Active test: {row.get('test_id', '') or row.get('change_area', '') or 'active test'}.")
+        if row.get("related_issue_id", ""):
+            lines.append(f"  Related issue: {row.get('related_issue_id')}.")
+        lines.append(f"  Change date: {row.get('change_date', '') or 'unknown'}.")
+        if row.get("new_value", ""):
+            lines.append(f"  New value: {row.get('new_value')}.")
+        if row.get("expected_effect", ""):
+            lines.append(f"  Expected effect: {row.get('expected_effect')}.")
+        if row.get("primary_success_metrics", ""):
+            lines.append(f"  Primary success metrics: {row.get('primary_success_metrics')}.")
+        review_after = row.get("review_after_run_date", "") or "not specified"
+        lines.append(f"  Review after: {review_after}.")
+        review_due = row.get("review_due", "").strip().lower() == "true" or (
+            review_after != "not specified" and review_after <= run_date
+        )
+        lines.append(f"  Review due this run: {'Yes' if review_due else 'No'}.")
+        if row.get("guardrails", ""):
+            lines.append(f"  Guardrail: {row.get('guardrails')}.")
+        if row.get("supporting_changes", ""):
+            lines.append(f"  Merged supporting changes: {row.get('supporting_changes')}.")
+        if row.get("notes", ""):
+            lines.append(f"  Notes: {row.get('notes')}.")
+    if test_type == "listing" and visual_baseline_available:
+        lines.append("- Current visual baseline files are included in the evidence bundle.")
+    lines.append("")
+    return lines
+
+
+def test_review_due_section(run_date: str, rows: list[dict[str, str]] | None, *, active_tests_available: bool = False) -> list[str]:
+    if not active_tests_available:
+        return []
+    due_rows = [
+        row
+        for row in rows or []
+        if row.get("status", "").strip().lower() == "active"
+        and (
+            row.get("review_due", "").strip().lower() == "true"
+            or bool(row.get("review_after_run_date", "") and row.get("review_after_run_date", "") <= run_date)
+        )
+    ]
+    if not due_rows:
+        return []
+    lines = ["## Test Review Due", ""]
+    for row in due_rows:
+        label = "PriceLabs" if row.get("test_type", "") == "pricelabs" else "Listing"
+        lines.append(f"- {label}: {row.get('test_id', '') or row.get('change_area', '')}. Review after: {row.get('review_after_run_date', '')}.")
+    lines.append("")
+    return lines
+
+
 def stayfi_anniversary_email_section(
     summary_rows: list[dict[str, str]] | None,
     *,
@@ -1088,6 +1181,8 @@ def build_markdown(
     competitor_calendar_available: bool = False,
     listing_change_rows: list[dict[str, str]] | None = None,
     listing_change_log_available: bool = False,
+    active_test_rows: list[dict[str, str]] | None = None,
+    active_tests_available: bool = False,
     airbnb_search_visibility_rows: list[dict[str, str]] | None = None,
     airbnb_search_visibility_available: bool = False,
     stayfi_anniversary_summary_rows: list[dict[str, str]] | None = None,
@@ -1160,11 +1255,36 @@ def build_markdown(
         )
     )
     lines.extend(
-        active_listing_changes_section(
+        active_tests_section(
+            run_date,
+            active_test_rows,
+            active_tests_available=active_tests_available,
+            test_type="listing",
+            heading="## Active Listing Tests",
+            visual_baseline_available=listing_visual_baseline_available,
+        )
+        if active_tests_available
+        else active_listing_changes_section(
             run_date,
             listing_change_rows,
             change_log_available=listing_change_log_available,
             visual_baseline_available=listing_visual_baseline_available,
+        )
+    )
+    lines.extend(
+        active_tests_section(
+            run_date,
+            active_test_rows,
+            active_tests_available=active_tests_available,
+            test_type="pricelabs",
+            heading="## Active PriceLabs Tests",
+        )
+    )
+    lines.extend(
+        test_review_due_section(
+            run_date,
+            active_test_rows,
+            active_tests_available=active_tests_available,
         )
     )
     lines.extend(
@@ -1278,6 +1398,7 @@ def run() -> int:
     competitor_list_path = Path(args.competitor_list_file) if args.competitor_list_file else default_competitor_list_path(args.run_date, output_path)
     competitor_calendar_path = Path(args.competitor_calendar_file) if args.competitor_calendar_file else default_competitor_calendar_path(args.run_date, output_path)
     listing_change_log_path = Path(args.listing_change_log_file) if args.listing_change_log_file else default_listing_change_log_path(output_path)
+    active_tests_path = Path(args.active_tests_file) if args.active_tests_file else default_active_tests_path(args.run_date, output_path)
     airbnb_search_visibility_path = (
         Path(args.airbnb_search_visibility_file)
         if args.airbnb_search_visibility_file
@@ -1310,6 +1431,7 @@ def run() -> int:
     print(f"Email revenue report competitor list input: {competitor_list_path}")
     print(f"Email revenue report competitor calendar input: {competitor_calendar_path}")
     print(f"Email revenue report listing change log input: {listing_change_log_path}")
+    print(f"Email revenue report active tests input: {active_tests_path}")
     print(f"Email revenue report Airbnb search visibility input: {airbnb_search_visibility_path}")
     print(f"Email revenue report StayFi anniversary summary input: {stayfi_anniversary_summary_path}")
     print(f"Email revenue report StayFi anniversary send results input: {stayfi_anniversary_send_results_path}")
@@ -1324,6 +1446,7 @@ def run() -> int:
     listing_review_rows = read_listing_review_rows(listing_review_path)
     competitor_calendar_rows = read_competitor_calendar_rows(competitor_calendar_path)
     listing_change_rows = read_listing_change_rows(listing_change_log_path)
+    active_test_rows = read_active_test_rows(active_tests_path)
     airbnb_search_visibility_rows = read_airbnb_search_visibility_rows(airbnb_search_visibility_path)
     stayfi_anniversary_summary_rows = read_stayfi_anniversary_summary_rows(stayfi_anniversary_summary_path)
     stayfi_anniversary_send_result_rows = read_stayfi_anniversary_send_result_rows(stayfi_anniversary_send_results_path)
@@ -1350,6 +1473,8 @@ def run() -> int:
             competitor_calendar_path.exists(),
             listing_change_rows,
             listing_change_log_path.exists(),
+            active_test_rows,
+            active_tests_path.exists(),
             airbnb_search_visibility_rows,
             airbnb_search_visibility_path.exists(),
             stayfi_anniversary_summary_rows,

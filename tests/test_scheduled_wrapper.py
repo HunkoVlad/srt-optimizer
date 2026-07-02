@@ -90,29 +90,27 @@ def test_monday_full_report_wrapper_exists_and_orders_steps() -> None:
     script = script_path.read_text(encoding="utf-8")
 
     expected_order = [
-        "PriceLabs required raw input preflight",
-        "Airbnb search screening",
-        "Airbnb funnel capture",
-        "Promote Airbnb staged diagnostics",
-        "Airbnb diagnostics",
-        "Weekly pipeline and report generation",
+        "scheduled weekly pipeline",
+        "StayFi anniversary summary",
+        "StayFi anniversary email dry-run",
+        "StayFi dry-run recipient list",
+        "Send these StayFi anniversary emails now? Type SEND to continue",
+        "StayFi anniversary email real send",
     ]
     positions = [script.index(token) for token in expected_order]
     assert positions == sorted(positions)
     assert "monday_full_report_$RunDate.log" in script
-    assert "-m airbnb.airbnb_search_screening --run-date $RunDate --include-filtered-scenarios" in script
-    assert "-m airbnb.download_diagnostics --run-date $RunDate --mode capture-headed-and-validate --use-persistent-profile" in script
-    assert "-m airbnb.download_diagnostics --run-date $RunDate --mode promote-staged" in script
-    assert "-m airbnb.run_diagnostics --run-date $RunDate" in script
-    assert "run_weekly_pipeline.ps1" in script
-    assert "Weekly report email: $weeklyReportEmailStatus" in script
-    assert "Airbnb report integration: $airbnbIntegrationStatus - $airbnbIntegrationReason" in script
-    assert "Email markdown Airbnb section: $emailMarkdownAirbnbSectionStatus" in script
-    assert "root cause date_range_not_able_to_set_up" in script
-    assert "Airbnb date range setup: started" in script
-    assert "Airbnb date range setup: attempt" in script
-    assert "Airbnb date range setup: matched" in script
-    assert "Airbnb date range setup: failed" in script
+    assert '[string]$RunDate = (Get-Date -Format "yyyy-MM-dd")' in script
+    assert "Resolved RunDate: $RunDate" in script
+    assert "run_scheduled_weekly_pipeline.ps1" in script
+    assert "send_stayfi_anniversary_emails.ps1" in script
+    assert "-DryRun" in script
+    assert "[switch]$AutoSendStayFi" in script
+    assert "AutoSendStayFi enabled: $($AutoSendStayFi.IsPresent)" in script
+    assert '$confirmation -ne "SEND"' in script
+    assert "No StayFi anniversary emails to send this week." in script
+    assert "Dry-run found no sendable recipients." in script
+    assert "Send skipped by user. Dry-run results are available for review." in script
 
 
 def test_send_weekly_revenue_report_script_is_explicit_manual_send_only() -> None:
@@ -130,19 +128,38 @@ def test_monday_full_report_wrapper_keeps_airbnb_steps_nonblocking() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     script = (repo_root / "scripts" / "run_monday_full_report.ps1").read_text(encoding="utf-8")
 
-    assert 'Invoke-MondayStep "Airbnb search screening"' in script
-    assert 'Invoke-MondayStep "Airbnb funnel capture"' in script
-    assert 'Invoke-MondayStep "Promote Airbnb staged diagnostics"' in script
-    assert 'Invoke-MondayStep "Airbnb diagnostics"' in script
-    assert script.count("-Blocking $false") >= 4
-    assert 'Invoke-MondayStep "Weekly pipeline and report generation"' in script
-    assert "-Blocking $true" in script
-    assert "failure_nonblocking" in script
-    assert "Airbnb funnel capture uses persistent profile with manual MFA fallback" in script
-    assert "Airbnb capture:" in script
-    assert "Airbnb staged promotion:" in script
-    assert "Airbnb diagnostics:" in script
-    assert "failed_or_missing_inputs" in script
+    assert "default mode never sends StayFi emails without exact SEND confirmation." in script
+    assert "& $stayfiSendWrapper -RunDate $RunDate -DryRun" in script
+    assert "& $stayfiSendWrapper -RunDate $RunDate 2>&1" in script
+    assert "$sendableRows.Count -eq 0" in script
+    assert '$confirmation = Read-Host "Send these StayFi anniversary emails now? Type SEND to continue"' in script
+    assert "failed_blocking: scheduled weekly pipeline" in script
+
+
+def test_monday_full_report_wrapper_autosend_sends_only_after_successful_dry_run() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts" / "run_monday_full_report.ps1").read_text(encoding="utf-8")
+
+    dry_run_position = script.index("started: StayFi anniversary email dry-run")
+    sendable_position = script.index("$sendableRows.Count -eq 0")
+    autosend_position = script.index("AutoSendStayFi enabled; sending StayFi anniversary emails after successful dry-run.")
+    real_send_position = script.index("started: StayFi anniversary email real send")
+
+    assert dry_run_position < sendable_position < autosend_position < real_send_position
+    assert "failed_blocking: StayFi anniversary email dry-run" in script
+    assert "Dry-run found no sendable recipients." in script
+    assert "StayFi final send result path: $sendResultsFile" in script
+
+
+def test_monday_full_report_wrapper_autosend_skips_no_eligible_and_duplicates() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts" / "run_monday_full_report.ps1").read_text(encoding="utf-8")
+
+    assert "$eligibleGuests -eq 0 -or $draftsPrepared -eq 0" in script
+    assert "No StayFi anniversary emails to send this week." in script
+    assert '$dryRunRows | Where-Object { $_.send_status -eq "dry_run_would_send" }' in script
+    assert "Dry-run found no sendable recipients." in script
+    assert "skipped duplicates from permanent log" in script
 
 
 def test_monday_full_report_wrapper_stops_when_pricelabs_raw_files_missing() -> None:
@@ -172,13 +189,13 @@ def test_monday_full_report_wrapper_stops_when_pricelabs_raw_files_missing() -> 
         assert result.returncode == 2
         assert log_file.exists()
         log_text = log_file.read_text(encoding="utf-8")
-        assert "failed_blocking: PriceLabs required raw input preflight." in log_text
+        assert "started: scheduled weekly pipeline" in log_text
+        assert "failed_blocking: scheduled weekly pipeline exit_code=2" in log_text
         assert "priceLabs_future_export.csv" in log_text
         assert "price_occ.csv" in log_text
         assert "monthly_trends.csv" in log_text
         assert "bookings_report.xlsx" in log_text
-        assert "Airbnb search screening" not in log_text
-        assert "Weekly pipeline and report generation" not in log_text
+        assert "StayFi anniversary email dry-run" not in log_text
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
 
@@ -187,9 +204,91 @@ def test_monday_full_report_wrapper_does_not_reference_browser_profile_for_evide
     repo_root = Path(__file__).resolve().parents[1]
     script = (repo_root / "scripts" / "run_monday_full_report.ps1").read_text(encoding="utf-8")
 
-    assert ".local/browser_profiles/airbnb" in script
-    assert "evidence" in script.lower()
     assert "Copy-Item" not in script
+    assert ".local/browser_profiles" not in script
+    assert "credential" not in script.lower()
+
+
+def test_register_monday_full_report_task_script_builds_safe_command() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts" / "register_monday_full_report_task.ps1").read_text(encoding="utf-8")
+
+    assert 'TaskName = "Aloha Poconos Monday Full Report"' in script
+    assert '[string]$Time = "09:00"' in script
+    assert '[string]$DayOfWeek = "Monday"' in script
+    assert "[switch]$AutoSendStayFi" in script
+    assert "[switch]$DisableAutoSendStayFi" in script
+    assert "powershell.exe" in script
+    assert "-NoProfile -ExecutionPolicy Bypass -Command" in script
+    assert ".\\.venv\\Scripts\\Activate.ps1" in script
+    assert ".\\scripts\\run_monday_full_report.ps1" in script
+    assert "-AutoSendStayFi" in script
+    assert "No secrets are printed or inspected." in script
+
+
+def test_register_monday_full_report_task_script_validates_required_files_and_whatif() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts" / "register_monday_full_report_task.ps1").read_text(encoding="utf-8")
+
+    assert "data\\source\\stayfi\\stayfi_guests_2026.csv" in script
+    assert "config\\gmail_oauth_client.json" in script
+    assert ".local\\gmail_token.json" in script
+    assert "First unattended Gmail send may fail until OAuth token exists." in script
+    assert "$WhatIf.IsPresent" in script
+    assert "WhatIf: scheduled task was not registered." in script
+    assert "Register-ScheduledTask" in script
+
+
+def test_register_monday_full_report_task_whatif_does_not_register(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    project_root = tmp_path / "project"
+    (project_root / ".venv" / "Scripts").mkdir(parents=True)
+    (project_root / "scripts").mkdir(parents=True)
+    (project_root / "data" / "source" / "stayfi").mkdir(parents=True)
+    (project_root / "config").mkdir(parents=True)
+    (project_root / ".local").mkdir(parents=True)
+    (project_root / ".venv" / "Scripts" / "Activate.ps1").write_text("", encoding="utf-8")
+    (project_root / "scripts" / "run_monday_full_report.ps1").write_text("", encoding="utf-8")
+    (project_root / "data" / "source" / "stayfi" / "stayfi_guests_2026.csv").write_text("header\n", encoding="utf-8")
+    (project_root / "config" / "gmail_oauth_client.json").write_text("{}", encoding="utf-8")
+    (project_root / ".local" / "gmail_token.json").write_text("{}", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(repo_root / "scripts" / "register_monday_full_report_task.ps1"),
+            "-ProjectRoot",
+            str(project_root),
+            "-WhatIf",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0
+    assert "WhatIf: scheduled task was not registered." in result.stdout
+    assert "AutoSendStayFi enabled: True" in result.stdout
+    assert ".\\scripts\\run_monday_full_report.ps1 -AutoSendStayFi" in result.stdout
+
+
+def test_check_monday_full_report_task_script_reports_status_fields() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts" / "check_monday_full_report_task.ps1").read_text(encoding="utf-8")
+
+    assert 'TaskName = "Aloha Poconos Monday Full Report"' in script
+    assert "Get-ScheduledTask" in script
+    assert "Get-ScheduledTaskInfo" in script
+    assert "Task exists:" in script
+    assert "Next run time:" in script
+    assert "Last run time:" in script
+    assert "Last task result:" in script
+    assert "State:" in script
 
 
 def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None:
@@ -203,6 +302,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     listing_review_position = script.index('"analysis.listing_competitor_review"')
     listing_snapshot_position = script.index('"analysis.listing_state_snapshot"')
     search_visibility_position = script.index('"analysis.airbnb_search_visibility"')
+    active_tests_position = script.index('"analysis.active_tests"')
     stayfi_anniversary_position = script.index('"marketing.stayfi_anniversary_email"')
     email_position = script.index('"pricelabs.transform.email_revenue_report"')
     evidence_position = script.index('"pricelabs.transform.evidence_bundle"')
@@ -217,6 +317,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
         < listing_review_position
         < listing_snapshot_position
         < search_visibility_position
+        < active_tests_position
         < stayfi_anniversary_position
         < email_position
         < evidence_position
@@ -230,6 +331,7 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert '"-m", "analysis.listing_competitor_review"' in script
     assert '"-m", "analysis.listing_state_snapshot"' in script
     assert '"-m", "analysis.airbnb_search_visibility"' in script
+    assert '"-m", "analysis.active_tests"' in script
     assert '"-m", "marketing.stayfi_anniversary_email"' in script
     assert '"-m", "pricelabs.transform.email_revenue_report"' in script
     assert '"-m", "pricelabs.transform.evidence_bundle"' in script
@@ -241,16 +343,19 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert '$listingCompetitorReviewCsvFile = Join-Path $analysisDir "listing_competitor_review_$RunDate.csv"' in script
     assert '$listingStateSnapshotFile = Join-Path $analysisDir "listing_state_snapshot_$RunDate.md"' in script
     assert '$airbnbSearchVisibilityFile = Join-Path $analysisDir "airbnb_search_visibility_$RunDate.md"' in script
+    assert '$activeTestsFile = Join-Path $analysisDir "active_tests_$RunDate.csv"' in script
     assert '$stayfiAnniversarySummaryFile = Join-Path $analysisDir "stayfi_anniversary_email_summary_$RunDate.csv"' in script
     assert '"--combined-signal-file", $combinedMarketListingSignalFile' in script
     assert '"--diagnostic-issue-file", $diagnosticIssueTrackerFile' in script
     assert '"--listing-review-file", $listingCompetitorReviewCsvFile' in script
+    assert '"--active-tests-file", $activeTestsFile' in script
     assert "combined_market_listing_signal output path:" in script
     assert "diagnostic_issue_tracker output path:" in script
     assert "pricelabs_competitor_calendar output path:" in script
     assert "listing_competitor_review output path:" in script
     assert "listing_state_snapshot output path:" in script
     assert "airbnb_search_visibility output path:" in script
+    assert "active_tests output path:" in script
     assert "stayfi_anniversary_email_summary output path:" in script
     assert "evidence_bundle manifest path:" in script
     assert "Airbnb funnel diagnostics require manual MFA capture before final email report." in script
@@ -317,11 +422,13 @@ def test_scheduled_wrapper_checks_evidence_bundle_manifest_output() -> None:
     assert 'analysis\\listing_competitor_review_$RunDate.md' in script
     assert 'analysis\\listing_competitor_review_$RunDate.csv' in script
     assert 'analysis\\listing_state_snapshot_$RunDate.md' in script
+    assert 'analysis\\active_tests_$RunDate.csv' in script
     assert 'analysis\\email_revenue_report_$RunDate.md' in script
     assert script.index('analysis\\diagnostic_issue_tracker_$RunDate.csv') < script.index('analysis\\pricelabs_competitor_calendar_$RunDate.csv')
     assert script.index('analysis\\pricelabs_competitor_calendar_$RunDate.csv') < script.index('analysis\\listing_competitor_review_$RunDate.md')
     assert script.index('analysis\\listing_competitor_review_$RunDate.csv') < script.index('analysis\\listing_state_snapshot_$RunDate.md')
-    assert script.index('analysis\\listing_state_snapshot_$RunDate.md') < script.index('analysis\\email_revenue_report_$RunDate.md')
+    assert script.index('analysis\\listing_state_snapshot_$RunDate.md') < script.index('analysis\\active_tests_$RunDate.csv')
+    assert script.index('analysis\\active_tests_$RunDate.csv') < script.index('analysis\\email_revenue_report_$RunDate.md')
     assert script.index('analysis\\email_revenue_report_$RunDate.md') < script.index(
         'analysis\\evidence_bundle_$RunDate\\evidence_manifest_$RunDate.json'
     )

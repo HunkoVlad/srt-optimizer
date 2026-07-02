@@ -385,6 +385,45 @@ def listing_change_row(status: str = "active", review_after_run_date: str = "202
     }
 
 
+def active_test_row(
+    test_id: str,
+    test_type: str,
+    status: str = "active",
+    *,
+    change_date: str = "2026-06-29",
+    review_after_run_date: str = "2026-07-07",
+    source: str = "manual_log",
+    new_value: str = "",
+    expected_effect: str = "",
+    review_due: str = "false",
+) -> dict[str, str]:
+    return {
+        "test_id": test_id,
+        "canonical_test_id": test_id,
+        "test_type": test_type,
+        "duplicate_group_key": test_id,
+        "change_date": change_date,
+        "run_date_started": "2026-06-29",
+        "related_issue_id": "airbnb_visibility_up_conversion_down",
+        "change_area": test_id,
+        "old_value": "",
+        "new_value": new_value,
+        "reason": "Track current active experiment.",
+        "expected_effect": expected_effect or "Monitor the active test against next weekly metrics.",
+        "primary_success_metrics": "search_to_listing_conversion_rate; wishlist_additions"
+        if test_type == "listing"
+        else "revenue_per_cleaning; booked_nights; occupancy; ADR",
+        "guardrails": "Diagnostic tracking only; do not create automatic PriceLabs recommendations.",
+        "review_after_run_date": review_after_run_date,
+        "status": status,
+        "review_due": review_due,
+        "source": source,
+        "merged_from_test_ids": "",
+        "supporting_changes": "",
+        "notes": "",
+    }
+
+
 def stayfi_anniversary_summary_row() -> dict[str, str]:
     return {
         "run_date": "2026-06-01",
@@ -1136,6 +1175,79 @@ def test_active_listing_tests_do_not_change_recommendation_review() -> None:
 
     without_recommendations = without_change.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
     with_recommendations = with_change.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    assert with_recommendations == without_recommendations
+
+
+def test_active_tests_csv_drives_active_sections_and_excludes_superseded() -> None:
+    markdown = build_markdown(
+        "2026-06-29",
+        sample_rows(),
+        listing_change_rows=[listing_change_row(status="active")],
+        listing_change_log_available=True,
+        active_test_rows=[
+            active_test_row(
+                "title_photo_search_card_test",
+                "listing",
+                new_value="Spa Stay • Game Room • Fire Pit • Pool/Lake Access",
+                expected_effect="Improve search-to-listing conversion and wishlist activity.",
+            ),
+            active_test_row(
+                "pricelabs_los_pricing_test",
+                "pricelabs",
+                status="superseded",
+                review_after_run_date="2026-07-14",
+                new_value="1 night +15%; 2 nights -5%; 3 nights -10%; 4+ nights -15%",
+            ),
+            active_test_row(
+                "competitiveness_booking_friction_test",
+                "pricelabs",
+                review_after_run_date="2026-07-21",
+                source="user_declared",
+                expected_effect="Monitor value perception and booking friction before changing rules again.",
+            ),
+        ],
+        active_tests_available=True,
+    )
+    listing_section = markdown.split("## Active Listing Tests", 1)[1].split("## Active PriceLabs Tests", 1)[0]
+    pricelabs_section = markdown.split("## Active PriceLabs Tests", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "Active test: title_photo_search_card_test." in listing_section
+    assert "Spa Stay • Game Room • Fire Pit • Pool/Lake Access" in listing_section
+    assert "cover_photo_test" not in listing_section
+    assert "Active test: competitiveness_booking_friction_test." in pricelabs_section
+    assert "pricelabs_los_pricing_test" not in pricelabs_section
+
+
+def test_active_tests_review_due_uses_active_rows_only() -> None:
+    markdown = build_markdown(
+        "2026-06-29",
+        sample_rows(),
+        active_test_rows=[
+            active_test_row("title_photo_search_card_test", "listing", review_after_run_date="2026-06-29", review_due="true"),
+            active_test_row("pricelabs_los_pricing_test", "pricelabs", status="superseded", review_after_run_date="2026-06-01", review_due="true"),
+        ],
+        active_tests_available=True,
+    )
+    section = markdown.split("## Test Review Due", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "title_photo_search_card_test" in section
+    assert "pricelabs_los_pricing_test" not in section
+
+
+def test_active_tests_do_not_change_recommendation_review() -> None:
+    without_tests = build_markdown("2026-06-29", sample_rows())
+    with_tests = build_markdown(
+        "2026-06-29",
+        sample_rows(),
+        active_test_rows=[
+            active_test_row("title_photo_search_card_test", "listing"),
+            active_test_row("competitiveness_booking_friction_test", "pricelabs"),
+        ],
+        active_tests_available=True,
+    )
+
+    without_recommendations = without_tests.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
+    with_recommendations = with_tests.split("## Recommendation Review", 1)[1].split("## Booking Source Notes", 1)[0]
     assert with_recommendations == without_recommendations
 
 

@@ -1,6 +1,6 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$RunDate
+    [string]$RunDate = (Get-Date -Format "yyyy-MM-dd"),
+    [switch]$AutoSendStayFi
 )
 
 Set-StrictMode -Version Latest
@@ -17,20 +17,17 @@ elseif ($RunDate -notmatch '^\d{4}-\d{2}-\d{2}$') {
 $scriptRoot = $PSScriptRoot
 $projectRoot = Split-Path -Parent $scriptRoot
 $runRoot = Join-Path (Join-Path $projectRoot "data\runs") $RunDate
-$rawDir = Join-Path $runRoot "raw"
 $logsDir = Join-Path $runRoot "logs"
 $analysisDir = Join-Path $runRoot "analysis"
 $logFile = Join-Path $logsDir "monday_full_report_$RunDate.log"
-$airbnbCaptureManifestFile = Join-Path (Join-Path $runRoot "downloads_staging\airbnb") "airbnb_capture_manifest_$RunDate.json"
+$scheduledLogFile = Join-Path $logsDir "scheduled_pipeline_$RunDate.log"
+$summaryFile = Join-Path $analysisDir "stayfi_anniversary_email_summary_$RunDate.csv"
+$sendResultsFile = Join-Path $analysisDir "stayfi_anniversary_email_send_results_$RunDate.csv"
+$scheduledWrapper = Join-Path $scriptRoot "run_scheduled_weekly_pipeline.ps1"
+$stayfiSendWrapper = Join-Path $scriptRoot "send_stayfi_anniversary_emails.ps1"
 
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
-New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
 New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
-
-$pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
-if (-not (Test-Path $pythonExe)) {
-    $pythonExe = "python"
-}
 
 function Write-MondayLog {
     param(
@@ -44,235 +41,208 @@ function Write-MondayLog {
     Write-Host $line
 }
 
-function Invoke-MondayStep {
+function Convert-ToCount {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return 0
+    }
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return 0
+    }
+    $number = 0
+    if ([int]::TryParse($text, [ref]$number)) {
+        return $number
+    }
+    return 0
+}
+
+function Get-RowValue {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Label,
+        [object]$Row,
         [Parameter(Mandatory = $true)]
-        [scriptblock]$Command,
-        [bool]$Blocking = $true
+        [string]$Name,
+        [string]$Fallback = ""
     )
 
-    Write-Host ""
-    Write-Host "== $Label =="
-    Write-MondayLog "started: $Label"
-    $script:LastMondayStepSuccess = $false
-    try {
-        & $Command
-        $exitCode = $LASTEXITCODE
-        if ($null -eq $exitCode) {
-            $exitCode = 0
+    if ($Row.PSObject.Properties.Name -contains $Name) {
+        $value = $Row.$Name
+        if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+            return [string]$value
         }
-        if ($exitCode -eq 0) {
-            Write-MondayLog "completed: $Label"
-            $script:LastMondayStepSuccess = $true
-            return
-        }
-        if ($Blocking) {
-            Write-MondayLog "failed_blocking: $Label exit_code=$exitCode"
-            exit $exitCode
-        }
-        Write-MondayLog "failed_nonblocking: $Label exit_code=$exitCode"
-        return
     }
-    catch {
-        if ($Blocking) {
-            Write-MondayLog "failed_blocking: $Label exception=$($_.Exception.Message)"
-            exit 1
+    return $Fallback
+}
+
+function Write-ResultTable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$Rows,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Columns
+    )
+
+    foreach ($row in $Rows) {
+        $parts = @()
+        foreach ($column in $Columns) {
+            $value = Get-RowValue -Row $row -Name $column -Fallback ""
+            $parts += "$column=$value"
         }
-        Write-MondayLog "failed_nonblocking: $Label exception=$($_.Exception.Message)"
-        return
+        Write-MondayLog ("  " + ($parts -join " | "))
     }
 }
 
 Write-MondayLog "Monday full report workflow started."
-Write-MondayLog "Run date: $RunDate"
+Write-MondayLog "Resolved RunDate: $RunDate"
 Write-MondayLog "Project root: $projectRoot"
 Write-MondayLog "Run folder: $runRoot"
-Write-MondayLog "Python executable: $pythonExe"
-Write-MondayLog "Airbnb remains diagnostic only; PriceLabs remains source of truth for pricing/revenue metrics."
-Write-MondayLog "Persistent Airbnb browser profile is local-only and must not be copied to evidence: .local/browser_profiles/airbnb"
-
-$requiredRawFiles = @(
-    (Join-Path $rawDir "priceLabs_future_export.csv"),
-    (Join-Path $rawDir "price_occ.csv"),
-    (Join-Path $rawDir "monthly_trends.csv"),
-    (Join-Path $rawDir "bookings_report.xlsx")
-)
-
-$missingRequired = @()
-foreach ($path in $requiredRawFiles) {
-    if (-not (Test-Path $path)) {
-        $missingRequired += $path
-    }
-}
-
-if ($missingRequired.Count -gt 0) {
-    Write-MondayLog "failed_blocking: PriceLabs required raw input preflight."
-    Write-MondayLog "Missing required raw file(s):"
-    foreach ($path in $missingRequired) {
-        Write-MondayLog "  $path"
-    }
-    Write-MondayLog "Weekly report not executed because PriceLabs required inputs are incomplete."
-    exit 2
-}
-Write-MondayLog "completed: PriceLabs required raw input preflight."
-
-$airbnbSearchSuccess = $false
-$airbnbCaptureSuccess = $false
-$airbnbPromoteSuccess = $false
-$airbnbDiagnosticsSuccess = $false
-$weeklyReportSuccess = $false
+Write-MondayLog "AutoSendStayFi enabled: $($AutoSendStayFi.IsPresent)"
+Write-MondayLog "Safety: default mode never sends StayFi emails without exact SEND confirmation."
+Write-MondayLog "Safety: AutoSendStayFi can send only after weekly pipeline success and a successful dry-run with sendable recipients."
+Write-MondayLog "PriceLabs recommendation logic and pricing logic are not changed by this wrapper."
 
 Push-Location $projectRoot
 try {
-    $env:PYTHONPATH = "src"
-
-    Invoke-MondayStep "Airbnb search screening" {
-        & $pythonExe -m airbnb.airbnb_search_screening --run-date $RunDate --include-filtered-scenarios
-    } -Blocking $false
-    $airbnbSearchSuccess = $script:LastMondayStepSuccess
-
-    Write-MondayLog "Airbnb funnel capture uses persistent profile with manual MFA fallback when Airbnb requires login."
-    Invoke-MondayStep "Airbnb funnel capture" {
-        & $pythonExe -m airbnb.download_diagnostics --run-date $RunDate --mode capture-headed-and-validate --use-persistent-profile
-    } -Blocking $false
-    $airbnbCaptureSuccess = $script:LastMondayStepSuccess
-    if (Test-Path $airbnbCaptureManifestFile) {
-        try {
-            $airbnbCaptureManifest = Get-Content -Raw -Path $airbnbCaptureManifestFile | ConvertFrom-Json
-            Write-MondayLog "Airbnb date range setup: started"
-            $airbnbDateRangeAttempts = @($airbnbCaptureManifest.date_range_attempt_results)
-            if ($airbnbDateRangeAttempts.Count -gt 0) {
-                foreach ($attempt in $airbnbDateRangeAttempts) {
-                    Write-MondayLog "Airbnb date range setup: attempt $($attempt.attempt)/$($airbnbDateRangeAttempts.Count)"
-                }
-            }
-            elseif ($airbnbCaptureManifest.date_range_attempts) {
-                Write-MondayLog "Airbnb date range setup: attempt $($airbnbCaptureManifest.date_range_attempts)/$($airbnbCaptureManifest.date_range_attempts)"
-            }
-            if ($airbnbCaptureManifest.date_range_match) {
-                Write-MondayLog "Airbnb date range setup: matched"
-            }
-            else {
-                Write-MondayLog "Airbnb date range setup: failed"
-            }
-            if ($airbnbCaptureManifest.failure_reason -eq "date_range_not_able_to_set_up") {
-                Write-MondayLog "Airbnb capture: skipped due to date_range_not_able_to_set_up"
-            }
-        }
-        catch {
-            Write-MondayLog "Airbnb capture manifest could not be read: $airbnbCaptureManifestFile"
-        }
+    Write-MondayLog "started: scheduled weekly pipeline"
+    & $scheduledWrapper -RunDate $RunDate 2>&1 | ForEach-Object {
+        Write-MondayLog "PIPELINE: $_"
     }
-
-    Invoke-MondayStep "Promote Airbnb staged diagnostics" {
-        & $pythonExe -m airbnb.download_diagnostics --run-date $RunDate --mode promote-staged
-    } -Blocking $false
-    $airbnbPromoteSuccess = $script:LastMondayStepSuccess
-
-    Invoke-MondayStep "Airbnb diagnostics" {
-        & $pythonExe -m airbnb.run_diagnostics --run-date $RunDate
-    } -Blocking $false
-    $airbnbDiagnosticsSuccess = $script:LastMondayStepSuccess
-
-    Invoke-MondayStep "Weekly pipeline and report generation" {
-        & (Join-Path $projectRoot "run_weekly_pipeline.ps1") -RunDate $RunDate
-    } -Blocking $true
-    $weeklyReportSuccess = $script:LastMondayStepSuccess
+    $pipelineExitCode = $LASTEXITCODE
+    if ($null -eq $pipelineExitCode) {
+        $pipelineExitCode = 0
+    }
+    if ($pipelineExitCode -ne 0) {
+        Write-MondayLog "failed_blocking: scheduled weekly pipeline exit_code=$pipelineExitCode"
+        if (Test-Path $scheduledLogFile) {
+            Write-MondayLog "Scheduled pipeline log: $scheduledLogFile"
+            foreach ($line in Get-Content -Path $scheduledLogFile) {
+                Write-MondayLog "SCHEDULED_LOG: $line"
+            }
+        }
+        Write-MondayLog "StayFi send skipped because weekly pipeline failed."
+        exit $pipelineExitCode
+    }
+    Write-MondayLog "completed: scheduled weekly pipeline"
 }
 finally {
     Pop-Location
 }
 
-$emailMarkdownPath = Join-Path $analysisDir "email_revenue_report_$RunDate.md"
-$emailHtmlPath = Join-Path $analysisDir "email_revenue_report_$RunDate.html"
-$evidenceBundlePath = Join-Path $analysisDir "evidence_bundle_$RunDate"
-$emailDraftPath = Join-Path $analysisDir "email_revenue_report_$RunDate.eml"
-$emailSendResultPath = Join-Path $analysisDir "email_revenue_report_send_result_$RunDate.csv"
-$airbnbIntegrationStatus = "failed"
-$airbnbIntegrationReason = "email markdown file was not created"
-$emailMarkdownAirbnbSectionStatus = "missing"
-if (Test-Path $emailMarkdownPath) {
-    $emailMarkdownText = Get-Content -Raw -Path $emailMarkdownPath
-    if ($emailMarkdownText -match "## Airbnb Funnel Signals") {
-        $emailMarkdownAirbnbSectionStatus = "included"
-        if ($emailMarkdownText -match "Airbnb funnel diagnostics unavailable") {
-            $airbnbIntegrationStatus = "unavailable"
-            if ($emailMarkdownText -match "date_range_not_able_to_set_up") {
-                $airbnbIntegrationReason = "root cause date_range_not_able_to_set_up"
-            }
-            else {
-                $airbnbIntegrationReason = "see Airbnb Funnel Signals section for exact reason"
-            }
-        }
-        else {
-            $airbnbIntegrationStatus = "included"
-            $airbnbIntegrationReason = "Airbnb summary rows rendered in weekly report"
-        }
+if (-not (Test-Path $summaryFile)) {
+    Write-MondayLog "StayFi summary missing: $summaryFile"
+    Write-MondayLog "No StayFi anniversary emails to send this week."
+    exit 0
+}
+
+$summaryRows = @(Import-Csv -Path $summaryFile)
+if ($summaryRows.Count -eq 0) {
+    Write-MondayLog "StayFi summary file has no rows: $summaryFile"
+    Write-MondayLog "No StayFi anniversary emails to send this week."
+    exit 0
+}
+
+$summary = $summaryRows[0]
+$windowStart = Get-RowValue -Row $summary -Name "anniversary_audience_window_start"
+$windowEnd = Get-RowValue -Row $summary -Name "anniversary_audience_window_end"
+$rowsInAudienceWindow = Convert-ToCount (Get-RowValue -Row $summary -Name "rows_in_audience_window")
+$eligibleGuests = Convert-ToCount (Get-RowValue -Row $summary -Name "eligible_guests")
+$draftsPrepared = Convert-ToCount (Get-RowValue -Row $summary -Name "drafts_prepared_csv" -Fallback (Get-RowValue -Row $summary -Name "drafts_created"))
+$skippedDuplicates = Convert-ToCount (Get-RowValue -Row $summary -Name "skipped_duplicates_from_log" -Fallback (Get-RowValue -Row $summary -Name "skipped_duplicates"))
+$excludedNoOptIn = Convert-ToCount (Get-RowValue -Row $summary -Name "excluded_no_opt_in")
+$excludedBadRating = Convert-ToCount (Get-RowValue -Row $summary -Name "excluded_bad_rating")
+$dateParseFailures = Convert-ToCount (Get-RowValue -Row $summary -Name "date_parse_failed")
+
+Write-MondayLog "StayFi anniversary summary:"
+Write-MondayLog "  anniversary audience window: $windowStart to $windowEnd"
+Write-MondayLog "  rows in audience window: $rowsInAudienceWindow"
+Write-MondayLog "  eligible guests: $eligibleGuests"
+Write-MondayLog "  draft-ready CSV records prepared: $draftsPrepared"
+Write-MondayLog "  skipped duplicates from permanent log: $skippedDuplicates"
+Write-MondayLog "  excluded no opt-in: $excludedNoOptIn"
+Write-MondayLog "  excluded bad rating: $excludedBadRating"
+Write-MondayLog "  date parse failures: $dateParseFailures"
+
+if ($eligibleGuests -eq 0 -or $draftsPrepared -eq 0) {
+    Write-MondayLog "No StayFi anniversary emails to send this week."
+    exit 0
+}
+
+Push-Location $projectRoot
+try {
+    Write-MondayLog "started: StayFi anniversary email dry-run"
+    & $stayfiSendWrapper -RunDate $RunDate -DryRun 2>&1 | ForEach-Object {
+        Write-MondayLog "STAYFI_DRY_RUN: $_"
     }
-    else {
-        $airbnbIntegrationReason = "email markdown does not contain Airbnb Funnel Signals"
+    $dryRunExitCode = $LASTEXITCODE
+    if ($null -eq $dryRunExitCode) {
+        $dryRunExitCode = 0
+    }
+    if ($dryRunExitCode -ne 0) {
+        Write-MondayLog "failed_blocking: StayFi anniversary email dry-run exit_code=$dryRunExitCode"
+        exit $dryRunExitCode
+    }
+    Write-MondayLog "completed: StayFi anniversary email dry-run"
+}
+finally {
+    Pop-Location
+}
+
+if (-not (Test-Path $sendResultsFile)) {
+    Write-MondayLog "Dry-run result file missing: $sendResultsFile"
+    Write-MondayLog "Dry-run found no sendable recipients."
+    exit 0
+}
+
+$dryRunRows = @(Import-Csv -Path $sendResultsFile)
+$sendableRows = @($dryRunRows | Where-Object { $_.send_status -eq "dry_run_would_send" })
+
+Write-MondayLog "StayFi dry-run recipient list:"
+Write-ResultTable -Rows $dryRunRows -Columns @("email", "subject", "send_status")
+
+if ($sendableRows.Count -eq 0) {
+    Write-MondayLog "Dry-run found no sendable recipients."
+    exit 0
+}
+
+if ($AutoSendStayFi.IsPresent) {
+    Write-MondayLog "AutoSendStayFi enabled; sending StayFi anniversary emails after successful dry-run."
+}
+else {
+    $confirmation = Read-Host "Send these StayFi anniversary emails now? Type SEND to continue"
+    if ($confirmation -ne "SEND") {
+        Write-MondayLog "Send skipped by user. Dry-run results are available for review."
+        exit 0
     }
 }
 
-$weeklyReportEmailStatus = "skipped"
-if (Test-Path $emailSendResultPath) {
-    try {
-        $sendRows = Import-Csv -Path $emailSendResultPath
-        $latestSendRow = @($sendRows)[-1]
-        if ($latestSendRow -and $latestSendRow.send_status) {
-            $weeklyReportEmailStatus = $latestSendRow.send_status
-        }
+Push-Location $projectRoot
+try {
+    Write-MondayLog "started: StayFi anniversary email real send"
+    & $stayfiSendWrapper -RunDate $RunDate 2>&1 | ForEach-Object {
+        Write-MondayLog "STAYFI_SEND: $_"
     }
-    catch {
-        $weeklyReportEmailStatus = "failed"
+    $sendExitCode = $LASTEXITCODE
+    if ($null -eq $sendExitCode) {
+        $sendExitCode = 0
     }
+    if ($sendExitCode -ne 0) {
+        Write-MondayLog "failed_blocking: StayFi anniversary email real send exit_code=$sendExitCode"
+        exit $sendExitCode
+    }
+    Write-MondayLog "completed: StayFi anniversary email real send"
 }
-elseif (Test-Path $emailDraftPath) {
-    $weeklyReportEmailStatus = "draft_created"
-}
-
-Write-Host ""
-Write-Host "Monday full report completed."
-Write-MondayLog "Monday full report completed."
-Write-MondayLog "PriceLabs core: success"
-Write-MondayLog "Airbnb search screening: $(if ($airbnbSearchSuccess) { 'success' } else { 'failure_nonblocking' })"
-Write-MondayLog "Airbnb capture: $(if ($airbnbCaptureSuccess) { 'completed' } else { 'failed_or_skipped' })"
-Write-MondayLog "Airbnb staged promotion: $(if ($airbnbPromoteSuccess) { 'completed' } else { 'failed_or_nothing_promoted' })"
-Write-MondayLog "Airbnb diagnostics: $(if ($airbnbDiagnosticsSuccess) { 'completed' } else { 'failed_or_missing_inputs' })"
-Write-MondayLog "Airbnb funnel diagnostics: $(if ($airbnbCaptureSuccess -and $airbnbPromoteSuccess -and $airbnbDiagnosticsSuccess) { 'success' } else { 'failure_nonblocking_or_unavailable' })"
-Write-MondayLog "Airbnb report integration: $airbnbIntegrationStatus - $airbnbIntegrationReason"
-Write-MondayLog "Email markdown Airbnb section: $emailMarkdownAirbnbSectionStatus"
-Write-MondayLog "Weekly report: $(if ($weeklyReportSuccess) { 'success' } else { 'failure' })"
-Write-MondayLog "Weekly report email: $weeklyReportEmailStatus"
-
-Write-Host "PriceLabs core: success"
-Write-Host "Airbnb search screening: $(if ($airbnbSearchSuccess) { 'success' } else { 'failure_nonblocking' })"
-Write-Host "Airbnb capture: $(if ($airbnbCaptureSuccess) { 'completed' } else { 'failed_or_skipped' })"
-Write-Host "Airbnb staged promotion: $(if ($airbnbPromoteSuccess) { 'completed' } else { 'failed_or_nothing_promoted' })"
-Write-Host "Airbnb diagnostics: $(if ($airbnbDiagnosticsSuccess) { 'completed' } else { 'failed_or_missing_inputs' })"
-Write-Host "Airbnb funnel diagnostics: $(if ($airbnbCaptureSuccess -and $airbnbPromoteSuccess -and $airbnbDiagnosticsSuccess) { 'success' } else { 'failure_nonblocking_or_unavailable' })"
-Write-Host "Airbnb report integration: $airbnbIntegrationStatus - $airbnbIntegrationReason"
-Write-Host "Email markdown Airbnb section: $emailMarkdownAirbnbSectionStatus"
-Write-Host "Weekly report: $(if ($weeklyReportSuccess) { 'success' } else { 'failure' })"
-Write-Host "Weekly report email: $weeklyReportEmailStatus"
-Write-Host "Report path: $emailMarkdownPath"
-Write-Host "HTML report path: $emailHtmlPath"
-Write-Host "Evidence bundle path: $evidenceBundlePath"
-if (Test-Path $emailDraftPath) {
-    Write-Host "Email draft path: $emailDraftPath"
+finally {
+    Pop-Location
 }
 
-Write-MondayLog "Report path: $emailMarkdownPath"
-Write-MondayLog "HTML report path: $emailHtmlPath"
-Write-MondayLog "Evidence bundle path: $evidenceBundlePath"
-if (Test-Path $emailDraftPath) {
-    Write-MondayLog "Email draft path: $emailDraftPath"
+if (Test-Path $sendResultsFile) {
+    $sendRows = @(Import-Csv -Path $sendResultsFile)
+    Write-MondayLog "StayFi final send results:"
+    Write-ResultTable -Rows $sendRows -Columns @("email", "send_status", "gmail_message_id", "sent_at", "error_message")
+    Write-MondayLog "StayFi final send result path: $sendResultsFile"
 }
-if (Test-Path $emailSendResultPath) {
-    Write-MondayLog "Email send result path: $emailSendResultPath"
-}
+
 Write-MondayLog "Monday full report workflow finished."
-
 exit 0
