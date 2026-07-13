@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$TaskName = "Aloha Poconos Monday Full Report",
     [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$Time = "09:00",
@@ -59,10 +59,12 @@ if ($autoSendEnabled) {
 }
 
 $quotedProjectRoot = Quote-ForPowerShellSingleString -Value $resolvedProjectRoot
-$workflowCommand = "cd $quotedProjectRoot; .\.venv\Scripts\Activate.ps1; .\scripts\run_monday_full_report.ps1"
+$scheduledTaskLogDir = "logs\scheduled_tasks"
+$workflowInvocation = ".\scripts\run_monday_full_report.ps1"
 if ($workflowArgs.Count -gt 0) {
-    $workflowCommand = "$workflowCommand $($workflowArgs -join ' ')"
+    $workflowInvocation = "$workflowInvocation $($workflowArgs -join ' ')"
 }
+$workflowCommand = "cd $quotedProjectRoot; New-Item -ItemType Directory -Path '$scheduledTaskLogDir' -Force | Out-Null; `$scheduledTaskLog = Join-Path '$scheduledTaskLogDir' ('monday_full_report_' + (Get-Date -Format 'yyyy-MM-dd_HHmmss') + '.log'); & { .\.venv\Scripts\Activate.ps1; $workflowInvocation } *> `$scheduledTaskLog"
 $actionArguments = "-NoProfile -ExecutionPolicy Bypass -Command " + '"' + $workflowCommand + '"'
 
 Write-Host "Monday full report scheduled task setup"
@@ -72,6 +74,8 @@ Write-Host "Schedule: $DayOfWeek at $Time"
 Write-Host "AutoSendStayFi enabled: $autoSendEnabled"
 Write-Host "Task logon type: Interactive token. Run only when user is logged on."
 Write-Host "Run with highest privileges: enabled."
+Write-Host "Scheduled task log folder: logs\scheduled_tasks"
+Write-Host "Scheduled task log pattern: logs\scheduled_tasks\monday_full_report_<yyyy-MM-dd_HHmmss>.log"
 Write-Host "Command:"
 Write-Host "powershell.exe $actionArguments"
 Write-Host "No secrets are printed or inspected."
@@ -97,13 +101,23 @@ $principalUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else {
 $principal = New-ScheduledTaskPrincipal -UserId $principalUser -LogonType Interactive -RunLevel Highest
 $description = "Runs Aloha Poconos weekly SRT report and StayFi anniversary workflow. StayFi auto-send follows dry-run and duplicate-log safety checks."
 
-Register-ScheduledTask `
-    -TaskName $TaskName `
-    -Action $action `
-    -Trigger $trigger `
-    -Settings $settings `
-    -Principal $principal `
-    -Description $description `
-    -Force | Out-Null
+try {
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Action $action `
+        -Trigger $trigger `
+        -Settings $settings `
+        -Principal $principal `
+        -Description $description `
+        -Force `
+        -ErrorAction Stop | Out-Null
+}
+catch {
+    Write-Error "Failed to register scheduled task '$TaskName': $($_.Exception.Message). Rerun PowerShell as Administrator and retry this command."
+    exit 1
+}
 
 Write-Host "Registered scheduled task: $TaskName"
+
+
+

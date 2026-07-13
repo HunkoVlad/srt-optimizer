@@ -1,4 +1,4 @@
-"""Email-ready monthly revenue report from the rolling revenue view."""
+﻿"""Email-ready monthly revenue report from the rolling revenue view."""
 
 from __future__ import annotations
 
@@ -588,6 +588,42 @@ def airbnb_wow_value(metric_name: str, value: str, metric_type: str) -> str:
     return str(int(number)) if number.is_integer() else f"{number:g}"
 
 
+def parse_airbnb_wow_number(value: str) -> float | None:
+    if value == "":
+        return None
+    try:
+        return float(str(value).replace("%", ""))
+    except ValueError:
+        return None
+
+
+def airbnb_wow_direction(previous: str, current: str, change: str, metric_type: str) -> str:
+    change_number = parse_airbnb_wow_number(change)
+    if change_number is None:
+        previous_number = parse_airbnb_wow_number(previous)
+        current_number = parse_airbnb_wow_number(current)
+        if previous_number is None or current_number is None:
+            return "unavailable"
+        change_number = current_number - previous_number
+
+    if metric_type == "rate":
+        if abs(change_number) < 0.10:
+            return "essentially flat"
+        return "improved" if change_number > 0 else "declined"
+
+    if change_number == 0:
+        return "essentially flat"
+    previous_number = parse_airbnb_wow_number(previous)
+    if previous_number not in (None, 0) and abs(change_number / previous_number) < 0.05:
+        return "essentially flat"
+    return "increased" if change_number > 0 else "declined"
+
+
+def airbnb_wow_interpretation(label: str, direction: str) -> str:
+    if direction == "unavailable":
+        return f"- Interpretation: {label} direction is unavailable."
+    return f"- Interpretation: {label} {direction}."
+
 def airbnb_funnel_wow_section(history_rows: list[dict[str, str]] | None, *, history_path: Path | None = None) -> list[str]:
     lines = ["## Airbnb Funnel Week-over-Week", ""]
     if not history_rows:
@@ -599,33 +635,31 @@ def airbnb_funnel_wow_section(history_rows: list[dict[str, str]] | None, *, hist
 
     rows_by_metric = {row.get("metric_name", ""): row for row in history_rows}
     rendered_any = False
+    interpretation_lines: list[str] = []
     for metric_name, label, metric_type in AIRBNB_FUNNEL_SIGNALS:
         row = rows_by_metric.get(metric_name)
         if not row:
             continue
-        previous = airbnb_wow_value(metric_name, row.get("previous_week_value", ""), metric_type)
-        current = airbnb_wow_value(metric_name, row.get("current_value", ""), metric_type)
+        previous_raw = row.get("previous_week_value", "")
+        current_raw = row.get("current_value", "")
         change = row.get("change_vs_previous_week", "")
+        previous = airbnb_wow_value(metric_name, previous_raw, metric_type)
+        current = airbnb_wow_value(metric_name, current_raw, metric_type)
         if metric_type == "rate":
             change_text = f"{signed_number(change, decimals=2)} pp"
         else:
             change_text = signed_number(change)
         lines.append(f"- {label}: {previous} \u2192 {current} ({change_text})")
+        direction = airbnb_wow_direction(previous_raw, current_raw, change, metric_type)
+        interpretation_lines.append(airbnb_wow_interpretation(label, direction))
         rendered_any = True
 
     if not rendered_any:
         lines.extend(["- Airbnb funnel week-over-week comparison unavailable for this run.", ""])
         return lines
 
-    lines.extend(
-        [
-            "- Interpretation: Search-to-listing conversion improved slightly.",
-            "- Interpretation: Listing-to-booking conversion was essentially flat.",
-            "- Interpretation: Visibility volume softened slightly.",
-            "- Diagnostic only; this does not create a PriceLabs rule recommendation.",
-            "",
-        ]
-    )
+    lines.extend(interpretation_lines)
+    lines.extend(["- Diagnostic only; this does not create a PriceLabs rule recommendation.", ""])
     return lines
 
 
@@ -1199,9 +1233,9 @@ def build_markdown(
 ) -> str:
     sorted_rows = sorted(rows, key=lambda row: row["stay_month"])
     lines = [
-        f"Subject: Aloha Poconos Weekly Revenue Snapshot — {run_date}",
+        f"Subject: Aloha Poconos Weekly Revenue Snapshot â€” {run_date}",
         "",
-        f"# Aloha Poconos Weekly Revenue Snapshot — {run_date}",
+        f"# Aloha Poconos Weekly Revenue Snapshot â€” {run_date}",
         "",
         "## Executive Snapshot",
         "",
@@ -1500,3 +1534,5 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
+
+

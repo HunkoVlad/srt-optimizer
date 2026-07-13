@@ -1,4 +1,4 @@
-import csv
+﻿import csv
 import json
 import sys
 from pathlib import Path
@@ -573,7 +573,7 @@ def competitor_calendar_rows() -> list[dict[str, str]]:
 def test_email_revenue_report_content() -> None:
     markdown = build_markdown("2026-05-08", sample_rows())
 
-    assert "Subject: Aloha Poconos Weekly Revenue Snapshot — 2026-05-08" in markdown
+    assert "Subject: Aloha Poconos Weekly Revenue Snapshot â€” 2026-05-08" in markdown
     assert "## Executive Snapshot" in markdown
     assert "## What Needs Attention" in markdown
     assert "## What To Protect" in markdown
@@ -658,8 +658,55 @@ def test_airbnb_funnel_week_over_week_section_uses_history_comparison() -> None:
     assert "- First-page search impression rate: 60.9% \u2192 56.5% (-4.4 pp)" in section
     assert "- Search-to-listing conversion rate: 9.48% \u2192 10.15% (+0.67 pp)" in section
     assert "- Listing-to-booking conversion rate: 1.49% \u2192 1.50% (+0.01 pp)" in section
+    assert "- Interpretation: Search-to-listing conversion rate improved." in section
+    assert "- Interpretation: Listing-to-booking conversion rate essentially flat." in section
+    assert "- Interpretation: First-page search impressions declined." in section
+    assert "- Interpretation: Estimated relevant searches essentially flat." in section
     assert "Diagnostic only; this does not create a PriceLabs rule recommendation." in section
 
+
+
+def test_airbnb_funnel_week_over_week_interpretation_uses_numeric_direction() -> None:
+    metrics = [
+        ("page_views", "282", "358", "-76"),
+        ("first_page_search_impressions", "2861", "3436", "-575"),
+        ("estimated_relevant_searches", "4924.27", "5913.94", "-989.67"),
+        ("wishlist_additions", "31", "31", "0"),
+        ("average_overall_conversion_rate", "0.11%", "0.09%", "0.02"),
+        ("first_page_search_impression_rate", "58.1%", "58.1%", "0"),
+        ("search_to_listing_conversion_rate", "4.85%", "7.93%", "-3.08"),
+        ("listing_to_booking_conversion_rate", "2.19%", "0.51%", "1.68"),
+    ]
+    history_rows = [
+        {
+            "metric_name": metric_name,
+            "current_value": current,
+            "previous_week_value": previous,
+            "change_vs_previous_week": change,
+        }
+        for metric_name, current, previous, change in metrics
+    ]
+
+    markdown = build_markdown(
+        "2026-07-13",
+        sample_rows(),
+        airbnb_summary_rows=[airbnb_summary_row()],
+        airbnb_weekly_history_rows=history_rows,
+    )
+    section = markdown.split("## Airbnb Funnel Week-over-Week", 1)[1].split("## Open Diagnostic Issues", 1)[0]
+
+    assert "- Search-to-listing conversion rate: 7.93% \u2192 4.85% (-3.08 pp)" in section
+    assert "- Listing-to-booking conversion rate: 0.51% \u2192 2.19% (+1.68 pp)" in section
+    assert "- Interpretation: Search-to-listing conversion rate declined." in section
+    assert "- Interpretation: Listing-to-booking conversion rate improved." in section
+    assert "- Interpretation: Page views declined." in section
+    assert "- Interpretation: First-page search impressions declined." in section
+    assert "- Interpretation: Estimated relevant searches declined." in section
+    assert "- Interpretation: Wishlist additions essentially flat." in section
+    assert "- Interpretation: Average overall conversion rate essentially flat." in section
+    assert "- Interpretation: First-page search impression rate essentially flat." in section
+    assert "Search-to-listing conversion improved slightly" not in section
+    assert "Listing-to-booking conversion was essentially flat" not in section
 
 def test_airbnb_funnel_week_over_week_unavailable_does_not_fail_report() -> None:
     history_path = Path("data/runs/2026-05-08/analysis/airbnb_weekly_history_comparison_2026-05-08.csv")
@@ -1219,7 +1266,7 @@ def test_active_tests_csv_drives_active_sections_and_excludes_superseded() -> No
             active_test_row(
                 "title_photo_search_card_test",
                 "listing",
-                new_value="Spa Stay • Game Room • Fire Pit • Pool/Lake Access",
+                new_value="Spa Stay â€¢ Game Room â€¢ Fire Pit â€¢ Pool/Lake Access",
                 expected_effect="Improve search-to-listing conversion and wishlist activity.",
             ),
             active_test_row(
@@ -1243,7 +1290,7 @@ def test_active_tests_csv_drives_active_sections_and_excludes_superseded() -> No
     pricelabs_section = markdown.split("## Active PriceLabs Tests", 1)[1].split("## Recommendation Review", 1)[0]
 
     assert "Active test: title_photo_search_card_test." in listing_section
-    assert "Spa Stay • Game Room • Fire Pit • Pool/Lake Access" in listing_section
+    assert "Spa Stay â€¢ Game Room â€¢ Fire Pit â€¢ Pool/Lake Access" in listing_section
     assert "cover_photo_test" not in listing_section
     assert "Active test: competitiveness_booking_friction_test." in pricelabs_section
     assert "pricelabs_los_pricing_test" not in pricelabs_section
@@ -1746,3 +1793,4 @@ def test_email_revenue_report_cli_combined_signal_override_and_missing_default(t
     assert "## Recommendation Review" in markdown
     assert "- 2026-06: Monitor" in markdown
     assert "Pricing efficiency risk:" not in markdown
+

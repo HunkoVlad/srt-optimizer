@@ -1,4 +1,4 @@
-import subprocess
+﻿import subprocess
 import shutil
 from pathlib import Path
 
@@ -226,6 +226,11 @@ def test_register_monday_full_report_task_script_builds_safe_command() -> None:
     assert "-NoProfile -ExecutionPolicy Bypass -Command" in script
     assert ".\\.venv\\Scripts\\Activate.ps1" in script
     assert ".\\scripts\\run_monday_full_report.ps1" in script
+    assert "logs\\scheduled_tasks" in script
+    assert "monday_full_report_" in script
+    assert "yyyy-MM-dd_HHmmss" in script
+    assert "*> `$scheduledTaskLog" in script
+    assert "Scheduled task log pattern: logs\\scheduled_tasks\\monday_full_report_<yyyy-MM-dd_HHmmss>.log" in script
     assert "-AutoSendStayFi" in script
     assert "New-ScheduledTaskPrincipal" in script
     assert "-LogonType Interactive" in script
@@ -233,6 +238,10 @@ def test_register_monday_full_report_task_script_builds_safe_command() -> None:
     assert "Run only when user is logged on." in script
     assert "Run with highest privileges: enabled." in script
     assert "No secrets are printed or inspected." in script
+    assert "-ErrorAction Stop | Out-Null" in script
+    assert "Failed to register scheduled task" in script
+    assert "Rerun PowerShell as Administrator" in script
+    assert "Registered scheduled task: $TaskName" in script
 
 
 def test_register_monday_full_report_task_script_validates_required_files_and_whatif() -> None:
@@ -284,6 +293,7 @@ def test_register_monday_full_report_task_whatif_does_not_register(tmp_path: Pat
     assert "WhatIf: scheduled task was not registered." in result.stdout
     assert "AutoSendStayFi enabled: True" in result.stdout
     assert ".\\scripts\\run_monday_full_report.ps1 -AutoSendStayFi" in result.stdout
+    assert "logs\\scheduled_tasks\\monday_full_report_<yyyy-MM-dd_HHmmss>.log" in result.stdout
 
 
 def test_check_monday_full_report_task_script_reports_status_fields() -> None:
@@ -469,3 +479,5 @@ def test_scheduled_wrapper_required_raw_inputs_match_current_pricelabs_sources()
     assert "pricelabs_settings_snapshot_from_ui.json" not in required_block
     assert "Competitor Calendar.csv" not in required_block
     assert "airbnb_" not in required_block
+
+
