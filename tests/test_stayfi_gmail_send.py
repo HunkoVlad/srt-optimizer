@@ -174,6 +174,37 @@ def test_failed_send_does_not_update_permanent_log(tmp_path: Path) -> None:
     assert summary["send_failures"] == "1"
 
 
+def test_oauth_invalid_grant_is_recognized_and_has_recovery_message() -> None:
+    error = RuntimeError("invalid_grant: Token has been expired or revoked.")
+
+    assert gmail_send.is_oauth_token_error(error)
+    assert "Gmail OAuth token is expired or revoked." in gmail_send.OAUTH_RECOVERY_MESSAGE
+    assert "move the Google OAuth app from Testing to In production" in gmail_send.OAUTH_RECOVERY_MESSAGE
+    assert gmail_send.OAUTH_ERROR_EXIT_CODE == 3
+
+
+def test_oauth_failure_does_not_update_permanent_log(tmp_path: Path) -> None:
+    run_dir = tmp_path / "data" / "runs" / RUN_DATE
+    log_file = tmp_path / "data" / "history" / "stayfi_anniversary_email_log.csv"
+    create_input_files(run_dir, log_file)
+    service = FakeGmailService(errors=[RuntimeError("invalid_grant: Token has been expired or revoked.")])
+
+    try:
+        gmail_send.send_emails_from_csv(
+            RUN_DATE,
+            run_dir=run_dir,
+            draft_file=stayfi.draft_path(RUN_DATE, run_dir),
+            log_file=log_file,
+            service=service,
+        )
+    except gmail_send.GmailOAuthError as exc:
+        assert str(exc) == gmail_send.OAUTH_RECOVERY_MESSAGE
+    else:
+        raise AssertionError("Expected GmailOAuthError")
+
+    assert read_csv(log_file) == []
+
+
 def test_dry_run_validates_rows_without_sending_or_updating_log(tmp_path: Path) -> None:
     run_dir = tmp_path / "data" / "runs" / RUN_DATE
     log_file = tmp_path / "data" / "history" / "stayfi_anniversary_email_log.csv"
@@ -272,6 +303,23 @@ def test_gmail_send_is_explicit_and_not_in_weekly_pipeline() -> None:
     assert ".messages().send(" in module_text
     assert "marketing.stayfi_gmail_send" in wrapper_text
     assert "[switch]$DryRun" in wrapper_text
+    assert "[switch]$ResetOAuthToken" in wrapper_text
     assert "--dry-run" in wrapper_text
+    assert "--validate-oauth-only" in wrapper_text
+    assert "gmail_token_backup_$timestamp.json" in wrapper_text
+    assert "No emails will be sent." in wrapper_text
     assert "pip install google-api-python-client google-auth google-auth-oauthlib" in wrapper_text
     assert "marketing.stayfi_gmail_send" not in weekly_pipeline_text
+
+
+def test_gmail_oauth_status_script_is_validation_only() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    script_text = (project_root / "scripts" / "check_gmail_oauth_status.ps1").read_text(encoding="utf-8")
+
+    assert "config\\gmail_oauth_client.json" in script_text
+    assert ".local\\gmail_token.json" in script_text
+    assert "--validate-oauth-only" in script_text
+    assert "this check never sends email" in script_text
+    assert "pip install google-api-python-client google-auth google-auth-oauthlib" in script_text
+    assert "Gmail OAuth token is expired or revoked." in script_text
+    assert "messages.send" not in script_text

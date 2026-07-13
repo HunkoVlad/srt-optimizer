@@ -111,6 +111,8 @@ def test_monday_full_report_wrapper_exists_and_orders_steps() -> None:
     assert "No StayFi anniversary emails to send this week." in script
     assert "Dry-run found no sendable recipients." in script
     assert "Send skipped by user. Dry-run results are available for review." in script
+    assert "StayFi send failed due to Gmail OAuth token error." in script
+    assert "send_stayfi_anniversary_emails.ps1 -RunDate $RunDate -ResetOAuthToken" in script
 
 
 def test_send_weekly_revenue_report_script_is_explicit_manual_send_only() -> None:
@@ -147,6 +149,8 @@ def test_monday_full_report_wrapper_autosend_sends_only_after_successful_dry_run
 
     assert dry_run_position < sendable_position < autosend_position < real_send_position
     assert "failed_blocking: StayFi anniversary email dry-run" in script
+    assert "Test-GmailOAuthErrorText" in script
+    assert "Write-GmailOAuthRecovery" in script
     assert "Dry-run found no sendable recipients." in script
     assert "StayFi final send result path: $sendResultsFile" in script
 
@@ -223,6 +227,11 @@ def test_register_monday_full_report_task_script_builds_safe_command() -> None:
     assert ".\\.venv\\Scripts\\Activate.ps1" in script
     assert ".\\scripts\\run_monday_full_report.ps1" in script
     assert "-AutoSendStayFi" in script
+    assert "New-ScheduledTaskPrincipal" in script
+    assert "-LogonType Interactive" in script
+    assert "-RunLevel Highest" in script
+    assert "Run only when user is logged on." in script
+    assert "Run with highest privileges: enabled." in script
     assert "No secrets are printed or inspected." in script
 
 
@@ -295,6 +304,8 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     repo_root = Path(__file__).resolve().parents[1]
     script = (repo_root / "run_weekly_pipeline.ps1").read_text(encoding="utf-8")
 
+    airbnb_capture_position = script.index('"airbnb.download_diagnostics"')
+    airbnb_promote_position = script.index('"promote-staged"')
     airbnb_position = script.index('"airbnb.run_diagnostics"')
     combined_position = script.index('"analysis.combined_market_listing_signal"')
     diagnostic_position = script.index('"analysis.diagnostic_issue_tracker"')
@@ -310,7 +321,9 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     draft_position = script.index('"pricelabs.transform.email_draft_file"')
 
     assert (
-        airbnb_position
+        airbnb_capture_position
+        < airbnb_promote_position
+        < airbnb_position
         < combined_position
         < diagnostic_position
         < competitor_calendar_position
@@ -324,7 +337,21 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
         < html_position
         < draft_position
     )
+    assert "[switch]$SkipAirbnb" in script
+    assert "[switch]$ForceAirbnbCapture" in script
+    assert "== Airbnb auto diagnostics ==" in script
+    assert "Airbnb raw inputs found:" in script
+    assert "Airbnb analysis outputs found:" in script
+    assert "Airbnb capture required:" in script
+    assert "Airbnb capture status:" in script
+    assert "Airbnb promotion status:" in script
+    assert "Airbnb diagnostics status:" in script
+    assert '"-m", "airbnb.download_diagnostics"' in script
+    assert '"capture-headed-and-validate"' in script
+    assert '"promote-staged"' in script
     assert '"-m", "airbnb.run_diagnostics"' in script
+    assert "Use -ForceAirbnbCapture to recapture." in script
+    assert "Airbnb auto diagnostics skipped because -SkipAirbnb was provided." in script
     assert '"-m", "analysis.combined_market_listing_signal"' in script
     assert '"-m", "analysis.diagnostic_issue_tracker"' in script
     assert '"-m", "pricelabs.transform.competitor_calendar"' in script
@@ -359,13 +386,6 @@ def test_weekly_pipeline_generates_combined_signal_before_email_report() -> None
     assert "stayfi_anniversary_email_summary output path:" in script
     assert "evidence_bundle manifest path:" in script
     assert "Airbnb funnel diagnostics require manual MFA capture before final email report." in script
-    assert "Airbnb diagnostics: completed" in script
-    assert "Airbnb date range setup: started" in script
-    assert "Airbnb date range setup: attempt" in script
-    assert "Airbnb date range setup: matched" in script
-    assert "Airbnb date range setup: failed" in script
-    assert "Airbnb capture: skipped due to date_range_not_able_to_set_up" in script
-    assert "Airbnb diagnostics: skipped due to date_range_not_able_to_set_up" in script
     assert "Airbnb report integration: included" in script
     assert "Airbnb report integration: unavailable" in script
     assert "Airbnb report integration: unavailable, root cause date_range_not_able_to_set_up" in script
@@ -423,6 +443,8 @@ def test_scheduled_wrapper_checks_evidence_bundle_manifest_output() -> None:
     assert 'analysis\\listing_competitor_review_$RunDate.csv' in script
     assert 'analysis\\listing_state_snapshot_$RunDate.md' in script
     assert 'analysis\\active_tests_$RunDate.csv' in script
+    assert 'analysis\\airbnb_weekly_conversion_summary_$RunDate.csv' in script
+    assert 'analysis\\airbnb_weekly_history_comparison_$RunDate.csv' in script
     assert 'analysis\\email_revenue_report_$RunDate.md' in script
     assert script.index('analysis\\diagnostic_issue_tracker_$RunDate.csv') < script.index('analysis\\pricelabs_competitor_calendar_$RunDate.csv')
     assert script.index('analysis\\pricelabs_competitor_calendar_$RunDate.csv') < script.index('analysis\\listing_competitor_review_$RunDate.md')

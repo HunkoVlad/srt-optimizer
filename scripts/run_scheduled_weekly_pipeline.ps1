@@ -136,6 +136,8 @@ if ($exitCode -eq 0) {
         (Join-Path $runRoot "standardized\future_daily_pricing_$RunDate.csv"),
         (Join-Path $runRoot "analysis\future_daily_pricing_enriched_$RunDate.csv"),
         (Join-Path $runRoot "analysis\monthly_revenue_summary_$RunDate.md"),
+        (Join-Path $runRoot "analysis\airbnb_weekly_conversion_summary_$RunDate.csv"),
+        (Join-Path $runRoot "analysis\airbnb_weekly_history_comparison_$RunDate.csv"),
         (Join-Path $runRoot "analysis\diagnostic_issue_tracker_$RunDate.csv"),
         (Join-Path $runRoot "raw\pricelabs_competitor_list_$RunDate.csv"),
         (Join-Path $runRoot "analysis\pricelabs_competitor_calendar_$RunDate.csv"),

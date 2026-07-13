@@ -25,6 +25,8 @@ $summaryFile = Join-Path $analysisDir "stayfi_anniversary_email_summary_$RunDate
 $sendResultsFile = Join-Path $analysisDir "stayfi_anniversary_email_send_results_$RunDate.csv"
 $scheduledWrapper = Join-Path $scriptRoot "run_scheduled_weekly_pipeline.ps1"
 $stayfiSendWrapper = Join-Path $scriptRoot "send_stayfi_anniversary_emails.ps1"
+$gmailOAuthCheckWrapper = Join-Path $scriptRoot "check_gmail_oauth_status.ps1"
+$gmailOAuthRecoveryMessage = "Gmail OAuth token is expired or revoked. Rename/delete .local/gmail_token.json, rerun the script manually, and complete Google authorization in the browser. For unattended weekly sending, move the Google OAuth app from Testing to In production in Google Cloud Console."
 
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
@@ -92,6 +94,20 @@ function Write-ResultTable {
         }
         Write-MondayLog ("  " + ($parts -join " | "))
     }
+}
+
+function Test-GmailOAuthErrorText {
+    param([string]$Text)
+
+    return $Text -match "Gmail OAuth token is expired or revoked|invalid_grant|expired or revoked|token has been expired or revoked|token expired|token revoked|refresh token"
+}
+
+function Write-GmailOAuthRecovery {
+    Write-MondayLog "StayFi send failed due to Gmail OAuth token error."
+    Write-MondayLog $gmailOAuthRecoveryMessage
+    Write-MondayLog "Recovery command: .\scripts\send_stayfi_anniversary_emails.ps1 -RunDate $RunDate -ResetOAuthToken"
+    Write-MondayLog "Preflight command: .\scripts\check_gmail_oauth_status.ps1"
+    Write-MondayLog "Weekly report outputs remain intact. Permanent StayFi send log was not updated by the failed OAuth attempt."
 }
 
 Write-MondayLog "Monday full report workflow started."
@@ -172,8 +188,13 @@ if ($eligibleGuests -eq 0 -or $draftsPrepared -eq 0) {
 Push-Location $projectRoot
 try {
     Write-MondayLog "started: StayFi anniversary email dry-run"
+    $script:stayfiDryRunOAuthErrorDetected = $false
     & $stayfiSendWrapper -RunDate $RunDate -DryRun 2>&1 | ForEach-Object {
-        Write-MondayLog "STAYFI_DRY_RUN: $_"
+        $line = [string]$_
+        if (Test-GmailOAuthErrorText -Text $line) {
+            $script:stayfiDryRunOAuthErrorDetected = $true
+        }
+        Write-MondayLog "STAYFI_DRY_RUN: $line"
     }
     $dryRunExitCode = $LASTEXITCODE
     if ($null -eq $dryRunExitCode) {
@@ -181,6 +202,9 @@ try {
     }
     if ($dryRunExitCode -ne 0) {
         Write-MondayLog "failed_blocking: StayFi anniversary email dry-run exit_code=$dryRunExitCode"
+        if ($script:stayfiDryRunOAuthErrorDetected) {
+            Write-GmailOAuthRecovery
+        }
         exit $dryRunExitCode
     }
     Write-MondayLog "completed: StayFi anniversary email dry-run"
@@ -220,8 +244,13 @@ else {
 Push-Location $projectRoot
 try {
     Write-MondayLog "started: StayFi anniversary email real send"
+    $script:stayfiSendOAuthErrorDetected = $false
     & $stayfiSendWrapper -RunDate $RunDate 2>&1 | ForEach-Object {
-        Write-MondayLog "STAYFI_SEND: $_"
+        $line = [string]$_
+        if (Test-GmailOAuthErrorText -Text $line) {
+            $script:stayfiSendOAuthErrorDetected = $true
+        }
+        Write-MondayLog "STAYFI_SEND: $line"
     }
     $sendExitCode = $LASTEXITCODE
     if ($null -eq $sendExitCode) {
@@ -229,6 +258,9 @@ try {
     }
     if ($sendExitCode -ne 0) {
         Write-MondayLog "failed_blocking: StayFi anniversary email real send exit_code=$sendExitCode"
+        if ($script:stayfiSendOAuthErrorDetected) {
+            Write-GmailOAuthRecovery
+        }
         exit $sendExitCode
     }
     Write-MondayLog "completed: StayFi anniversary email real send"

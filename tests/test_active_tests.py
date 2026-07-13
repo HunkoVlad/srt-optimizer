@@ -271,3 +271,86 @@ def test_booking_friction_test_is_not_merged_into_superseded_los_test(tmp_path: 
         ("pricelabs_los_pricing_test", "superseded"),
         ("competitiveness_booking_friction_test", "active"),
     ]
+
+
+def test_settings_snapshot_los_change_merges_into_active_booking_friction_test(tmp_path: Path) -> None:
+    run_date = "2026-07-06"
+    run_dir = tmp_path / "data" / "runs" / run_date
+    history_file = tmp_path / "data" / "history" / "active_tests.csv"
+    booking_friction_row = active_row(
+        "competitiveness_booking_friction_test",
+        "pricelabs",
+        "active",
+        change_date="2026-07-01",
+        review_after_run_date="2026-07-21",
+        source="user_declared",
+    )
+    booking_friction_row["duplicate_group_key"] = "booking_friction_competitiveness"
+    booking_friction_row["change_area"] = "booking_friction_price_rules"
+    booking_friction_row["new_value"] = (
+        "Extra guest fee after 10 guests; LOS pricing 1 night +5%, 2 nights 0%, "
+        "3 nights -5%, 4+ nights -15%; pet fee effectively removed."
+    )
+    booking_friction_row["reason"] = "Booking friction and value perception test."
+    write_csv(history_file, [booking_friction_row], active_tests.COLUMNS)
+    write_csv(
+        run_dir / "settings" / f"pricelabs_settings_changes_{run_date}.csv",
+        [
+            {
+                "listing_id": "650255___717243",
+                "field_name": "length_of_stay_based_pricing",
+                "changed_flag": "true",
+                "previous_value": '{"1_night":"15% premium","2_nights":"5% discount"}',
+                "current_value": '{"1_night":"5% premium","2_nights":"0%"}',
+            }
+        ],
+        ["listing_id", "field_name", "changed_flag", "previous_value", "current_value"],
+    )
+
+    output = active_tests.run(run_date, run_dir=run_dir, history_file=history_file)
+    rows = read_csv(output)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["test_id"] == "competitiveness_booking_friction_test"
+    assert row["status"] == "active"
+    assert row["review_after_run_date"] == "2026-07-21"
+    assert row["merged_from_test_ids"] == "pricelabs_length_of_stay_based_pricing"
+    assert row["supporting_changes"] == "pricelabs_length_of_stay_based_pricing"
+    assert "source=settings_snapshot" not in row["notes"]
+    assert '{"1_night":"5% premium","2_nights":"0%"}' not in row["notes"]
+
+
+def test_persisted_settings_snapshot_los_row_merges_into_active_booking_friction_test(tmp_path: Path) -> None:
+    run_date = "2026-07-06"
+    run_dir = tmp_path / "data" / "runs" / run_date
+    history_file = tmp_path / "data" / "history" / "active_tests.csv"
+    booking_friction_row = active_row(
+        "competitiveness_booking_friction_test",
+        "pricelabs",
+        "active",
+        change_date="2026-07-01",
+        review_after_run_date="2026-07-21",
+        source="user_declared",
+    )
+    booking_friction_row["duplicate_group_key"] = "booking_friction_competitiveness"
+    booking_friction_row["new_value"] = "Booking friction test with LOS pricing 1 night +5%, 2 nights 0%."
+    settings_snapshot_row = active_row(
+        "pricelabs_length_of_stay_based_pricing",
+        "pricelabs",
+        "active",
+        change_date="2026-07-06",
+        review_after_run_date="",
+        source="settings_snapshot",
+    )
+    settings_snapshot_row["change_area"] = "pricelabs_length_of_stay_based_pricing"
+    settings_snapshot_row["new_value"] = '{"1_night":"5% premium","2_nights":"0%"}'
+    write_csv(history_file, [booking_friction_row, settings_snapshot_row], active_tests.COLUMNS)
+
+    output = active_tests.run(run_date, run_dir=run_dir, history_file=history_file)
+    rows = read_csv(output)
+
+    assert len(rows) == 1
+    assert rows[0]["test_id"] == "competitiveness_booking_friction_test"
+    assert rows[0]["merged_from_test_ids"] == "pricelabs_length_of_stay_based_pricing"
+    assert rows[0]["supporting_changes"] == "pricelabs_length_of_stay_based_pricing"

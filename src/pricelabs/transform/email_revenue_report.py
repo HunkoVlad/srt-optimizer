@@ -315,11 +315,12 @@ def airbnb_capture_failure_context(summary_path: Path) -> dict[str, object]:
         manifest = json.loads(capture_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
-    if manifest.get("failure_reason") != "date_range_not_able_to_set_up":
+    failure_reason = manifest.get("failure_reason", "")
+    if not failure_reason and manifest.get("capture_status") != "failed":
         return {}
     return {
         "status": "capture_failed",
-        "root_cause": "date_range_not_able_to_set_up",
+        "root_cause": failure_reason or "airbnb_capture_failed",
         "capture_manifest_path": str(capture_path),
         "expected_date_range_start": manifest.get("expected_date_range_start", ""),
         "expected_date_range_end": manifest.get("expected_date_range_end", ""),
@@ -714,15 +715,21 @@ def airbnb_funnel_signals_section(
             lines.append(f"- Expected Airbnb weekly history file: {weekly_history_path}.")
         if missing_columns:
             lines.append("- Missing Airbnb summary columns: " + ", ".join(str(column) for column in missing_columns) + ".")
-        if diagnostics.get("root_cause") == "date_range_not_able_to_set_up":
+        if diagnostics.get("root_cause"):
+            root_cause = str(diagnostics.get("root_cause"))
+            evidence = (
+                "Airbnb capture attempted date setup but applied date range did not match expected range after retries."
+                if root_cause == "date_range_not_able_to_set_up"
+                else "Airbnb capture did not complete successfully before diagnostics could be parsed."
+            )
             lines.extend(
                 [
                     "",
                     "## Airbnb Diagnostics Root Cause",
                     "",
                     "- Status: unavailable",
-                    "- Root cause: date_range_not_able_to_set_up",
-                    "- Evidence: Airbnb capture attempted date setup but applied date range did not match expected range after retries.",
+                    f"- Root cause: {root_cause}",
+                    f"- Evidence: {evidence}",
                     f"- Expected date range: {diagnostics.get('expected_date_range_start', '') or 'unavailable'} to {diagnostics.get('expected_date_range_end', '') or 'unavailable'}",
                     f"- Applied date range: {diagnostics.get('applied_date_range_start', '') or 'unavailable'} to {diagnostics.get('applied_date_range_end', '') or 'unavailable'}",
                     f"- Attempts: {diagnostics.get('date_range_attempts', '') or 'unavailable'}",
@@ -1002,7 +1009,7 @@ def active_tests_section(
         if row.get("supporting_changes", ""):
             lines.append(f"  Merged supporting changes: {row.get('supporting_changes')}.")
         if row.get("notes", ""):
-            lines.append(f"  Notes: {row.get('notes')}.")
+            lines.append(f"  Notes: {row.get('notes').rstrip('.')}.")
     if test_type == "listing" and visual_baseline_available:
         lines.append("- Current visual baseline files are included in the evidence bundle.")
     lines.append("")

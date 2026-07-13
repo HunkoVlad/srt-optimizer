@@ -19,6 +19,22 @@ from marketing import stayfi_anniversary_email as stayfi
 
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+OAUTH_ERROR_EXIT_CODE = 3
+OAUTH_RECOVERY_MESSAGE = (
+    "Gmail OAuth token is expired or revoked. Rename/delete .local/gmail_token.json, "
+    "rerun the script manually, and complete Google authorization in the browser. "
+    "For unattended weekly sending, move the Google OAuth app from Testing to In production "
+    "in Google Cloud Console."
+)
+OAUTH_ERROR_MARKERS = (
+    "invalid_grant",
+    "expired or revoked",
+    "token has been expired or revoked",
+    "token expired",
+    "token revoked",
+    "refresh token",
+    "reauth",
+)
 
 RESULT_COLUMNS = [
     "email",
@@ -40,7 +56,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--token-file", default=".local/gmail_token.json")
     parser.add_argument("--sender-email", default="")
     parser.add_argument("--dry-run", action="store_true", help="Validate send inputs and OAuth setup without sending emails.")
+    parser.add_argument(
+        "--validate-oauth-only",
+        action="store_true",
+        help="Validate Gmail OAuth credentials/token setup without reading drafts or sending email.",
+    )
     return parser.parse_args(argv)
+
+
+class GmailOAuthError(RuntimeError):
+    """Raised when Gmail OAuth credentials need manual reauthorization."""
+
+
+def is_oauth_token_error(exc: BaseException) -> bool:
+    text_parts = [str(exc)]
+    cause = getattr(exc, "__cause__", None)
+    context = getattr(exc, "__context__", None)
+    if cause is not None:
+        text_parts.append(str(cause))
+    if context is not None:
+        text_parts.append(str(context))
+    text = " ".join(text_parts).lower()
+    return any(marker in text for marker in OAUTH_ERROR_MARKERS)
+
+
+def raise_oauth_error(exc: BaseException) -> None:
+    raise GmailOAuthError(OAUTH_RECOVERY_MESSAGE) from exc
 
 
 def run_dir_for(run_date: str, provided: Path | None = None) -> Path:
@@ -107,18 +148,38 @@ def build_gmail_service(credentials_file: Path, token_file: Path):
 
     credentials = None
     if token_file.exists():
-        credentials = Credentials.from_authorized_user_file(str(token_file), [GMAIL_SEND_SCOPE])
+        try:
+            credentials = Credentials.from_authorized_user_file(str(token_file), [GMAIL_SEND_SCOPE])
+        except Exception as exc:
+            if is_oauth_token_error(exc):
+                raise_oauth_error(exc)
+            raise
     if not credentials or not credentials.valid:
         if credentials and credentials.expired and credentials.refresh_token:
-            credentials.refresh(Request())
+            try:
+                credentials.refresh(Request())
+            except Exception as exc:
+                if is_oauth_token_error(exc):
+                    raise_oauth_error(exc)
+                raise
         else:
             if not credentials_file.exists():
                 raise FileNotFoundError(f"Missing Gmail OAuth client credentials: {credentials_file}")
             flow = InstalledAppFlow.from_client_secrets_file(str(credentials_file), [GMAIL_SEND_SCOPE])
-            credentials = flow.run_local_server(port=0)
+            try:
+                credentials = flow.run_local_server(port=0)
+            except Exception as exc:
+                if is_oauth_token_error(exc):
+                    raise_oauth_error(exc)
+                raise
         token_file.parent.mkdir(parents=True, exist_ok=True)
         token_file.write_text(credentials.to_json(), encoding="utf-8")
-    return build("gmail", "v1", credentials=credentials)
+    try:
+        return build("gmail", "v1", credentials=credentials)
+    except Exception as exc:
+        if is_oauth_token_error(exc):
+            raise_oauth_error(exc)
+        raise
 
 
 def valid_send_input(row: dict[str, str]) -> tuple[bool, str]:
@@ -290,6 +351,8 @@ def send_emails_from_csv(
             )
             logged.add(email.lower())
         except Exception as exc:
+            if is_oauth_token_error(exc):
+                raise_oauth_error(exc)
             results.append(result_row(email, subject, "failed", error_message=str(exc)))
 
     if not dry_run:
@@ -304,6 +367,9 @@ def run(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     run_dir = run_dir_for(args.run_date, Path(args.run_dir) if args.run_dir else None)
     service = build_gmail_service(Path(args.credentials_file), Path(args.token_file))
+    if args.validate_oauth_only:
+        print("Gmail OAuth credentials validated. No emails were sent.")
+        return 0
     output_path = send_emails_from_csv(
         args.run_date,
         run_dir=run_dir,
@@ -324,6 +390,9 @@ def run(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(run(sys.argv[1:]))
+    except GmailOAuthError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(OAUTH_ERROR_EXIT_CODE)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)

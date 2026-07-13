@@ -8,7 +8,9 @@ param(
 
     [string]$SenderEmail = "",
 
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [switch]$ResetOAuthToken
 )
 
 Set-StrictMode -Version Latest
@@ -33,6 +35,27 @@ try {
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Missing Gmail API dependencies. Install them with: pip install google-api-python-client google-auth google-auth-oauthlib"
         exit 1
+    }
+
+    if ($ResetOAuthToken.IsPresent) {
+        $resolvedTokenFile = Join-Path $projectRoot $TokenFile
+        if (Test-Path $resolvedTokenFile) {
+            $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+            $backupPath = Join-Path (Split-Path -Parent $resolvedTokenFile) "gmail_token_backup_$timestamp.json"
+            Move-Item -LiteralPath $resolvedTokenFile -Destination $backupPath
+            Write-Host "Renamed Gmail OAuth token to: $backupPath"
+        }
+        else {
+            Write-Host "No Gmail OAuth token found at: $resolvedTokenFile"
+        }
+
+        Write-Host "Starting Gmail OAuth validation/authorization only. No emails will be sent."
+        & $pythonExe -m marketing.stayfi_gmail_send `
+            --run-date $RunDate `
+            --credentials-file $CredentialsFile `
+            --token-file $TokenFile `
+            --validate-oauth-only
+        exit $LASTEXITCODE
     }
 
     $argsList = @(

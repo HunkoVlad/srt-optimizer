@@ -48,7 +48,7 @@ LISTING_CHANGE_INPUT_COLUMNS = [
 ACTIVE_STATUSES = {"active", "monitoring"}
 COMPLETED_STATUSES = {"completed", "superseded", "failed", "resolved", "closed", "inactive"}
 PRICELABS_HINTS = ("pricelabs", "los", "length_of_stay", "length of stay", "pricing", "price", "rule")
-CANONICAL_TEST_IDS = {"title_photo_search_card_test", "pricelabs_los_pricing_test"}
+CANONICAL_TEST_IDS = {"title_photo_search_card_test", "pricelabs_los_pricing_test", "competitiveness_booking_friction_test"}
 MALFORMED_INPUT_REQUIRED_COLUMNS = ("test_id", "test_type", "status")
 
 
@@ -401,7 +401,43 @@ def maybe_add_unlogged_change_note(rows: list[dict[str, str]], paths: Paths) -> 
         print("Potential unlogged listing change detected.")
 
 
-def canonical_group_key(row: dict[str, str]) -> str:
+def is_booking_friction_competitiveness_test(row: dict[str, str]) -> bool:
+    return (
+        row.get("test_id", "") == "competitiveness_booking_friction_test"
+        or row.get("duplicate_group_key", "") in {"booking_friction_competitiveness", "pricelabs_booking_friction_competitiveness"}
+    )
+
+
+def mentions_los_pricing(row: dict[str, str]) -> bool:
+    text = " ".join(
+        (
+            row.get("test_id", ""),
+            row.get("change_area", ""),
+            row.get("old_value", ""),
+            row.get("new_value", ""),
+            row.get("reason", ""),
+            row.get("expected_effect", ""),
+            row.get("primary_success_metrics", ""),
+            row.get("notes", ""),
+        )
+    ).lower()
+    return "length_of_stay" in text or "length of stay" in text or "los" in text
+
+
+def has_active_booking_friction_experiment(rows: list[dict[str, str]]) -> bool:
+    return any(
+        is_booking_friction_competitiveness_test(row)
+        and row.get("status", "").strip().lower() in ACTIVE_STATUSES
+        and (mentions_los_pricing(row) or "booking_friction" in row.get("duplicate_group_key", ""))
+        for row in rows
+    )
+
+
+def is_settings_snapshot_row(row: dict[str, str]) -> bool:
+    return row.get("_priority_source", "") == "settings_snapshot" or row.get("source", "") == "settings_snapshot"
+
+
+def canonical_group_key(row: dict[str, str], *, booking_friction_experiment_active: bool = False) -> str:
     test_id = row.get("test_id", "")
     change_area = row.get("change_area", "")
     metrics = row.get("primary_success_metrics", "").lower()
@@ -415,7 +451,14 @@ def canonical_group_key(row: dict[str, str]) -> str:
             metrics,
         )
     ).lower()
-    if test_id == "competitiveness_booking_friction_test" or row.get("duplicate_group_key", "") == "booking_friction_competitiveness":
+    if is_booking_friction_competitiveness_test(row):
+        return "pricelabs_booking_friction_competitiveness"
+    if (
+        booking_friction_experiment_active
+        and row.get("test_type") == "pricelabs"
+        and is_settings_snapshot_row(row)
+        and mentions_los_pricing(row)
+    ):
         return "pricelabs_booking_friction_competitiveness"
     if row.get("test_type") == "pricelabs" and ("los" in text or "length" in text):
         return "pricelabs_los_pricing"
@@ -433,6 +476,8 @@ def canonical_group_key(row: dict[str, str]) -> str:
 def canonical_test_id_for_group(group_key: str, rows: list[dict[str, str]]) -> str:
     if group_key == "listing_search_card_experiment":
         return "title_photo_search_card_test"
+    if group_key == "pricelabs_booking_friction_competitiveness":
+        return "competitiveness_booking_friction_test"
     if group_key == "pricelabs_los_pricing":
         return "pricelabs_los_pricing_test"
     canonical = next((row.get("test_id", "") for row in rows if row.get("test_id", "") in CANONICAL_TEST_IDS), "")
@@ -463,6 +508,19 @@ def append_unique(existing: str, addition: str) -> str:
     return "; ".join(parts)
 
 
+def unique_nonempty(values: list[str]) -> list[str]:
+    output: list[str] = []
+    for value in values:
+        cleaned = value.strip()
+        if cleaned and cleaned not in output:
+            output.append(cleaned)
+    return output
+
+
+def compact_semicolon_text(value: str) -> str:
+    return "; ".join(unique_nonempty([part.strip() for part in value.split(";")]))
+
+
 def unique_rows_by_source_event(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     unique: dict[tuple[str, str, str, str], dict[str, str]] = {}
     for row in rows:
@@ -481,6 +539,30 @@ def unique_rows_by_source_event(rows: list[dict[str, str]]) -> list[dict[str, st
 def merge_group(group_key: str, group_rows: list[dict[str, str]]) -> dict[str, str]:
     group_rows = unique_rows_by_source_event(group_rows)
     canonical_test_id = canonical_test_id_for_group(group_key, group_rows)
+    has_settings_snapshot_support = any(is_settings_snapshot_row(row) for row in group_rows)
+    if group_key == "pricelabs_booking_friction_competitiveness" and has_settings_snapshot_support:
+        active_booking_friction_rows = [
+            row
+            for row in group_rows
+            if is_booking_friction_competitiveness_test(row)
+            and row.get("status", "").strip().lower() in ACTIVE_STATUSES
+        ]
+        if active_booking_friction_rows:
+            candidate_rows = active_booking_friction_rows
+        else:
+            candidate_rows = group_rows
+        winner = dict(sorted(candidate_rows, key=lambda row: row_rank(row, canonical_test_id))[0])
+        supporting = [row for row in group_rows if row.get("test_id", "") != winner.get("test_id", "")]
+        supporting_ids = unique_nonempty([row.get("test_id", "") for row in supporting])
+        winner["canonical_test_id"] = canonical_test_id
+        winner["duplicate_group_key"] = group_key
+        winner["merged_from_test_ids"] = "; ".join(supporting_ids)
+        winner["supporting_changes"] = "; ".join(
+            unique_nonempty([row.get("change_area", "") or row.get("test_id", "") for row in supporting])
+        )
+        winner["notes"] = compact_semicolon_text(winner.get("notes", ""))
+        return winner
+
     history_rows = [row for row in group_rows if row.get("_priority_source") == "active_tests_history"]
     if history_rows:
         latest_history_date = max(row.get("change_date", "") for row in history_rows)
@@ -496,12 +578,12 @@ def merge_group(group_key: str, group_rows: list[dict[str, str]]) -> dict[str, s
         candidate_rows = group_rows
     winner = dict(sorted(candidate_rows, key=lambda row: row_rank(row, canonical_test_id))[0])
     supporting = [row for row in group_rows if row.get("test_id", "") != winner.get("test_id", "")]
-    supporting_ids = [row.get("test_id", "") for row in supporting if row.get("test_id", "")]
+    supporting_ids = unique_nonempty([row.get("test_id", "") for row in supporting])
     winner["canonical_test_id"] = canonical_test_id
     winner["duplicate_group_key"] = group_key
     winner["merged_from_test_ids"] = "; ".join(supporting_ids)
     winner["supporting_changes"] = "; ".join(
-        row.get("change_area", "") or row.get("test_id", "") for row in supporting if row.get("change_area", "") or row.get("test_id", "")
+        unique_nonempty([row.get("change_area", "") or row.get("test_id", "") for row in supporting])
     )
     for row in supporting:
         detail = "; ".join(
@@ -511,13 +593,15 @@ def merge_group(group_key: str, group_rows: list[dict[str, str]]) -> dict[str, s
         )
         if detail:
             winner["notes"] = append_unique(winner.get("notes", ""), f"{row.get('test_id', '')}: {detail}")
+    winner["notes"] = compact_semicolon_text(winner.get("notes", ""))
     return winner
 
 
 def dedupe_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     grouped: dict[str, list[dict[str, str]]] = {}
+    booking_friction_experiment_active = has_active_booking_friction_experiment(rows)
     for row in rows:
-        grouped.setdefault(canonical_group_key(row), []).append(row)
+        grouped.setdefault(canonical_group_key(row, booking_friction_experiment_active=booking_friction_experiment_active), []).append(row)
     return [merge_group(group_key, group_rows) for group_key, group_rows in grouped.items()]
 
 

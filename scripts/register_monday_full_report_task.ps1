@@ -70,6 +70,8 @@ Write-Host "Task name: $TaskName"
 Write-Host "Project root: $resolvedProjectRoot"
 Write-Host "Schedule: $DayOfWeek at $Time"
 Write-Host "AutoSendStayFi enabled: $autoSendEnabled"
+Write-Host "Task logon type: Interactive token. Run only when user is logged on."
+Write-Host "Run with highest privileges: enabled."
 Write-Host "Command:"
 Write-Host "powershell.exe $actionArguments"
 Write-Host "No secrets are printed or inspected."
@@ -91,6 +93,8 @@ if ($existingTask -and -not $Force.IsPresent) {
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $actionArguments -WorkingDirectory $resolvedProjectRoot
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $DayOfWeek -At $Time
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
+$principalUser = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME }
+$principal = New-ScheduledTaskPrincipal -UserId $principalUser -LogonType Interactive -RunLevel Highest
 $description = "Runs Aloha Poconos weekly SRT report and StayFi anniversary workflow. StayFi auto-send follows dry-run and duplicate-log safety checks."
 
 Register-ScheduledTask `
@@ -98,6 +102,7 @@ Register-ScheduledTask `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
+    -Principal $principal `
     -Description $description `
     -Force | Out-Null
 

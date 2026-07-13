@@ -1,6 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$RunDate
+    [string]$RunDate,
+    [switch]$SkipAirbnb,
+    [switch]$ForceAirbnbCapture
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,6 +77,59 @@ function Invoke-PythonStep {
         Write-Error "$Label failed."
         exit $LASTEXITCODE
     }
+}
+
+function Invoke-PythonStepNonBlocking {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Label,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    Write-Host ""
+    Write-Host "== $Label =="
+    & $pythonExe @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "$Label failed with exit code $LASTEXITCODE."
+        return $false
+    }
+    return $true
+}
+
+function Test-AllPathsExist {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Paths
+    )
+
+    foreach ($path in $Paths) {
+        if (-not (Test-Path $path)) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Get-AirbnbCaptureFailureReason {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ManifestPath
+    )
+
+    if (-not (Test-Path $ManifestPath)) {
+        return ""
+    }
+    try {
+        $manifest = Get-Content -Raw -Path $ManifestPath | ConvertFrom-Json
+        if ($manifest.capture_status -eq "failed" -or $manifest.failure_reason) {
+            return [string]$manifest.failure_reason
+        }
+    }
+    catch {
+        return "capture_manifest_unreadable"
+    }
+    return ""
 }
 
 function Get-LatestPriorRunWithFile {
@@ -300,65 +355,116 @@ $airbnbRawFiles = @(
     (Join-Path $rawDir "airbnb_page_views_similar.html"),
     (Join-Path $rawDir "airbnb_wishlist_additions_similar.html")
 )
-$missingAirbnbRawFiles = @($airbnbRawFiles | Where-Object { -not (Test-Path $_) })
-if ($missingAirbnbRawFiles.Count -gt 0) {
-    Write-Host "Airbnb funnel diagnostics require manual MFA capture before final email report."
-    Write-Host ("Airbnb diagnostics: missing inputs - " + ($missingAirbnbRawFiles -join "; "))
+$airbnbAnalysisFiles = @($airbnbWeeklySummaryFile, $airbnbWeeklyHistoryFile, $airbnbDiagnosticReportFile)
+
+Write-Host ""
+Write-Host "== Airbnb auto diagnostics =="
+Write-Host "Airbnb funnel diagnostics require manual MFA capture before final email report."
+$airbnbRawInputsFound = Test-AllPathsExist -Paths $airbnbRawFiles
+$airbnbAnalysisOutputsFound = Test-AllPathsExist -Paths $airbnbAnalysisFiles
+$airbnbCaptureRequired = (-not $airbnbRawInputsFound) -or $ForceAirbnbCapture.IsPresent
+Write-Host "Airbnb raw inputs found: $(if ($airbnbRawInputsFound) { 'yes' } else { 'no' })"
+Write-Host "Airbnb analysis outputs found: $(if ($airbnbAnalysisOutputsFound) { 'yes' } else { 'no' })"
+Write-Host "Airbnb capture required: $(if ((-not $SkipAirbnb.IsPresent) -and $airbnbCaptureRequired) { 'yes' } else { 'no' })"
+
+$airbnbCaptureStatus = "skipped"
+$airbnbPromotionStatus = "skipped"
+$airbnbDiagnosticsStatus = "skipped"
+
+if ($SkipAirbnb.IsPresent) {
+    Write-Host "Airbnb auto diagnostics skipped because -SkipAirbnb was provided."
+    Write-Host "Airbnb capture status: skipped"
+    Write-Host "Airbnb promotion status: skipped"
+    Write-Host "Airbnb diagnostics status: skipped"
+}
+elseif ((-not $ForceAirbnbCapture.IsPresent) -and $airbnbRawInputsFound -and $airbnbAnalysisOutputsFound) {
+    Write-Host "Airbnb capture skipped because raw inputs and analysis outputs already exist for this run. Use -ForceAirbnbCapture to recapture."
+    $airbnbCaptureStatus = "skipped"
+    $airbnbPromotionStatus = "skipped"
+    $airbnbDiagnosticsStatus = "skipped"
+    Write-Host "Airbnb capture status: skipped"
+    Write-Host "Airbnb promotion status: skipped"
+    Write-Host "Airbnb diagnostics status: skipped"
 }
 else {
-    Write-Host "Airbnb diagnostics: raw inputs present."
-}
-$airbnbDateRangeCaptureFailed = $false
-if (Test-Path $airbnbCaptureManifestFile) {
-    try {
-        $airbnbCaptureManifest = Get-Content -Raw -Path $airbnbCaptureManifestFile | ConvertFrom-Json
-        Write-Host "Airbnb date range setup: started"
-        $airbnbDateRangeAttempts = @($airbnbCaptureManifest.date_range_attempt_results)
-        if ($airbnbDateRangeAttempts.Count -gt 0) {
-            foreach ($attempt in $airbnbDateRangeAttempts) {
-                Write-Host "Airbnb date range setup: attempt $($attempt.attempt)/$($airbnbDateRangeAttempts.Count)"
+    if ($airbnbCaptureRequired) {
+        $captureOk = Invoke-PythonStepNonBlocking "Airbnb capture-headed-and-validate" @(
+            "-m", "airbnb.download_diagnostics",
+            "--run-date", $RunDate,
+            "--mode", "capture-headed-and-validate"
+        )
+        if ($captureOk) {
+            $captureFailureReason = Get-AirbnbCaptureFailureReason -ManifestPath $airbnbCaptureManifestFile
+            if ($captureFailureReason) {
+                $airbnbCaptureStatus = "failed"
+                Write-Host "Airbnb capture status: failed"
+                Write-Host "Airbnb capture failure reason: $captureFailureReason"
+            }
+            else {
+                $airbnbCaptureStatus = "completed"
+                Write-Host "Airbnb capture status: completed"
             }
         }
-        elseif ($airbnbCaptureManifest.date_range_attempts) {
-            Write-Host "Airbnb date range setup: attempt $($airbnbCaptureManifest.date_range_attempts)/$($airbnbCaptureManifest.date_range_attempts)"
-        }
-        if ($airbnbCaptureManifest.date_range_match) {
-            Write-Host "Airbnb date range setup: matched"
-        }
         else {
-            Write-Host "Airbnb date range setup: failed"
-        }
-        if ($airbnbCaptureManifest.failure_reason -eq "date_range_not_able_to_set_up") {
-            $airbnbDateRangeCaptureFailed = $true
-            Write-Host "Airbnb capture: skipped due to date_range_not_able_to_set_up"
-            Write-Host "Airbnb diagnostics: skipped due to date_range_not_able_to_set_up"
+            $airbnbCaptureStatus = "failed"
+            Write-Host "Airbnb capture status: failed"
         }
     }
-    catch {
-        Write-Host "Airbnb capture manifest could not be read: $airbnbCaptureManifestFile"
+    else {
+        Write-Host "Airbnb capture skipped because raw inputs already exist."
+        $airbnbCaptureStatus = "skipped"
+        Write-Host "Airbnb capture status: skipped"
+    }
+
+    if ($airbnbCaptureStatus -eq "failed") {
+        Write-Host "Airbnb promotion status: skipped"
+        Write-Host "Airbnb diagnostics status: skipped"
+    }
+    else {
+        if ($airbnbCaptureRequired) {
+            $promoteOk = Invoke-PythonStepNonBlocking "Airbnb promote staged diagnostics" @(
+                "-m", "airbnb.download_diagnostics",
+                "--run-date", $RunDate,
+                "--mode", "promote-staged"
+            )
+            if ($promoteOk) {
+                $airbnbPromotionStatus = "completed"
+            }
+            else {
+                $airbnbPromotionStatus = "failed"
+            }
+            Write-Host "Airbnb promotion status: $airbnbPromotionStatus"
+        }
+        else {
+            $airbnbPromotionStatus = "skipped"
+            Write-Host "Airbnb promotion status: skipped"
+        }
+
+        $airbnbRawInputsFound = Test-AllPathsExist -Paths $airbnbRawFiles
+        if ($airbnbRawInputsFound) {
+            $diagnosticsOk = Invoke-PythonStepNonBlocking "Airbnb diagnostics" @(
+                "-m", "airbnb.run_diagnostics",
+                "--run-date", $RunDate,
+                "--run-dir", $runRoot
+            )
+            $airbnbAnalysisOutputsFound = Test-AllPathsExist -Paths $airbnbAnalysisFiles
+            if ($diagnosticsOk -and $airbnbAnalysisOutputsFound) {
+                $airbnbDiagnosticsStatus = "completed"
+            }
+            else {
+                $airbnbDiagnosticsStatus = "failed"
+            }
+        }
+        else {
+            Write-Host "Airbnb diagnostics skipped because raw inputs are still missing."
+            $airbnbDiagnosticsStatus = "skipped"
+        }
+        Write-Host "Airbnb diagnostics status: $airbnbDiagnosticsStatus"
     }
 }
 
-Invoke-PythonStep "Airbnb diagnostics" @(
-    "-m", "airbnb.run_diagnostics",
-    "--run-date", $RunDate,
-    "--run-dir", $runRoot
-)
-if ((Test-Path $airbnbWeeklySummaryFile) -and (Test-Path $airbnbWeeklyHistoryFile) -and (Test-Path $airbnbDiagnosticReportFile)) {
-    Write-Host "Airbnb diagnostics: completed"
-    Write-Host "Airbnb weekly summary: $airbnbWeeklySummaryFile"
-    Write-Host "Airbnb weekly history: $airbnbWeeklyHistoryFile"
-    Write-Host "Airbnb diagnostic report: $airbnbDiagnosticReportFile"
-}
-else {
-    $missingAirbnbOutputs = @()
-    foreach ($path in @($airbnbWeeklySummaryFile, $airbnbWeeklyHistoryFile, $airbnbDiagnosticReportFile)) {
-        if (-not (Test-Path $path)) {
-            $missingAirbnbOutputs += $path
-        }
-    }
-    Write-Host ("Airbnb diagnostics: missing inputs - expected output(s) not found: " + ($missingAirbnbOutputs -join "; "))
-}
+Write-Host "Airbnb weekly summary: $airbnbWeeklySummaryFile"
+Write-Host "Airbnb weekly history: $airbnbWeeklyHistoryFile"
 
 Invoke-PythonStep "combined_market_listing_signal" @(
     "-m", "analysis.combined_market_listing_signal",

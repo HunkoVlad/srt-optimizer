@@ -757,6 +757,37 @@ def test_airbnb_funnel_section_shows_date_range_root_cause(tmp_path: Path) -> No
     assert "Missing Airbnb summary columns:" not in section
 
 
+def test_airbnb_funnel_section_shows_generic_capture_root_cause(tmp_path: Path) -> None:
+    run_date = "2026-05-08"
+    run_dir = tmp_path / "data" / "runs" / run_date
+    capture_dir = run_dir / "downloads_staging" / "airbnb"
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    (capture_dir / f"airbnb_capture_manifest_{run_date}.json").write_text(
+        json.dumps(
+            {
+                "run_date": run_date,
+                "capture_status": "failed",
+                "failure_reason": "browser_launch_failed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary_path = run_dir / "analysis" / f"airbnb_weekly_conversion_summary_{run_date}.csv"
+
+    rows, diagnostics = airbnb_summary_status(summary_path)
+    markdown = build_markdown(
+        run_date,
+        sample_rows(),
+        airbnb_summary_rows=rows,
+        airbnb_summary_diagnostics=diagnostics,
+    )
+    section = markdown.split("## Airbnb Diagnostics Root Cause", 1)[1].split("## Recommendation Review", 1)[0]
+
+    assert "- Root cause: browser_launch_failed" in section
+    assert "Airbnb capture did not complete successfully before diagnostics could be parsed." in section
+    assert "airbnb.download_diagnostics --run-date <run_date> --mode capture-headed-and-validate" in section
+
+
 def test_airbnb_funnel_section_shows_missing_summary_columns() -> None:
     markdown = build_markdown(
         "2026-05-08",
